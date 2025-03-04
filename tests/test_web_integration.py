@@ -6,10 +6,9 @@ Integration tests for the web application with the ETL pipeline.
 import os
 import sys
 import unittest
-import tempfile
 import json
 import io
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # Add the src directory to the path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))

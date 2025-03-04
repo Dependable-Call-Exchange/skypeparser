@@ -29,7 +29,7 @@ from typing import Dict, Optional
 from pathlib import Path
 
 from ..parser.parser_module import read_file, read_tarfile
-from ..parser.skype_parser import clean_message_content
+from ..parser.core_parser import content_parser
 from .raw_storage import SkypeDataStorage
 
 # Issue deprecation warning
@@ -132,7 +132,7 @@ def clean_skype_data(raw_data: Dict) -> Dict:
 
             try:
                 # Clean or replace with placeholders
-                cleaned_content = clean_message_content(content, msg_type)
+                cleaned_content = content_parser(content, msg_type)
 
                 # Build new message object
                 new_msg = msg.copy()

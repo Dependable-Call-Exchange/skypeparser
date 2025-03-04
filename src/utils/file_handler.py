@@ -15,7 +15,7 @@ import tarfile
 import re
 import logging
 import tempfile
-from typing import Dict, List, Union, Optional, Tuple, Any, BinaryIO
+from typing import Dict, List, Optional, Any, BinaryIO
 
 # Import validation functions
 from .validation import (
@@ -287,30 +287,65 @@ def extract_tar_object(file_obj: BinaryIO, output_dir: str,
         tarfile.ReadError: If the content is not a valid tar archive
     """
     # Validate file object
+    _validate_tar_file_object(file_obj)
+
+    # Create a temporary file and process the tar content
+    temp_file_path = _create_temp_file_from_object(file_obj)
+
+    try:
+        # Use the existing extract_tar_contents function with the temporary file
+        return extract_tar_contents(temp_file_path, output_dir, file_pattern)
+    finally:
+        # Clean up the temporary file
+        _cleanup_temp_file(temp_file_path)
+
+def _validate_tar_file_object(file_obj: BinaryIO) -> None:
+    """
+    Validate that the file object is valid for tar extraction.
+
+    Args:
+        file_obj (BinaryIO): File-like object to validate
+
+    Raises:
+        ValidationError: If the file object is invalid
+    """
     try:
         validate_file_object(file_obj)
     except ValidationError as e:
         logger.error(f"Validation error: {e}")
         raise
 
-    # Create a temporary file to store the tar content
+def _create_temp_file_from_object(file_obj: BinaryIO) -> str:
+    """
+    Create a temporary file from a file-like object.
+
+    Args:
+        file_obj (BinaryIO): File-like object containing content
+
+    Returns:
+        str: Path to the temporary file
+    """
     with tempfile.NamedTemporaryFile(delete=False) as temp_file:
-        try:
-            # Reset file pointer to beginning
-            file_obj.seek(0)
+        # Reset file pointer to beginning
+        file_obj.seek(0)
 
-            # Write content to temporary file
-            temp_file.write(file_obj.read())
-            temp_file.flush()
+        # Write content to temporary file
+        temp_file.write(file_obj.read())
+        temp_file.flush()
 
-            # Use the existing extract_tar_contents function with the temporary file
-            return extract_tar_contents(temp_file.name, output_dir, file_pattern)
-        finally:
-            # Clean up the temporary file
-            try:
-                os.unlink(temp_file.name)
-            except Exception as e:
-                logger.warning(f"Failed to delete temporary file {temp_file.name}: {e}")
+        return temp_file.name
+
+def _cleanup_temp_file(file_path: str) -> None:
+    """
+    Clean up a temporary file.
+
+    Args:
+        file_path (str): Path to the temporary file to delete
+    """
+    try:
+        os.unlink(file_path)
+    except Exception as e:
+        logger.warning(f"Failed to delete temporary file {file_path}: {e}")
 
 def list_tar_contents(tar_filename: str, file_pattern: Optional[str] = None) -> List[str]:
     """

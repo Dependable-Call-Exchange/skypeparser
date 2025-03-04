@@ -6,7 +6,6 @@ This script runs all the tests for the SkypeParser project.
 It can be used to run specific test modules or all tests.
 """
 
-import os
 import sys
 import unittest
 import argparse

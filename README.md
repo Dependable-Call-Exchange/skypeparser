@@ -289,6 +289,8 @@ Key features of the test helpers module:
 - Helper functions for creating test files, JSON files, and TAR files
 - Utilities for mocking system functions like `sys.exit`
 
+For more details on the test infrastructure improvements, see [Test Infrastructure Documentation](docs/test_infrastructure.md).
+
 ### Test Fixes and Best Practices
 
 The test suite has been updated to handle path validation requirements and to match the actual implementation of the modules. See `docs/test_fixes.md` for details on the changes made and best practices for writing tests.
@@ -329,6 +331,24 @@ This will show the test coverage for each module in the `src` directory.
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Code Refactoring
+
+The codebase has undergone significant refactoring to improve maintainability, readability, and testability. Complex functions with multiple responsibilities have been broken down into smaller, more focused functions that adhere to the Single Responsibility Principle (SRP).
+
+### Refactored Components
+
+- **ETL Pipeline Class**: The `transform`, `load`, and `run_pipeline` methods have been refactored into smaller, more focused methods.
+- **File Handler Module**: The `extract_tar_object` function has been refactored to improve clarity and maintainability.
+
+### Benefits
+
+- **Improved Readability**: Each function has a clear, single purpose with descriptive names.
+- **Enhanced Maintainability**: Changes to one aspect of functionality can be made in isolation.
+- **Better Testability**: Smaller functions are easier to test in isolation.
+- **Reduced Cognitive Load**: Developers can focus on one aspect of functionality at a time.
+
+For more details on the refactoring approach, benefits, and future recommendations, see [Refactoring Documentation](docs/refactoring.md).
 
 ## Acknowledgments
 

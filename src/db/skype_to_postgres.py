@@ -23,11 +23,9 @@ import os
 import sys
 import argparse
 import logging
-import json
 import datetime
 import warnings
 import psycopg2
-from psycopg2 import sql
 from psycopg2.extras import execute_values
 
 # Issue deprecation warning

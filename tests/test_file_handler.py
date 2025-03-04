@@ -6,9 +6,7 @@ Tests for the file_handler.py module.
 import os
 import json
 import unittest
-from unittest.mock import patch, mock_open
-import tarfile
-import io
+from unittest.mock import patch
 from pathlib import Path
 
 # Add the parent directory to the path so we can import from src
@@ -21,9 +19,7 @@ from src.utils.file_handler import (
     read_tarfile,
     read_tarfile_object,
     extract_tar_contents,
-    extract_tar_object,
-    list_tar_contents,
-    list_tar_object
+    list_tar_contents
 )
 from src.utils.validation import ValidationError
 from tests.test_helpers import TestBase, patch_validation, create_test_file, create_test_json_file, create_test_tar_file

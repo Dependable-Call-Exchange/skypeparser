@@ -6,9 +6,8 @@ import json
 import hashlib
 import logging
 from datetime import datetime
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, Optional, Tuple
 
-import psycopg2
 from psycopg2.extras import Json
 from psycopg2.pool import SimpleConnectionPool
 

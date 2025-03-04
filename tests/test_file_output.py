@@ -10,7 +10,6 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch, mock_open, MagicMock
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -22,7 +21,6 @@ from src.parser.file_output import (
     write_text_output,
     format_conversation_for_output
 )
-from src.parser.exceptions import OutputError
 
 
 class TestFileOutput(unittest.TestCase):

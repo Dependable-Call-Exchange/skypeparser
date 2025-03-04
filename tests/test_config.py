@@ -19,7 +19,6 @@ from src.utils.config import (
     load_config,
     get_db_config,
     get_message_type_description,
-    setup_logging,
     _deep_update,
     DEFAULT_CONFIG
 )

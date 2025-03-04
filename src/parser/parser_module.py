@@ -11,9 +11,7 @@ Please use the functions from core_parser.py instead, which provide
 more robust implementations with better timezone handling and error management.
 """
 
-import os
 import sys
-import json
 import logging
 import datetime
 import re

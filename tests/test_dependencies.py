@@ -5,7 +5,6 @@ Tests for the dependencies module.
 This module contains tests for the functionality in src.utils.dependencies.
 """
 
-import os
 import sys
 import unittest
 from pathlib import Path

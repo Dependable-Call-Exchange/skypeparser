@@ -21,8 +21,6 @@ from src.utils.validation import (
     validate_directory,
     validate_file_type,
     validate_json_file,
-    validate_tar_file,
-    validate_file_object,
     validate_skype_data,
     validate_user_display_name,
     validate_db_config,

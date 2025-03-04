@@ -17,22 +17,16 @@ import json
 import os
 import sys
 import logging
-from typing import Dict, List, Any, Optional
 
-from ..utils.file_utils import safe_filename
 from ..utils.file_handler import read_file, read_tarfile
 from ..utils.dependencies import PSYCOPG2_AVAILABLE
 from .core_parser import parse_skype_data, id_selector
 from .file_output import export_conversations
 from .exceptions import (
-    SkypeParserError,
     FileOperationError,
     DataExtractionError,
     ExportError,
-    InvalidInputError,
-    TimestampParsingError,
-    ContentParsingError,
-    DatabaseOperationError
+    InvalidInputError
 )
 
 # Set up logging
@@ -114,16 +108,16 @@ def main():
 
                 if result:
                     logger.info("ETL pipeline completed successfully.")
-                    if not args.text_output and not args.output_format in ['json', 'csv']:
+                    if not args.text_output and args.output_format not in ['json', 'csv']:
                         logger.info("\nAll done!")
                         return
                 else:
                     logger.error("ETL pipeline failed.")
-                    if not args.text_output and not args.output_format in ['json', 'csv']:
+                    if not args.text_output and args.output_format not in ['json', 'csv']:
                         sys.exit(1)
             except Exception as e:
                 logger.error(f"Error in ETL pipeline: {e}")
-                if not args.text_output and not args.output_format in ['json', 'csv']:
+                if not args.text_output and args.output_format not in ['json', 'csv']:
                     sys.exit(1)
         elif args.store_db and not ETL_AVAILABLE:
             logger.error("Database storage requested but ETL pipeline is not available. "

@@ -9,8 +9,7 @@ It standardizes approaches for handling path validation, mocking, and other comm
 import os
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
-from pathlib import Path
+from unittest.mock import patch
 
 
 class TestBase(unittest.TestCase):

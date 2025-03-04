@@ -14,7 +14,7 @@ import io
 import os
 import sys
 import logging
-from typing import BinaryIO, Dict, Any, List
+from typing import BinaryIO, Dict, Any
 
 # Add the parent directory to the path so we can import the src module
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))

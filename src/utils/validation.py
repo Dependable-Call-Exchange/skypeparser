@@ -12,7 +12,7 @@ import json
 import logging
 import tarfile
 import pathlib
-from typing import Dict, List, Any, Optional, Union, BinaryIO
+from typing import Dict, List, Any, Optional, BinaryIO
 from datetime import datetime
 
 # Set up logging

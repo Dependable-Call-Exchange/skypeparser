@@ -11,22 +11,19 @@ import json
 import csv
 import logging
 import datetime
-from typing import Dict, List, Optional, Any, Set, Tuple
+from typing import Dict, Any
 
 from ..utils.file_utils import safe_filename
 from .core_parser import timestamp_parser, content_parser, tag_stripper, banner_constructor
 from .exceptions import (
-    SkypeParserError,
     FileOperationError,
     ExportError,
-    ContentParsingError,
-    TimestampParsingError
+    ContentParsingError
 )
 
 # Import centralized dependency handling
 from ..utils.dependencies import (
-    BEAUTIFULSOUP_AVAILABLE as BEAUTIFULSOUP,
-    BeautifulSoup
+    BEAUTIFULSOUP_AVAILABLE as BEAUTIFULSOUP
 )
 
 # Set up logging
