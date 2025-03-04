@@ -2,8 +2,8 @@
     "database": {
         "host": "localhost",
         "port": 5432,
-        "dbname": "skype_archive",
-        "user": "postgres",
+        "dbname": "Skype_archive",
+        "user": "Postgres",
         "password": "your_password_here"
     },
     "output": {
@@ -12,6 +12,13 @@
     },
     "logging": {
         "level": "INFO",
-        "file": "skype_parser.log"
-    }
+        "file": "Skype_parser.log"
+    },
+    "message_types": {
+        "Event/Call": "***A call started/ended***",
+        "Poll": "***Created a poll***",
+        "RichText/Media_Album": "***Sent an album of images***",
+        "RichText/Media_AudioMsg": "***Sent a voice message***"
+    },
+    "default_message_format": "***Sent a {message_type}***"
 }

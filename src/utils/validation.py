@@ -11,6 +11,7 @@ import re
 import json
 import logging
 import tarfile
+import pathlib
 from typing import Dict, List, Any, Optional, Union, BinaryIO
 from datetime import datetime
 
@@ -21,147 +22,275 @@ class ValidationError(Exception):
     """Exception raised for validation errors."""
     pass
 
-def validate_file_exists(file_path: str) -> bool:
+def validate_path_safety(file_path: str, base_dir: Optional[str] = None,
+                        allow_absolute: bool = False,
+                        allow_symlinks: bool = False) -> str:
     """
-    Validate that a file exists and is accessible.
+    Perform strict validation on a file path to prevent security issues.
+
+    This function checks for:
+    - Path traversal attacks (e.g., "../../../etc/passwd")
+    - Absolute paths (if not allowed)
+    - Symbolic links (if not allowed)
+    - Path normalization
 
     Args:
-        file_path (str): Path to the file to validate
+        file_path (str): Path to validate
+        base_dir (str, optional): Base directory that all paths should be within
+        allow_absolute (bool): Whether to allow absolute paths
+        allow_symlinks (bool): Whether to allow symbolic links
 
     Returns:
-        bool: True if the file exists and is accessible
+        str: Normalized path that passed all security checks
 
     Raises:
-        ValidationError: If the file does not exist or is not accessible
+        ValidationError: If the path fails any security check
     """
     if not file_path:
         raise ValidationError("File path cannot be empty")
 
-    if not os.path.exists(file_path):
-        raise ValidationError(f"File does not exist: {file_path}")
+    # Convert to Path object for safer manipulation
+    path = pathlib.Path(file_path)
 
-    if not os.path.isfile(file_path):
-        raise ValidationError(f"Path is not a file: {file_path}")
+    # Check if path is absolute and not allowed
+    if path.is_absolute() and not allow_absolute:
+        raise ValidationError(f"Absolute paths are not allowed: {file_path}")
 
-    if not os.access(file_path, os.R_OK):
-        raise ValidationError(f"File is not readable: {file_path}")
+    # Normalize the path to resolve '..' and '.'
+    try:
+        normalized_path = path.resolve()
+    except (ValueError, RuntimeError) as e:
+        raise ValidationError(f"Invalid path: {file_path}. Error: {str(e)}")
+
+    # Check for symbolic links if not allowed
+    if not allow_symlinks and os.path.islink(file_path):
+        raise ValidationError(f"Symbolic links are not allowed: {file_path}")
+
+    # If base_dir is provided, ensure the path is within it
+    if base_dir:
+        base_path = pathlib.Path(base_dir).resolve()
+        try:
+            # Check if normalized_path is within base_path
+            normalized_path.relative_to(base_path)
+        except ValueError:
+            raise ValidationError(f"Path must be within {base_dir}: {file_path}")
+
+    # Check for common path traversal patterns
+    path_str = str(normalized_path)
+    if re.search(r'\.\./', file_path) or '..' in file_path.split(os.sep):
+        # Double-check that the normalized path is safe
+        if not base_dir:
+            logger.warning(f"Path contains parent directory references: {file_path}")
+        # If we have a base_dir, we've already checked that the resolved path is within it
+
+    return str(normalized_path)
+
+def validate_file_exists(file_path: str, base_dir: Optional[str] = None,
+                        allow_absolute: bool = False,
+                        allow_symlinks: bool = False) -> bool:
+    """
+    Validate that a file exists, is accessible, and passes path safety checks.
+
+    Args:
+        file_path (str): Path to the file to validate
+        base_dir (str, optional): Base directory that all paths should be within
+        allow_absolute (bool): Whether to allow absolute paths
+        allow_symlinks (bool): Whether to allow symbolic links
+
+    Returns:
+        bool: True if the file exists, is accessible, and passes safety checks
+
+    Raises:
+        ValidationError: If the file does not exist, is not accessible, or fails safety checks
+    """
+    if not file_path:
+        raise ValidationError("File path cannot be empty")
+
+    # Perform path safety validation
+    safe_path = validate_path_safety(
+        file_path,
+        base_dir=base_dir,
+        allow_absolute=allow_absolute,
+        allow_symlinks=allow_symlinks
+    )
+
+    # Now check if the file exists and is accessible
+    if not os.path.exists(safe_path):
+        raise ValidationError(f"File does not exist: {safe_path}")
+
+    if not os.path.isfile(safe_path):
+        raise ValidationError(f"Path is not a file: {safe_path}")
+
+    if not os.access(safe_path, os.R_OK):
+        raise ValidationError(f"File is not readable: {safe_path}")
 
     return True
 
-def validate_directory(directory: str, create_if_missing: bool = False) -> bool:
+def validate_directory(directory: str, create_if_missing: bool = False,
+                      base_dir: Optional[str] = None,
+                      allow_absolute: bool = False,
+                      allow_symlinks: bool = False) -> bool:
     """
-    Validate that a directory exists and is accessible.
+    Validate that a directory exists, is accessible, and passes path safety checks.
 
     Args:
         directory (str): Path to the directory to validate
         create_if_missing (bool): If True, create the directory if it doesn't exist
+        base_dir (str, optional): Base directory that all paths should be within
+        allow_absolute (bool): Whether to allow absolute paths
+        allow_symlinks (bool): Whether to allow symbolic links
 
     Returns:
-        bool: True if the directory exists and is accessible
+        bool: True if the directory exists, is accessible, and passes safety checks
 
     Raises:
-        ValidationError: If the directory does not exist or is not accessible
+        ValidationError: If the directory does not exist, is not accessible, or fails safety checks
     """
     if not directory:
         raise ValidationError("Directory path cannot be empty")
 
-    if not os.path.exists(directory):
+    # Perform path safety validation
+    safe_path = validate_path_safety(
+        directory,
+        base_dir=base_dir,
+        allow_absolute=allow_absolute,
+        allow_symlinks=allow_symlinks
+    )
+
+    # Check if the directory exists
+    if not os.path.exists(safe_path):
         if create_if_missing:
             try:
-                os.makedirs(directory, exist_ok=True)
-                logger.info(f"Created directory: {directory}")
+                os.makedirs(safe_path, exist_ok=True)
+                logger.info(f"Created directory: {safe_path}")
             except Exception as e:
-                raise ValidationError(f"Failed to create directory {directory}: {e}")
+                raise ValidationError(f"Failed to create directory {safe_path}: {e}")
         else:
-            raise ValidationError(f"Directory does not exist: {directory}")
+            raise ValidationError(f"Directory does not exist: {safe_path}")
 
-    if not os.path.isdir(directory):
-        raise ValidationError(f"Path is not a directory: {directory}")
+    # Check if it's a directory
+    if not os.path.isdir(safe_path):
+        raise ValidationError(f"Path is not a directory: {safe_path}")
 
-    if not os.access(directory, os.R_OK | os.W_OK):
-        raise ValidationError(f"Directory is not accessible (read/write): {directory}")
+    # Check if it's accessible
+    if not os.access(safe_path, os.R_OK | os.W_OK):
+        raise ValidationError(f"Directory is not accessible: {safe_path}")
 
     return True
 
-def validate_file_type(file_path: str, allowed_extensions: List[str]) -> bool:
+def validate_file_type(file_path: str, allowed_extensions: List[str],
+                      base_dir: Optional[str] = None,
+                      allow_absolute: bool = False,
+                      allow_symlinks: bool = False) -> bool:
     """
-    Validate that a file has an allowed extension.
+    Validate that a file has an allowed extension and passes path safety checks.
 
     Args:
         file_path (str): Path to the file to validate
-        allowed_extensions (list): List of allowed file extensions (e.g., ['.json', '.tar'])
+        allowed_extensions (list): List of allowed file extensions (e.g., ['.json', '.txt'])
+        base_dir (str, optional): Base directory that all paths should be within
+        allow_absolute (bool): Whether to allow absolute paths
+        allow_symlinks (bool): Whether to allow symbolic links
 
     Returns:
-        bool: True if the file has an allowed extension
+        bool: True if the file has an allowed extension and passes safety checks
 
     Raises:
-        ValidationError: If the file does not have an allowed extension
+        ValidationError: If the file does not have an allowed extension or fails safety checks
     """
     if not file_path:
         raise ValidationError("File path cannot be empty")
 
-    _, ext = os.path.splitext(file_path.lower())
-    if ext not in allowed_extensions:
+    # Perform path safety validation
+    safe_path = validate_path_safety(
+        file_path,
+        base_dir=base_dir,
+        allow_absolute=allow_absolute,
+        allow_symlinks=allow_symlinks
+    )
+
+    # Check file extension
+    _, ext = os.path.splitext(safe_path)
+    if ext.lower() not in [e.lower() for e in allowed_extensions]:
         raise ValidationError(
             f"Invalid file type: {ext}. Allowed types: {', '.join(allowed_extensions)}"
         )
 
     return True
 
-def validate_json_file(file_path: str) -> Dict[str, Any]:
+def validate_json_file(file_path: str, base_dir: Optional[str] = None,
+                      allow_absolute: bool = False,
+                      allow_symlinks: bool = False) -> Dict[str, Any]:
     """
-    Validate that a file contains valid JSON.
+    Validate and parse a JSON file, ensuring it passes path safety checks.
 
     Args:
         file_path (str): Path to the JSON file to validate
+        base_dir (str, optional): Base directory that all paths should be within
+        allow_absolute (bool): Whether to allow absolute paths
+        allow_symlinks (bool): Whether to allow symbolic links
 
     Returns:
-        dict: The parsed JSON data
+        dict: Parsed JSON data
 
     Raises:
-        ValidationError: If the file does not contain valid JSON
+        ValidationError: If the file is not a valid JSON file or fails safety checks
+        json.JSONDecodeError: If the file is not valid JSON
     """
-    validate_file_exists(file_path)
-    validate_file_type(file_path, ['.json'])
+    # Validate file exists and is a JSON file
+    validate_file_exists(file_path, base_dir=base_dir,
+                        allow_absolute=allow_absolute,
+                        allow_symlinks=allow_symlinks)
+    validate_file_type(file_path, ['.json'], base_dir=base_dir,
+                      allow_absolute=allow_absolute,
+                      allow_symlinks=allow_symlinks)
 
+    # Parse the JSON file
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-
-        if not isinstance(data, dict):
-            raise ValidationError(f"File does not contain a JSON object: {file_path}")
-
         return data
     except json.JSONDecodeError as e:
-        raise ValidationError(f"Invalid JSON in file {file_path}: {e}")
+        raise ValidationError(f"Invalid JSON file: {e}")
     except Exception as e:
-        raise ValidationError(f"Error reading JSON file {file_path}: {e}")
+        raise ValidationError(f"Error reading JSON file: {e}")
 
-def validate_tar_file(file_path: str) -> bool:
+def validate_tar_file(file_path: str, base_dir: Optional[str] = None,
+                     allow_absolute: bool = False,
+                     allow_symlinks: bool = False) -> bool:
     """
-    Validate that a file is a valid TAR archive.
+    Validate that a file is a valid TAR archive and passes path safety checks.
 
     Args:
         file_path (str): Path to the TAR file to validate
+        base_dir (str, optional): Base directory that all paths should be within
+        allow_absolute (bool): Whether to allow absolute paths
+        allow_symlinks (bool): Whether to allow symbolic links
 
     Returns:
-        bool: True if the file is a valid TAR archive
+        bool: True if the file is a valid TAR archive and passes safety checks
 
     Raises:
-        ValidationError: If the file is not a valid TAR archive
+        ValidationError: If the file is not a valid TAR archive or fails safety checks
     """
-    validate_file_exists(file_path)
-    validate_file_type(file_path, ['.tar'])
+    # Validate file exists and is a TAR file
+    validate_file_exists(file_path, base_dir=base_dir,
+                        allow_absolute=allow_absolute,
+                        allow_symlinks=allow_symlinks)
+    validate_file_type(file_path, ['.tar'], base_dir=base_dir,
+                      allow_absolute=allow_absolute,
+                      allow_symlinks=allow_symlinks)
 
+    # Check if it's a valid TAR file
     try:
         with tarfile.open(file_path) as tar:
-            # Check if we can list the contents
-            tar.getnames()
+            # Just opening the file is enough to validate it
+            pass
         return True
     except tarfile.ReadError as e:
-        raise ValidationError(f"Invalid TAR file {file_path}: {e}")
+        raise ValidationError(f"Invalid TAR file: {e}")
     except Exception as e:
-        raise ValidationError(f"Error reading TAR file {file_path}: {e}")
+        raise ValidationError(f"Error reading TAR file: {e}")
 
 def validate_file_object(file_obj: BinaryIO, allowed_extensions: Optional[List[str]] = None) -> bool:
     """

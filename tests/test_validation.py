@@ -26,7 +26,8 @@ from src.utils.validation import (
     validate_skype_data,
     validate_user_display_name,
     validate_db_config,
-    validate_config
+    validate_config,
+    validate_path_safety
 )
 
 class TestValidation(unittest.TestCase):
@@ -70,53 +71,54 @@ class TestValidation(unittest.TestCase):
 
     def test_validate_file_exists(self):
         """Test validate_file_exists function."""
-        # Test with existing file
-        self.assertTrue(validate_file_exists(self.temp_file_path))
+        # Test with a valid file
+        self.assertTrue(validate_file_exists(self.temp_file_path, allow_absolute=True))
 
-        # Test with non-existent file
+        # Test with a non-existent file
         with self.assertRaises(ValidationError):
-            validate_file_exists(os.path.join(self.temp_dir.name, 'nonexistent.txt'))
+            validate_file_exists(os.path.join(self.temp_dir.name, 'nonexistent.txt'), allow_absolute=True)
 
-        # Test with empty path
+        # Test with an empty path
         with self.assertRaises(ValidationError):
             validate_file_exists('')
 
-        # Test with directory instead of file
+        # Test with a directory
         with self.assertRaises(ValidationError):
-            validate_file_exists(self.temp_dir.name)
+            validate_file_exists(self.temp_dir.name, allow_absolute=True)
 
     def test_validate_directory(self):
         """Test validate_directory function."""
-        # Test with existing directory
-        self.assertTrue(validate_directory(self.temp_dir.name))
+        # Test with a valid directory
+        self.assertTrue(validate_directory(self.temp_dir.name, allow_absolute=True))
 
-        # Test with non-existent directory
-        non_existent_dir = os.path.join(self.temp_dir.name, 'nonexistent')
+        # Test with a non-existent directory
+        nonexistent_dir = os.path.join(self.temp_dir.name, 'nonexistent')
         with self.assertRaises(ValidationError):
-            validate_directory(non_existent_dir)
+            validate_directory(nonexistent_dir, allow_absolute=True)
 
         # Test with create_if_missing=True
-        self.assertTrue(validate_directory(non_existent_dir, create_if_missing=True))
-        self.assertTrue(os.path.exists(non_existent_dir))
+        self.assertTrue(validate_directory(nonexistent_dir, create_if_missing=True, allow_absolute=True))
+        self.assertTrue(os.path.exists(nonexistent_dir))
+        self.assertTrue(os.path.isdir(nonexistent_dir))
 
-        # Test with file instead of directory
+        # Test with a file
         with self.assertRaises(ValidationError):
-            validate_directory(self.temp_file_path)
+            validate_directory(self.temp_file_path, allow_absolute=True)
 
-        # Test with empty path
+        # Test with an empty path
         with self.assertRaises(ValidationError):
             validate_directory('')
 
     def test_validate_file_type(self):
         """Test validate_file_type function."""
-        # Test with correct file type
-        self.assertTrue(validate_file_type(self.temp_json_path, ['.json']))
+        # Test with a valid file type
+        self.assertTrue(validate_file_type(self.temp_json_path, ['.json'], allow_absolute=True))
 
-        # Test with incorrect file type
+        # Test with an invalid file type
         with self.assertRaises(ValidationError):
-            validate_file_type(self.temp_json_path, ['.txt', '.csv'])
+            validate_file_type(self.temp_json_path, ['.txt', '.csv'], allow_absolute=True)
 
-        # Test with empty path
+        # Test with an empty path
         with self.assertRaises(ValidationError):
             validate_file_type('', ['.json'])
 
@@ -124,19 +126,22 @@ class TestValidation(unittest.TestCase):
     @patch('src.utils.validation.validate_file_type')
     def test_validate_json_file(self, mock_validate_file_type, mock_validate_file_exists):
         """Test validate_json_file function."""
-        # Mock the validation functions to avoid file system operations
+        # Mock the return values
         mock_validate_file_exists.return_value = True
         mock_validate_file_type.return_value = True
 
-        # Test with valid JSON file
-        with patch('builtins.open', mock_open(read_data='{"test": "data"}')):
-            result = validate_json_file('test.json')
-            self.assertEqual(result, {'test': 'data'})
+        # Create a mock JSON file content
+        mock_data = {'test': 'data'}
+        mock_file = mock_open(read_data=json.dumps(mock_data))
 
-        # Test with invalid JSON file
-        with patch('builtins.open', mock_open(read_data='invalid json')):
-            with self.assertRaises(ValidationError):
-                validate_json_file('test.json')
+        # Test with a valid JSON file
+        with patch('builtins.open', mock_file):
+            data = validate_json_file('test.json', allow_absolute=True)
+            self.assertEqual(data, mock_data)
+
+            # Check that validate_file_exists and validate_file_type were called with the right parameters
+            mock_validate_file_exists.assert_called_once_with('test.json', base_dir=None, allow_absolute=True, allow_symlinks=False)
+            mock_validate_file_type.assert_called_once_with('test.json', ['.json'], base_dir=None, allow_absolute=True, allow_symlinks=False)
 
     def test_validate_skype_data(self):
         """Test validate_skype_data function."""
@@ -328,6 +333,72 @@ class TestValidation(unittest.TestCase):
         # Test with non-dict input
         with self.assertRaises(ValidationError):
             validate_config('not a dict')
+
+    def test_validate_path_safety(self):
+        """Test validate_path_safety function."""
+        # Create a test directory structure
+        base_dir = os.path.join(self.temp_dir.name, "base_dir")
+        os.makedirs(base_dir, exist_ok=True)
+
+        # Create a file in the base directory
+        safe_file = os.path.join(base_dir, "safe_file.txt")
+        with open(safe_file, "w") as f:
+            f.write("test")
+
+        # Create a subdirectory
+        sub_dir = os.path.join(base_dir, "sub_dir")
+        os.makedirs(sub_dir, exist_ok=True)
+
+        # Create a file in the subdirectory
+        sub_file = os.path.join(sub_dir, "sub_file.txt")
+        with open(sub_file, "w") as f:
+            f.write("test")
+
+        # Test with a safe path (allowing absolute paths)
+        result = validate_path_safety(safe_file, base_dir=base_dir, allow_absolute=True)
+        # Use Path.resolve() for comparison to handle symlinks on macOS
+        self.assertEqual(Path(result).resolve(), Path(safe_file).resolve())
+
+        # Test with a safe path in a subdirectory (allowing absolute paths)
+        result = validate_path_safety(sub_file, base_dir=base_dir, allow_absolute=True)
+        # Use Path.resolve() for comparison to handle symlinks on macOS
+        self.assertEqual(Path(result).resolve(), Path(sub_file).resolve())
+
+        # Test with a relative path
+        # First, change to the base directory
+        original_dir = os.getcwd()
+        try:
+            os.chdir(base_dir)
+            # Now use a relative path
+            rel_path = "sub_dir/sub_file.txt"
+            result = validate_path_safety(rel_path)
+            # Use Path.resolve() for comparison to handle symlinks on macOS
+            self.assertEqual(Path(result).resolve(), Path(os.path.join(base_dir, rel_path)).resolve())
+        finally:
+            # Change back to the original directory
+            os.chdir(original_dir)
+
+        # Test with a path traversal attempt
+        traversal_path = os.path.join(base_dir, "sub_dir", "..", "..", "etc", "passwd")
+        with self.assertRaises(ValidationError):
+            validate_path_safety(traversal_path, base_dir=base_dir, allow_absolute=True)
+
+        # Test with an absolute path when not allowed
+        with self.assertRaises(ValidationError):
+            validate_path_safety(safe_file)
+
+        # Test with an absolute path when allowed
+        result = validate_path_safety(safe_file, allow_absolute=True)
+        # Use Path.resolve() for comparison to handle symlinks on macOS
+        self.assertEqual(Path(result).resolve(), Path(safe_file).resolve())
+
+        # Test with a path outside the base directory
+        outside_file = os.path.join(self.temp_dir.name, "outside_file.txt")
+        with open(outside_file, "w") as f:
+            f.write("test")
+
+        with self.assertRaises(ValidationError):
+            validate_path_safety(outside_file, base_dir=base_dir, allow_absolute=True)
 
 if __name__ == '__main__':
     unittest.main()

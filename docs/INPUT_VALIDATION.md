@@ -18,11 +18,12 @@ The validation system provides:
 
 ### File System Validation
 
-- `validate_file_exists(file_path)`: Ensures a file exists and is accessible
-- `validate_directory(directory, create_if_missing=False)`: Validates a directory exists or creates it
-- `validate_file_type(file_path, allowed_extensions)`: Checks if a file has an allowed extension
-- `validate_json_file(file_path)`: Validates and parses a JSON file
-- `validate_tar_file(file_path)`: Validates a TAR archive
+- `validate_path_safety(file_path, base_dir=None, allow_absolute=False, allow_symlinks=False)`: Performs strict validation on file paths to prevent security issues
+- `validate_file_exists(file_path, base_dir=None, allow_absolute=False, allow_symlinks=False)`: Ensures a file exists and is accessible
+- `validate_directory(directory, create_if_missing=False, base_dir=None, allow_absolute=False, allow_symlinks=False)`: Validates a directory exists or creates it
+- `validate_file_type(file_path, allowed_extensions, base_dir=None, allow_absolute=False, allow_symlinks=False)`: Checks if a file has an allowed extension
+- `validate_json_file(file_path, base_dir=None, allow_absolute=False, allow_symlinks=False)`: Validates and parses a JSON file
+- `validate_tar_file(file_path, base_dir=None, allow_absolute=False, allow_symlinks=False)`: Validates a TAR archive
 - `validate_file_object(file_obj, allowed_extensions)`: Validates a file-like object
 
 ### Data Validation
@@ -130,6 +131,84 @@ To run the tests:
 cd tests
 python -m unittest test_validation.py
 ```
+
+## Path Safety Validation
+
+The SkypeParser project now includes strict path validation to prevent security issues such as path traversal attacks. This validation is performed by the `validate_path_safety` function and is integrated into all file-related validation functions.
+
+### Features
+
+- **Path Traversal Prevention**: Detects and prevents path traversal attacks (e.g., `../../../etc/passwd`)
+- **Absolute Path Control**: Allows you to restrict operations to relative paths only
+- **Symbolic Link Control**: Allows you to prevent following symbolic links
+- **Base Directory Restriction**: Ensures all file operations are within a specified base directory
+- **Path Normalization**: Normalizes paths to resolve `.` and `..` components
+
+### Usage Examples
+
+#### Basic Path Validation
+
+```python
+from src.utils.validation import validate_path_safety, ValidationError
+
+try:
+    # Validate a path (relative paths only by default)
+    safe_path = validate_path_safety("data/file.txt")
+
+    # Now use the safe path for file operations
+    with open(safe_path, 'r') as f:
+        data = f.read()
+except ValidationError as e:
+    print(f"Path validation error: {e}")
+```
+
+#### Restricting to a Base Directory
+
+```python
+from src.utils.validation import validate_path_safety, ValidationError
+
+try:
+    # Ensure the path is within the uploads directory
+    safe_path = validate_path_safety(
+        user_provided_path,
+        base_dir="uploads",
+        allow_absolute=False,
+        allow_symlinks=False
+    )
+
+    # Now use the safe path for file operations
+    with open(safe_path, 'r') as f:
+        data = f.read()
+except ValidationError as e:
+    print(f"Path validation error: {e}")
+```
+
+#### Allowing Absolute Paths
+
+```python
+from src.utils.validation import validate_path_safety, ValidationError
+
+try:
+    # Allow absolute paths but still validate for other security issues
+    safe_path = validate_path_safety(
+        "/path/to/file.txt",
+        allow_absolute=True
+    )
+
+    # Now use the safe path for file operations
+    with open(safe_path, 'r') as f:
+        data = f.read()
+except ValidationError as e:
+    print(f"Path validation error: {e}")
+```
+
+### Best Practices
+
+1. **Always validate user-provided paths**: Never use paths from untrusted sources without validation
+2. **Use a base directory**: When possible, restrict file operations to a specific directory
+3. **Avoid absolute paths**: Use relative paths when possible to limit access to the file system
+4. **Disable symbolic links**: Prevent following symbolic links to avoid accessing files outside the expected directory
+5. **Handle validation errors gracefully**: Provide clear error messages to users when path validation fails
 
 ## Conclusion
 

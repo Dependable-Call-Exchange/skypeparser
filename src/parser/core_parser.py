@@ -28,6 +28,12 @@ from ..utils.dependencies import (
     BS_PARSER
 )
 
+# Import configuration utility
+from ..utils.config import load_config, get_message_type_description
+
+# Load configuration
+config = load_config(message_types_file='config/message_types.json')
+
 # Set up logging
 logger = logging.getLogger(__name__)
 
@@ -230,27 +236,8 @@ def type_parser(msg_type: str) -> str:
         logger.warning(error_msg)
         raise InvalidInputError(error_msg)
 
-    # map message types to their true meaning, saving us useless strings/urls
-    valid_msg_types = {
-                'Event/Call': '***A call started/ended***',
-                'Poll' : '***Created a poll***',
-                'RichText/Media_Album' : '***Sent an album of images***',
-                'RichText/Media_AudioMsg': '***Sent a voice message***',
-                'RichText/Media_CallRecording': '***Sent a call recording***',
-                'RichText/Media_Card': '***Sent a media card***',
-                'RichText/Media_FlikMsg': '***Sent a moji***',
-                'RichText/Media_GenericFile': '***Sent a file***',
-                'RichText/Media_Video': '***Sent a video message***',
-                'RichText/UriObject': '***Sent a photo***',
-                'RichText/ScheduledCallInvite':'***Scheduled a call***',
-                'RichText/Location':'***Sent a location***',
-                'RichText/Contacts':'***Sent a contact***',
-                }
-    try:
-        return valid_msg_types[msg_type]
-    except KeyError:
-        # Not an error, just a message type we don't have a specific mapping for
-        return '***Sent a ' + msg_type + '***'
+    # Use the configuration utility to get the message type description
+    return get_message_type_description(config, msg_type)
 
 
 def banner_constructor(display_name: str, person: str, export_date: str,

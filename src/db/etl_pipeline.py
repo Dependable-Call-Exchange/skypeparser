@@ -128,12 +128,26 @@ class SkypeETLPipeline:
         Initialize the ETL pipeline.
 
         Args:
-            db_config (dict, optional): Database connection configuration
-            output_dir (str, optional): Directory to store extracted files and output
+            db_config (dict, optional): Database configuration
+            output_dir (str, optional): Directory to output files to
         """
+        # Load configuration if not provided
+        if db_config is None:
+            from ..utils.config import load_config, get_db_config
+            config = load_config()
+            db_config = get_db_config(config)
+
+        # Store configuration
         self.db_config = db_config
         self.output_dir = output_dir
+
+        # Load message types configuration
+        from ..utils.config import load_config
+        self.config = load_config(message_types_file='config/message_types.json')
+
+        # Initialize database connection
         self.conn = None
+        self.cursor = None
 
         # Validate database configuration if provided
         if db_config:
@@ -627,24 +641,9 @@ class SkypeETLPipeline:
         Returns:
             str: Human-readable description
         """
-        # Map message types to their true meaning
-        valid_msg_types = {
-            'Event/Call': '***A call started/ended***',
-            'Poll': '***Created a poll***',
-            'RichText/Media_Album': '***Sent an album of images***',
-            'RichText/Media_AudioMsg': '***Sent a voice message***',
-            'RichText/Media_CallRecording': '***Sent a call recording***',
-            'RichText/Media_Card': '***Sent a media card***',
-            'RichText/Media_FlikMsg': '***Sent a moji***',
-            'RichText/Media_GenericFile': '***Sent a file***',
-            'RichText/Media_Video': '***Sent a video message***',
-            'RichText/UriObject': '***Sent a photo***',
-            'RichText/ScheduledCallInvite': '***Scheduled a call***',
-            'RichText/Location': '***Sent a location***',
-            'RichText/Contacts': '***Sent a contact***',
-        }
-
-        return valid_msg_types.get(msg_type, f'***Sent a {msg_type}***')
+        # Use the configuration utility to get the message type description
+        from ..utils.config import get_message_type_description
+        return get_message_type_description(self.config, msg_type)
 
 
 if __name__ == "__main__":
