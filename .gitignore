@@ -153,3 +153,27 @@ cython_debug/
 
 # Local History for Visual Studio Code
 .history/
+.early.coverage
+
+# Virtual Environment
+venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+
+# Project specific
+*.tar
+messages.json
+*.txt
+!requirements*.txt

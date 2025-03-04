@@ -1,73 +1,256 @@
-# Skype History Parser
+# Skype Parser and ETL Pipeline
 
-`skype-parser` is a simple script to create pretty text files from your Skype chat history. This tool can either take in the `.tar` file or the `.json` file given to you by Skype and give you back your entire chat history in `.txt` format (beautifully formatted, too!).
+A comprehensive toolkit for extracting, transforming, and loading Skype export data. This project provides tools for parsing Skype export files (TAR or JSON), cleaning the data, and storing it in both raw and transformed formats for analysis and archiving.
 
-## How do I just get this thing to work?
+## Features
 
-Download `parser.py` and invoke it like so:
+- **Extract** data from Skype export files (TAR or JSON)
+- **Transform** raw data into a structured format
+- **Load** both raw and transformed data into PostgreSQL
+- **Export** conversations in multiple formats (text, JSON, CSV)
+- **Web Integration** for processing uploaded files
+- **Command-line Interface** for batch processing
+- **Comprehensive Logging** for tracking the ETL process
+- **Modular Design** with clear separation of concerns
 
-- If you have a `.tar` file:
+## Project Structure
 
-```bash
-python3 parser.py -t your_skype_username_export.tar
+```
+SkypeParser/
+├── src/
+│   ├── utils/                 # Utility modules
+│   │   ├── file_handler.py    # File reading and extraction utilities
+│   │   ├── file_utils.py      # General file utilities
+│   │   └── tar_extractor.py   # Command-line tool for TAR extraction
+│   ├── parser/                # Parsing modules
+│   │   ├── core_parser.py     # Core parsing functions
+│   │   ├── file_output.py     # File output utilities
+│   │   ├── parser_module.py   # Additional parsing utilities
+│   │   └── skype_parser.py    # Command-line interface
+│   └── db/                    # Database modules
+│       ├── etl_pipeline.py    # ETL pipeline implementation
+│       ├── raw_storage/       # Raw data storage utilities
+│       ├── skype_to_postgres.py (deprecated)
+│       └── store_skype_export.py (deprecated)
+├── examples/                  # Example scripts
+│   └── web_etl_example.py     # Web application example
+├── tests/                     # Test modules
+│   ├── test_etl_pipeline.py   # ETL pipeline tests
+│   └── test_web_integration.py # Web integration tests
+└── requirements.txt           # Project dependencies
 ```
 
-where `your_skype_username_export.tar` is the `.tar` file your recieved from Skype upon requesting a conversation export.  
+## Installation
 
-- If you have a `.json` file:
+1. Clone the repository:
+   ```
+   git clone https://github.com/yourusername/SkypeParser.git
+   cd SkypeParser
+   ```
+
+2. Install the required dependencies:
+   ```
+   pip install -r requirements.txt
+   ```
+
+3. Set up a PostgreSQL database (if using database storage):
+   ```
+   createdb skype_archive
+   ```
+
+## Usage
+
+### Command-line Usage
+
+Parse a Skype export file and generate text files:
 
 ```bash
-python3 parser.py messages.json
+python -m src.parser.skype_parser path/to/skype_export.tar -t -o output_dir -u "Your Name"
 ```
 
-where `messages.json` is the extracted `.json` file you that contains your conversation history.  
-
-If you are not sure how you can get your export from Skype, read the [this section](#how-do-i-export-my-skype-chat-history).
-
-## Detailed Description
-
-skype-parser is a simple python script that makes preserving chat history from Skype easier.
-
-Skype tends be a niche choice for text chatting, but for those of you who you use it and would like to keep a chat log in pliin-text form, this is *the* tool to get the job done.
-
-Skype's own parser is quite frankly, terrible. It produces an ugly HTML that is difficult to navigate and is riddled with unparsed XML.
-
-This tool will take the tar/JSON file given to you by Skype, and creates .txt files containing every chat with every user.
-
-Basic usage:
+Parse and store in PostgreSQL using the ETL pipeline:
 
 ```bash
-skype-parser [-h] [-c] [-t] filename
-
-positional arguments:
-  filename      The path/name to the Skype json/tar file you want to parse
-
-optional arguments:
-  -h, --help    show this help message and exit
-  -t, --tar     Use this flag to feed in a .tar file (at your own risk)
-  -c, --choose  Use this flag to choose which convos you'd like to parse
+python -m src.parser.skype_parser path/to/skype_export.tar -t --store-db --db-name skype_archive --db-user postgres
 ```
 
-If you invoke the script **without** the `t` or `--tar` argument, `filename` must be the skype `.json` file.
+### Python API Usage
 
-If you invoke the script **with** the `-t` or `--tar` argument, `filename` must be the `.tar` file that you get from skype.
+```python
+from src.db.etl_pipeline import SkypeETLPipeline
 
-If you invoke the script with `-c` or `--choose`, it will let you choose between the conversations you'd like to export.
+# Initialize the ETL pipeline
+etl = SkypeETLPipeline(
+    db_name="skype_archive",
+    db_user="postgres",
+    db_password="your_password",
+    db_host="localhost",
+    db_port=5432
+)
 
-## Requirements
+# Run the pipeline
+result = etl.run_pipeline(
+    input_file="path/to/skype_export.tar",
+    is_tar=True,
+    output_dir="output_dir",
+    user_display_name="Your Name"
+)
 
-- python version 3.5 and above
+if result:
+    print("ETL pipeline completed successfully")
+else:
+    print("ETL pipeline failed")
+```
 
-- beautifulsoup4 (optional, but recommended)
+### Using the Parser Modules Directly
 
-## How do I even export my skype chat history?
+```python
+from src.utils.file_handler import read_file
+from src.parser.core_parser import parse_skype_data
+from src.parser.file_output import export_conversations
 
-Follow the instructions [here](https://support.skype.com/en/faq/FA34894/how-do-i-export-my-skype-files-and-chat-history).
+# Read the Skype export file
+data = read_file("path/to/skype_export.json")
 
-Keep in mind that this tool parses your conversations, not your files; so be careful what you export.
+# Parse the data
+structured_data = parse_skype_data(data, "Your Name")
 
-Once you have downloaded your exported conversations (which is usually in `.tar` format), you can either to untar the downloaded file and use this tool to parse the resulting `.json` file, or you can take the `.tar` file itself and feed it into the script. Either way *should* work.
+# Export the conversations
+export_conversations(
+    structured_data,
+    output_format="json",
+    output_dir="output_dir",
+    overwrite=False,
+    skip_existing=False,
+    text_output=True
+)
+```
 
-## TO DO
+### Web Application Integration
 
-- Figure out whether we're being a fed a `.json` file or a tarball.
+See the `examples/web_etl_example.py` file for a complete example of integrating the ETL pipeline with a web application.
+
+## Parser Module Components
+
+### Core Parser (`core_parser.py`)
+
+Contains the core parsing functions for processing Skype export data:
+
+- `timestamp_parser`: Parses timestamp strings into formatted strings and datetime objects
+- `content_parser`: Cleans and formats message content using BeautifulSoup
+- `tag_stripper`: Strips HTML/XML tags from text using regex
+- `pretty_quotes`: Formats quoted messages for better readability
+- `type_parser`: Maps message types to human-readable descriptions
+- `parse_skype_data`: Main function that parses raw Skype export data into a structured format
+
+### File Output (`file_output.py`)
+
+Handles exporting parsed data to various file formats:
+
+- `write_to_file`: Writes content to a file with proper error handling
+- `output_structured_data`: Outputs structured data in JSON or CSV format
+- `export_conversations_to_text`: Exports conversations to text files
+- `export_conversations`: Main function that orchestrates the export process
+
+### Command-line Interface (`skype_parser.py`)
+
+Provides a user-friendly command-line interface for:
+
+- Parsing Skype export files (TAR or JSON)
+- Exporting conversations in various formats
+- Storing data in PostgreSQL using the ETL pipeline
+- Selecting specific conversations to process
+
+## ETL Pipeline Stages
+
+### 1. Extraction
+
+The extraction phase reads data from Skype export files (TAR or JSON) and validates the structure of the data. It ensures that all required fields are present and that the data is in the expected format.
+
+### 2. Transformation
+
+The transformation phase cleans and structures the raw data. It extracts key metadata, processes conversations and messages, and ensures that messages are sorted by timestamp. Special message types are handled appropriately, and edited messages are marked.
+
+### 3. Loading
+
+The loading phase inserts or updates both raw and transformed data in the PostgreSQL database. It handles potential conflicts and ensures that existing records are updated appropriately.
+
+## Database Schema
+
+The ETL pipeline uses the following database schema:
+
+### Raw Data Table
+
+```sql
+CREATE TABLE IF NOT EXISTS skype_raw_exports (
+    id SERIAL PRIMARY KEY,
+    export_id VARCHAR(255) UNIQUE,
+    export_date TIMESTAMP,
+    user_id VARCHAR(255),
+    raw_data JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### Transformed Data Tables
+
+```sql
+CREATE TABLE IF NOT EXISTS skype_conversations (
+    id SERIAL PRIMARY KEY,
+    conversation_id VARCHAR(255) UNIQUE,
+    display_name VARCHAR(255),
+    export_id VARCHAR(255) REFERENCES skype_raw_exports(export_id),
+    first_message_time TIMESTAMP,
+    last_message_time TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS skype_messages (
+    id SERIAL PRIMARY KEY,
+    message_id VARCHAR(255) UNIQUE,
+    conversation_id VARCHAR(255) REFERENCES skype_conversations(conversation_id),
+    timestamp TIMESTAMP,
+    from_id VARCHAR(255),
+    from_name VARCHAR(255),
+    content TEXT,
+    content_raw TEXT,
+    message_type VARCHAR(50),
+    is_edited BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+## Testing
+
+Run the unit tests:
+
+```bash
+pytest tests/test_etl_pipeline.py
+```
+
+Run the integration tests:
+
+```bash
+pytest tests/test_web_integration.py
+```
+
+## Dependencies
+
+- Python 3.6+
+- PostgreSQL 10+
+- psycopg2
+- Flask (for web integration)
+- BeautifulSoup4 (for HTML parsing)
+- lxml (recommended for better HTML parsing)
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgments
+
+- Thanks to all contributors who have helped with the development of this project.
+- Special thanks to the Skype team for providing the export functionality that makes this project possible.
