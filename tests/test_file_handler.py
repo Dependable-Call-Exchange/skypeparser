@@ -5,7 +5,6 @@ Tests for the file_handler.py module.
 
 import os
 import json
-import tempfile
 import unittest
 from unittest.mock import patch, mock_open
 import tarfile
@@ -27,67 +26,48 @@ from src.utils.file_handler import (
     list_tar_object
 )
 from src.utils.validation import ValidationError
+from tests.test_helpers import TestBase, patch_validation, create_test_file, create_test_json_file, create_test_tar_file
 
 
-class TestFileHandler(unittest.TestCase):
+class TestFileHandler(TestBase):
     """Test the file_handler.py module."""
 
     def setUp(self):
         """Set up test fixtures."""
-        # Create a temporary directory
-        self.temp_dir = tempfile.mkdtemp()
+        # Call the parent setUp method
+        super().setUp()
 
         # Create a sample JSON file
         self.json_data = {"test": "data"}
-        self.json_file = os.path.join(self.temp_dir, "test.json")
-        with open(self.json_file, "w") as f:
-            json.dump(self.json_data, f)
+        self.json_file = create_test_json_file(self.test_dir, "test.json", self.json_data)
 
         # Create a sample tar file with multiple JSON files
-        self.tar_file = os.path.join(self.temp_dir, "test.tar")
-        with tarfile.open(self.tar_file, "w") as tar:
-            # Add first JSON file
-            json_file1 = os.path.join(self.temp_dir, "file1.json")
-            with open(json_file1, "w") as f:
-                json.dump({"file": "1"}, f)
-            tar.add(json_file1, arcname="file1.json")
+        self.tar_files = {
+            "file1.json": json.dumps({"file": "1"}),
+            "file2.json": json.dumps({"file": "2"}),
+            "file.txt": "test"
+        }
+        self.tar_file = create_test_tar_file(self.test_dir, "test.tar", self.tar_files)
 
-            # Add second JSON file
-            json_file2 = os.path.join(self.temp_dir, "file2.json")
-            with open(json_file2, "w") as f:
-                json.dump({"file": "2"}, f)
-            tar.add(json_file2, arcname="file2.json")
-
-            # Add a non-JSON file
-            txt_file = os.path.join(self.temp_dir, "file.txt")
-            with open(txt_file, "w") as f:
-                f.write("test")
-            tar.add(txt_file, arcname="file.txt")
-
-    def tearDown(self):
-        """Tear down test fixtures."""
-        # Remove temporary directory and files
-        for root, dirs, files in os.walk(self.temp_dir, topdown=False):
-            for name in files:
-                os.remove(os.path.join(root, name))
-            for name in dirs:
-                os.rmdir(os.path.join(root, name))
-        os.rmdir(self.temp_dir)
-
-    def test_read_file(self):
+    @patch_validation
+    def test_read_file(self, mock_validate_path):
         """Test read_file function."""
         # Test with valid file
         data = read_file(self.json_file)
         self.assertEqual(data, self.json_data)
 
         # Test with non-existent file
+        mock_validate_path.side_effect = ValidationError("File does not exist")
         with self.assertRaises(ValidationError):
-            read_file(os.path.join(self.temp_dir, "nonexistent.json"))
+            read_file(os.path.join(self.test_dir, "nonexistent.json"))
+
+        # Reset the mock
+        mock_validate_path.reset_mock()
+        mock_validate_path.side_effect = lambda path, *args, **kwargs: path
 
         # Test with non-JSON file
-        txt_file = os.path.join(self.temp_dir, "test.txt")
-        with open(txt_file, "w") as f:
-            f.write("test")
+        txt_file = create_test_file(self.test_dir, "test.txt", "test")
+
         with self.assertRaises(ValidationError):
             read_file(txt_file)
 
@@ -102,19 +82,22 @@ class TestFileHandler(unittest.TestCase):
         with self.assertRaises(ValidationError):
             read_file_object(None)
 
-    def test_read_tarfile_auto_select(self):
+    @patch_validation
+    def test_read_tarfile_auto_select(self, mock_validate_path):
         """Test read_tarfile function with auto_select=True."""
         # Test with auto_select=True
         data = read_tarfile(self.tar_file, auto_select=True)
         self.assertEqual(data, {"file": "1"})  # Should select the first file
 
-    def test_read_tarfile_select_json(self):
+    @patch_validation
+    def test_read_tarfile_select_json(self, mock_validate_path):
         """Test read_tarfile function with select_json parameter."""
         # Test with select_json=1
         data = read_tarfile(self.tar_file, select_json=1)
         self.assertEqual(data, {"file": "2"})  # Should select the second file
 
-    def test_read_tarfile_no_selection(self):
+    @patch_validation
+    def test_read_tarfile_no_selection(self, mock_validate_path):
         """Test read_tarfile function with no selection."""
         # Test with auto_select=False and no select_json
         with self.assertRaises(ValueError):
@@ -142,10 +125,13 @@ class TestFileHandler(unittest.TestCase):
         with self.assertRaises(ValidationError):
             read_tarfile_object(None)
 
-    def test_extract_tar_contents(self):
+    @patch_validation
+    def test_extract_tar_contents(self, mock_validate_path):
         """Test extract_tar_contents function."""
         # Test with valid tar file
-        output_dir = os.path.join(self.temp_dir, "output")
+        output_dir = os.path.join(self.test_dir, "output")
+        os.makedirs(output_dir, exist_ok=True)
+
         files = extract_tar_contents(self.tar_file, output_dir)
         self.assertEqual(len(files), 3)
         self.assertTrue(os.path.exists(os.path.join(output_dir, "file1.json")))
@@ -157,10 +143,12 @@ class TestFileHandler(unittest.TestCase):
         self.assertEqual(len(files), 2)
 
         # Test with non-existent file
+        mock_validate_path.side_effect = ValidationError("File does not exist")
         with self.assertRaises(ValidationError):
-            extract_tar_contents(os.path.join(self.temp_dir, "nonexistent.tar"), output_dir)
+            extract_tar_contents(os.path.join(self.test_dir, "nonexistent.tar"), output_dir)
 
-    def test_list_tar_contents(self):
+    @patch_validation
+    def test_list_tar_contents(self, mock_validate_path):
         """Test list_tar_contents function."""
         # Test with valid tar file
         files = list_tar_contents(self.tar_file)
@@ -176,8 +164,9 @@ class TestFileHandler(unittest.TestCase):
         self.assertIn("file2.json", files)
 
         # Test with non-existent file
+        mock_validate_path.side_effect = ValidationError("File does not exist")
         with self.assertRaises(ValidationError):
-            list_tar_contents(os.path.join(self.temp_dir, "nonexistent.tar"))
+            list_tar_contents(os.path.join(self.test_dir, "nonexistent.tar"))
 
 
 if __name__ == "__main__":

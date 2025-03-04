@@ -262,6 +262,43 @@ python run_tests.py --module validation config
 
 This will run only the tests for the validation and config modules.
 
+For running multiple test modules, use multiple `-m` flags:
+
+```bash
+python run_tests.py -m tar_extractor -m file_handler
+```
+
+### Test Helpers Module
+
+The project includes a test helpers module (`tests/test_helpers.py`) that provides utilities for writing tests:
+
+```python
+from tests.test_helpers import TestBase, patch_validation, create_test_file
+
+class TestMyModule(TestBase):
+    @patch_validation
+    def test_my_function(self, mock_validate):
+        # Test code here
+        test_file = create_test_file(self.test_dir, "test.txt", "content")
+        # Use test_file in your test
+```
+
+Key features of the test helpers module:
+- `TestBase` class with common setup and teardown methods
+- `patch_validation` decorator for handling path validation in tests
+- Helper functions for creating test files, JSON files, and TAR files
+- Utilities for mocking system functions like `sys.exit`
+
+### Test Fixes and Best Practices
+
+The test suite has been updated to handle path validation requirements and to match the actual implementation of the modules. See `docs/test_fixes.md` for details on the changes made and best practices for writing tests.
+
+Key improvements include:
+- Using relative paths within the test directory to avoid path validation issues
+- Patching validation functions for testing purposes
+- Ensuring tests match the actual implementation of the modules
+- Standardized approach for test data management
+
 ### Verbose Output
 
 For more detailed test output, use the `--verbose` or `-v` flag:
