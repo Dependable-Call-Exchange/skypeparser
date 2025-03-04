@@ -12,6 +12,7 @@ A comprehensive toolkit for extracting, transforming, and loading Skype export d
 - **Command-line Interface** for batch processing
 - **Comprehensive Logging** for tracking the ETL process
 - **Modular Design** with clear separation of concerns
+- **Extensive Test Suite** for ensuring code quality and reliability
 
 ## Project Structure
 
@@ -21,6 +22,9 @@ SkypeParser/
 │   ├── utils/                 # Utility modules
 │   │   ├── file_handler.py    # File reading and extraction utilities
 │   │   ├── file_utils.py      # General file utilities
+│   │   ├── validation.py      # Input validation utilities
+│   │   ├── config.py          # Configuration utilities
+│   │   ├── dependencies.py    # Dependency management
 │   │   └── tar_extractor.py   # Command-line tool for TAR extraction
 │   ├── parser/                # Parsing modules
 │   │   ├── core_parser.py     # Core parsing functions
@@ -33,10 +37,23 @@ SkypeParser/
 │       ├── skype_to_postgres.py (deprecated)
 │       └── store_skype_export.py (deprecated)
 ├── examples/                  # Example scripts
-│   └── web_etl_example.py     # Web application example
+│   ├── web_etl_example.py     # Web application example
+│   └── upload_handler_example.py # File upload example
 ├── tests/                     # Test modules
+│   ├── test_validation.py     # Validation tests
+│   ├── test_config.py         # Configuration tests
+│   ├── test_file_handler.py   # File handler tests
 │   ├── test_etl_pipeline.py   # ETL pipeline tests
-│   └── test_web_integration.py # Web integration tests
+│   ├── test_web_integration.py # Web integration tests
+│   ├── test_core_parser.py    # Core parser tests
+│   ├── test_skype_parser.py   # Skype parser tests
+│   ├── test_file_output.py    # File output tests
+│   ├── test_parser_module.py  # Parser module tests
+│   ├── test_raw_storage.py    # Raw storage tests
+│   ├── test_dependencies.py   # Dependencies tests
+│   ├── test_tar_extractor.py  # TAR extractor tests
+│   └── test_file_utils.py     # File utilities tests
+├── run_tests.py               # Test runner script
 └── requirements.txt           # Project dependencies
 ```
 
@@ -225,17 +242,43 @@ CREATE TABLE IF NOT EXISTS skype_messages (
 
 ## Testing
 
-Run the unit tests:
+The project includes a comprehensive test suite to ensure code quality and reliability. The tests are organized by module and can be run individually or all at once.
+
+### Running All Tests
+
+To run all tests, use the `run_tests.py` script:
 
 ```bash
-pytest tests/test_etl_pipeline.py
+python run_tests.py
 ```
 
-Run the integration tests:
+### Running Specific Tests
+
+To run tests for a specific module, use the `--module` or `-m` flag:
 
 ```bash
-pytest tests/test_web_integration.py
+python run_tests.py --module validation config
 ```
+
+This will run only the tests for the validation and config modules.
+
+### Verbose Output
+
+For more detailed test output, use the `--verbose` or `-v` flag:
+
+```bash
+python run_tests.py --verbose
+```
+
+### Test Coverage
+
+To generate a test coverage report, you can use the `pytest-cov` package:
+
+```bash
+pytest --cov=src tests/
+```
+
+This will show the test coverage for each module in the `src` directory.
 
 ## Dependencies
 
