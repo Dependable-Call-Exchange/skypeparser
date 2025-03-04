@@ -57,7 +57,7 @@ else:
 
 def main():
     """
-    Main entry point for the Skype parser command-line interface.
+    Main function to parse Skype export data and output to files.
     """
     try:
         args = get_commandline_args()
@@ -75,12 +75,11 @@ def main():
                 logger.error(f"Error creating output directory {args.output_dir}: {e}")
                 sys.exit(1)
 
-        # Get user display name from command line or prompt
+        # Get user display name from command line or use default
         user_display_name = args.user_display_name
         if not user_display_name:
-            user_display_name = input('\nIn the logs, your name should be displayed as: ')
-            while len(user_display_name.split()) == 0:
-                user_display_name = input('\nPlease enter how you want your name to be displayed: ')
+            logger.info("No user display name provided, using default: 'Me'")
+            user_display_name = "Me"
 
         # Read the Skype export file
         try:

@@ -11,6 +11,7 @@ This document summarizes the improvements made to the SkypeParser project, highl
 - [Migration Guide](#migration-guide)
 - [Code Organization](#code-organization)
 - [Input Validation](#input-validation)
+- [Non-Interactive Library Functions](#non-interactive-library-functions)
 - [Next Steps](#next-steps)
 
 ## Configuration Management
@@ -128,6 +129,28 @@ This document summarizes the improvements made to the SkypeParser project, highl
 - Reduced risk of data corruption
 - More robust handling of edge cases
 - Simplified debugging of input-related issues
+
+## Non-Interactive Library Functions
+
+### Improvements
+- Removed all interactive prompts from library functions
+- Added non-interactive alternatives with clear error messages
+- Updated file handling to use flags instead of prompts
+- Modified ID selection to accept parameters instead of interactive input
+- Added default values for user display names
+- Created comprehensive documentation in `docs/NON_INTERACTIVE.md`
+- Added tests to verify non-interactive behavior
+- Performed thorough verification to ensure all prompts are removed
+
+### Benefits
+- Improved reusability in automated and non-interactive environments
+- Better testability without mocking user input
+- Cleaner separation of concerns between library and UI
+- Enhanced error handling with detailed messages
+- Simplified integration with other systems
+- More predictable behavior in all contexts
+- Increased reliability through comprehensive testing
+- Easier maintenance and debugging
 
 ## Next Steps
 

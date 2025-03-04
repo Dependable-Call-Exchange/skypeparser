@@ -115,6 +115,7 @@ def read_tarfile(filename: str, select_json: Optional[int] = None,
         KeyError: If the specified JSON file is not found in the archive
         IndexError: If no JSON files are found in the tar
         json.JSONDecodeError: If the file is not valid JSON
+        ValueError: If multiple JSON files are found and neither select_json nor auto_select is provided
     """
     try:
         # Validate file exists and is a tar file
@@ -142,20 +143,11 @@ def read_tarfile(filename: str, select_json: Optional[int] = None,
                     selected_index = 0
                     logger.info(f"Multiple JSON files found. Auto-selecting: {tar_files[selected_index]}")
                 else:
-                    # This branch is for interactive use, which should be rare in automated systems
-                    logger.info("Multiple JSON files found in the tar archive:")
-                    for i, file in enumerate(tar_files):
-                        logger.info(f"{i+1}: {file}")
-
-                    while True:
-                        try:
-                            selection = input("Enter the number of the JSON file to use: ")
-                            selected_index = int(selection) - 1
-                            if 0 <= selected_index < len(tar_files):
-                                break
-                            logger.error("Invalid selection. Please enter a valid number.")
-                        except ValueError:
-                            logger.error("Please enter a number.")
+                    # Instead of interactive prompt, raise an exception with available options
+                    available_files = "\n".join([f"{i+1}: {file}" for i, file in enumerate(tar_files)])
+                    error_msg = f"Multiple JSON files found in the tar archive. Please specify which one to use with select_json parameter:\n{available_files}"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
             else:
                 selected_index = 0
 
@@ -200,6 +192,7 @@ def read_tarfile_object(file_obj: BinaryIO, select_json: Optional[int] = None,
         KeyError: If the specified JSON file is not found in the archive
         IndexError: If no JSON files are found in the tar
         json.JSONDecodeError: If the file is not valid JSON
+        ValueError: If multiple JSON files are found and neither select_json nor auto_select is provided
     """
     # Validate file object
     try:
@@ -209,7 +202,7 @@ def read_tarfile_object(file_obj: BinaryIO, select_json: Optional[int] = None,
         raise
 
     # Create a temporary file to store the tar content
-    with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+    with tempfile.NamedTemporaryFile(suffix='.tar', delete=False) as temp_file:
         try:
             # Reset file pointer to beginning
             file_obj.seek(0)

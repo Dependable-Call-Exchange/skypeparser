@@ -326,12 +326,13 @@ def banner_constructor(display_name: str, person: str, export_date: str,
         return banner
 
 
-def id_selector(ids: List[str]) -> List[str]:
+def id_selector(ids: List[str], selected_indices: Optional[List[int]] = None) -> List[str]:
     """
-    Interactive selector for conversation IDs.
+    Select conversation IDs from a list.
 
     Args:
         ids (list): List of conversation IDs
+        selected_indices (list, optional): List of indices to select. If None, all IDs are returned.
 
     Returns:
         list: Selected conversation IDs
@@ -344,21 +345,32 @@ def id_selector(ids: List[str]) -> List[str]:
         logger.warning(error_msg)
         raise InvalidInputError(error_msg)
 
-    logger.info("You have conversations with the following ids: ")
-    valid_selections = {}
-    for i in range(len(ids)):
-        logger.info(f'\t{i+1} ----> {ids[i]}')
-        valid_selections[str(i+1)] = ids[i]
+    # Log available IDs for reference
+    logger.info("Available conversation IDs: ")
+    for i, id_val in enumerate(ids):
+        logger.info(f'\t{i+1} ----> {id_val}')
 
-    user_selection = input('Enter the number associated with the chats '
-                            'you want to export, separated by a space: ')
-    selected_ids = set(user_selection.split())
+    # If no selection provided, return all IDs
+    if selected_indices is None:
+        logger.info("No selection provided, returning all conversation IDs")
+        return ids
 
-    while not selected_ids.issubset(set(valid_selections.keys())) or len(selected_ids) == 0:
-        user_selection = input('Please enter valid numbers, separated by a space: ')
-        selected_ids = set(user_selection.split())
+    # Validate selected indices
+    valid_indices = []
+    for idx in selected_indices:
+        if isinstance(idx, int) and 0 <= idx < len(ids):
+            valid_indices.append(idx)
+        else:
+            logger.warning(f"Invalid index: {idx}, must be between 0 and {len(ids)-1}")
 
-    return [valid_selections[j] for j in selected_ids]
+    if not valid_indices:
+        logger.warning("No valid indices provided, returning all conversation IDs")
+        return ids
+
+    # Return selected IDs
+    selected = [ids[i] for i in valid_indices]
+    logger.info(f"Selected {len(selected)} conversation IDs")
+    return selected
 
 
 def parse_skype_data(raw_data: Dict[str, Any], user_display_name: str) -> Dict[str, Any]:

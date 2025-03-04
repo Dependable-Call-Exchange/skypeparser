@@ -66,32 +66,22 @@ def output_structured_data(structured_data: Dict[str, Any], output_format: str,
                           output_dir: str, export_date: str,
                           overwrite: bool = False, skip_existing: bool = False) -> bool:
     """
-    Output structured data in the specified format (JSON or CSV)
+    Output structured data to files in the specified format.
 
     Args:
-        structured_data (dict): Dictionary containing structured message data
-        output_format (str): Format to output (json or csv)
-        output_dir (str): Directory to save output files
+        structured_data (dict): Structured data to output
+        output_format (str): Format to output ('json' or 'csv')
+        output_dir (str): Directory to output files to
         export_date (str): Date of export for filename
-        overwrite (bool): Whether to overwrite existing files
-        skip_existing (bool): Whether to skip existing files
+        overwrite (bool): Whether to overwrite existing files without asking
+        skip_existing (bool): Whether to skip existing files without asking
 
     Returns:
         bool: True if successful, False otherwise
 
     Raises:
-        ExportError: If the data cannot be exported
+        FileOperationError: If there is an error writing to the file
     """
-    if not structured_data:
-        error_msg = "No structured data provided"
-        logger.error(error_msg)
-        raise ExportError(error_msg)
-
-    if not output_format in ['json', 'csv']:
-        error_msg = f"Invalid output format: {output_format}"
-        logger.error(error_msg)
-        raise ExportError(error_msg)
-
     # Create output directory if it doesn't exist
     try:
         os.makedirs(output_dir, exist_ok=True)
@@ -110,10 +100,8 @@ def output_structured_data(structured_data: Dict[str, Any], output_format: str,
                 logger.info(f"Skipping existing file: {json_filename}")
                 return True
             elif not overwrite:
-                response = input(f"File {json_filename} already exists. Overwrite? (y/n): ")
-                if response.lower() != 'y':
-                    logger.info(f"Skipping file: {json_filename}")
-                    return True
+                logger.info(f"File {json_filename} already exists and overwrite is not enabled")
+                return False
 
         try:
             with open(json_filename, 'w', encoding='utf-8', newline='\n') as f:
@@ -139,10 +127,8 @@ def output_structured_data(structured_data: Dict[str, Any], output_format: str,
                     logger.info(f"Skipping existing file: {csv_filename}")
                     continue
                 elif not overwrite:
-                    response = input(f"File {csv_filename} already exists. Overwrite? (y/n): ")
-                    if response.lower() != 'y':
-                        logger.info(f"Skipping file: {csv_filename}")
-                        continue
+                    logger.info(f"File {csv_filename} already exists and overwrite is not enabled")
+                    continue
 
             try:
                 with open(csv_filename, 'w', encoding='utf-8', newline='\n') as f:
@@ -190,23 +176,18 @@ def export_conversations_to_text(structured_data: Dict[str, Any], output_dir: st
     Export conversations to text files.
 
     Args:
-        structured_data (dict): Dictionary containing structured conversation data
-        output_dir (str): Directory to save output files
+        structured_data (dict): Structured data to export
+        output_dir (str): Directory to output files to
         export_date (str): Date of export for filename
-        overwrite (bool): Whether to overwrite existing files
-        skip_existing (bool): Whether to skip existing files
+        overwrite (bool): Whether to overwrite existing files without asking
+        skip_existing (bool): Whether to skip existing files without asking
 
     Returns:
         bool: True if successful, False otherwise
 
     Raises:
-        ExportError: If the conversations cannot be exported
+        FileOperationError: If there is an error writing to the file
     """
-    if not structured_data:
-        error_msg = "No structured data provided"
-        logger.error(error_msg)
-        raise ExportError(error_msg)
-
     # Create output directory if it doesn't exist
     try:
         os.makedirs(output_dir, exist_ok=True)
@@ -215,18 +196,16 @@ def export_conversations_to_text(structured_data: Dict[str, Any], output_dir: st
         logger.error(error_msg)
         raise FileOperationError(error_msg) from e
 
-    success = True
-    conversations = structured_data.get('conversations', {})
-    id_to_display_name = structured_data.get('id_to_display_name', {})
-    export_time = structured_data.get('export_time', '')
+    # Get current time for export timestamp
+    export_time = datetime.now().strftime("%H:%M:%S")
 
     # Process each conversation
-    for conv_id, conv_data in conversations.items():
+    for conv_id, conv_data in structured_data.items():
         try:
-            display_name = conv_data.get('display_name', conv_id)
+            # Get display name and messages
+            display_name = conv_data.get('display_name', 'Unknown')
             messages = conv_data.get('messages', [])
 
-            # Skip empty conversations
             if not messages:
                 logger.warning(f"No messages found for conversation with {display_name}")
                 continue
@@ -237,15 +216,13 @@ def export_conversations_to_text(structured_data: Dict[str, Any], output_dir: st
             output_file = os.path.join(output_dir, f"[{export_date}]-{safe_display_name}({safe_id}).txt")
 
             # Check if file exists and handle based on overwrite flag
-            if os.path.exists(output_file) and not overwrite:
+            if os.path.exists(output_file):
                 if skip_existing:
                     logger.info(f"Skipping existing file: {output_file}")
                     continue
-                else:
-                    confirm = input(f"File {output_file} already exists. Overwrite? (y/n): ")
-                    if confirm.lower() != 'y':
-                        logger.info(f"Skipping file: {output_file}")
-                        continue
+                elif not overwrite:
+                    logger.info(f"File {output_file} already exists and overwrite is not enabled")
+                    continue
 
             # Extract timestamps for banner
             timestamps = [msg.get('timestamp', '') for msg in messages]
@@ -306,18 +283,13 @@ def export_conversations_to_text(structured_data: Dict[str, Any], output_dir: st
                     write_to_file(output_file, compiled_message)
             except (ContentParsingError, FileOperationError) as e:
                 logger.error(f"Error writing conversation to file: {e}")
-                success = False
-                continue
+                return False
 
         except Exception as e:
             logger.error(f"Error processing conversation with {display_name}: {e}")
-            success = False
-            continue
+            return False
 
-    if not success:
-        raise ExportError("One or more conversations could not be exported to text")
-
-    return success
+    return True
 
 
 def export_conversations(structured_data: Dict[str, Any], output_format: str,
