@@ -22,12 +22,26 @@ from .dependencies import (
     check_dependency,
     require_dependency
 )
+from .validation import (
+    ValidationError,
+    validate_file_exists,
+    validate_directory,
+    validate_file_type,
+    validate_json_file,
+    validate_tar_file,
+    validate_file_object,
+    validate_skype_data,
+    validate_user_display_name,
+    validate_db_config,
+    validate_config
+)
 
 __all__ = [
     # Modules
     'file_utils',
     'file_handler',
     'dependencies',
+    'validation',
 
     # File utilities
     'safe_filename',
@@ -47,5 +61,18 @@ __all__ = [
     'PSYCOPG2_AVAILABLE',
     'psycopg2',
     'check_dependency',
-    'require_dependency'
+    'require_dependency',
+
+    # Validation
+    'ValidationError',
+    'validate_file_exists',
+    'validate_directory',
+    'validate_file_type',
+    'validate_json_file',
+    'validate_tar_file',
+    'validate_file_object',
+    'validate_skype_data',
+    'validate_user_display_name',
+    'validate_db_config',
+    'validate_config'
 ]

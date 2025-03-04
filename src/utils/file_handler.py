@@ -17,6 +17,14 @@ import logging
 import tempfile
 from typing import Dict, List, Union, Optional, Tuple, Any, BinaryIO
 
+# Import validation functions
+from .validation import (
+    ValidationError,
+    validate_file_exists,
+    validate_file_type,
+    validate_file_object
+)
+
 # Set up logging
 logger = logging.getLogger(__name__)
 
@@ -31,13 +39,21 @@ def read_file(filename: str) -> Dict[str, Any]:
         dict: Parsed JSON data
 
     Raises:
+        ValidationError: If the file is invalid
         json.JSONDecodeError: If the file is not valid JSON
         FileNotFoundError: If the file does not exist
     """
     try:
+        # Validate file exists and is readable
+        validate_file_exists(filename)
+        validate_file_type(filename, ['.json'])
+
         with open(filename, encoding='utf-8') as f:
             data = json.load(f)
         return data
+    except ValidationError as e:
+        logger.error(f"Validation error: {e}")
+        raise
     except json.JSONDecodeError as e:
         logger.error(f"Invalid JSON file: {e}")
         raise
@@ -48,7 +64,6 @@ def read_file(filename: str) -> Dict[str, Any]:
 def read_file_object(file_obj: BinaryIO) -> Dict[str, Any]:
     """
     Read and parse a JSON file from a file-like object.
-    This is useful for processing uploaded files without saving them to disk.
 
     Args:
         file_obj (BinaryIO): File-like object containing JSON data
@@ -57,21 +72,24 @@ def read_file_object(file_obj: BinaryIO) -> Dict[str, Any]:
         dict: Parsed JSON data
 
     Raises:
+        ValidationError: If the file object is invalid
         json.JSONDecodeError: If the content is not valid JSON
     """
     try:
+        # Validate file object
+        validate_file_object(file_obj)
+
         # Reset file pointer to beginning
         file_obj.seek(0)
-        content = file_obj.read()
 
-        # If content is bytes, decode to string
-        if isinstance(content, bytes):
-            content = content.decode('utf-8')
-
-        data = json.loads(content)
+        # Read and parse JSON
+        data = json.loads(file_obj.read().decode('utf-8'))
         return data
+    except ValidationError as e:
+        logger.error(f"Validation error: {e}")
+        raise
     except json.JSONDecodeError as e:
-        logger.error(f"Invalid JSON content: {e}")
+        logger.error(f"Invalid JSON in file object: {e}")
         raise
     except Exception as e:
         logger.error(f"Error reading file object: {e}")
@@ -92,12 +110,17 @@ def read_tarfile(filename: str, select_json: Optional[int] = None,
         dict: Contents of the JSON file
 
     Raises:
+        ValidationError: If the file is invalid
         tarfile.ReadError: If the file is not a valid tar archive
         KeyError: If the specified JSON file is not found in the archive
         IndexError: If no JSON files are found in the tar
         json.JSONDecodeError: If the file is not valid JSON
     """
     try:
+        # Validate file exists and is a tar file
+        validate_file_exists(filename)
+        validate_file_type(filename, ['.tar'])
+
         with tarfile.open(filename) as tar:
             # Find files inside the tar
             tar_contents = tar.getnames()
@@ -107,8 +130,9 @@ def read_tarfile(filename: str, select_json: Optional[int] = None,
             tar_files = list(filter(pattern.match, tar_contents))
 
             if not tar_files:
-                logger.error("No JSON files found in the tar archive")
-                raise IndexError("No JSON files found in the tar archive")
+                error_msg = "No JSON files found in the tar archive"
+                logger.error(error_msg)
+                raise IndexError(error_msg)
 
             # If multiple JSON files are found, handle selection
             if len(tar_files) > 1:
@@ -142,6 +166,9 @@ def read_tarfile(filename: str, select_json: Optional[int] = None,
 
             data = json.loads(file_obj.read().decode('utf-8'))
             return data
+    except ValidationError as e:
+        logger.error(f"Validation error: {e}")
+        raise
     except tarfile.ReadError as e:
         logger.error(f"Invalid tar file: {e}")
         raise
@@ -168,11 +195,19 @@ def read_tarfile_object(file_obj: BinaryIO, select_json: Optional[int] = None,
         dict: Contents of the JSON file
 
     Raises:
+        ValidationError: If the file object is invalid
         tarfile.ReadError: If the content is not a valid tar archive
         KeyError: If the specified JSON file is not found in the archive
         IndexError: If no JSON files are found in the tar
         json.JSONDecodeError: If the file is not valid JSON
     """
+    # Validate file object
+    try:
+        validate_file_object(file_obj)
+    except ValidationError as e:
+        logger.error(f"Validation error: {e}")
+        raise
+
     # Create a temporary file to store the tar content
     with tempfile.NamedTemporaryFile(delete=False) as temp_file:
         try:
@@ -204,8 +239,16 @@ def extract_tar_contents(tar_filename: str, output_dir: Optional[str] = None,
 
     Returns:
         list: List of extracted file paths or tar members if output_dir is None
+
+    Raises:
+        ValidationError: If the file is invalid
+        tarfile.ReadError: If the file is not a valid tar archive
     """
     try:
+        # Validate file exists and is a tar file
+        validate_file_exists(tar_filename)
+        validate_file_type(tar_filename, ['.tar'])
+
         with tarfile.open(tar_filename) as tar:
             # Get all members
             members = tar.getmembers()
@@ -222,6 +265,9 @@ def extract_tar_contents(tar_filename: str, output_dir: Optional[str] = None,
                 return [os.path.join(output_dir, m.name) for m in members]
             else:
                 return [m.name for m in members]
+    except ValidationError as e:
+        logger.error(f"Validation error: {e}")
+        raise
     except tarfile.ReadError as e:
         logger.error(f"Invalid tar file: {e}")
         raise
@@ -242,7 +288,18 @@ def extract_tar_object(file_obj: BinaryIO, output_dir: str,
 
     Returns:
         list: List of extracted file paths
+
+    Raises:
+        ValidationError: If the file object is invalid
+        tarfile.ReadError: If the content is not a valid tar archive
     """
+    # Validate file object
+    try:
+        validate_file_object(file_obj)
+    except ValidationError as e:
+        logger.error(f"Validation error: {e}")
+        raise
+
     # Create a temporary file to store the tar content
     with tempfile.NamedTemporaryFile(delete=False) as temp_file:
         try:
@@ -272,8 +329,16 @@ def list_tar_contents(tar_filename: str, file_pattern: Optional[str] = None) -> 
 
     Returns:
         list: List of file names in the tar archive
+
+    Raises:
+        ValidationError: If the file is invalid
+        tarfile.ReadError: If the file is not a valid tar archive
     """
     try:
+        # Validate file exists and is a tar file
+        validate_file_exists(tar_filename)
+        validate_file_type(tar_filename, ['.tar'])
+
         with tarfile.open(tar_filename) as tar:
             contents = tar.getnames()
 
@@ -283,6 +348,9 @@ def list_tar_contents(tar_filename: str, file_pattern: Optional[str] = None) -> 
                 contents = [name for name in contents if pattern.match(name)]
 
             return contents
+    except ValidationError as e:
+        logger.error(f"Validation error: {e}")
+        raise
     except tarfile.ReadError as e:
         logger.error(f"Invalid tar file: {e}")
         raise
@@ -301,7 +369,18 @@ def list_tar_object(file_obj: BinaryIO, file_pattern: Optional[str] = None) -> L
 
     Returns:
         list: List of file names in the tar archive
+
+    Raises:
+        ValidationError: If the file object is invalid
+        tarfile.ReadError: If the content is not a valid tar archive
     """
+    # Validate file object
+    try:
+        validate_file_object(file_obj)
+    except ValidationError as e:
+        logger.error(f"Validation error: {e}")
+        raise
+
     # Create a temporary file to store the tar content
     with tempfile.NamedTemporaryFile(delete=False) as temp_file:
         try:

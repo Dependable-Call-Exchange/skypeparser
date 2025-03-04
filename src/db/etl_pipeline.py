@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
 """
-Skype Export ETL Pipeline
+ETL Pipeline for Skype Export Data
 
-This module implements a complete Extract-Transform-Load (ETL) pipeline for Skype export data.
-It preserves both the raw data (as extracted from the tar archive) and the cleaned,
-transformed data used by the SkypeArchive UI.
-
-The pipeline consists of three main stages:
-1. Extraction: Retrieve and store the raw export data without any transformation
-2. Transformation: Clean, normalize, and structure the raw data
-3. Loading: Make both raw and transformed data available to the SkypeArchive UI
-
-This design allows for complete auditability (raw data) while providing users with
-a clean and efficient interface (transformed data).
+This module implements an Extract-Transform-Load (ETL) pipeline for processing
+Skype export data. It provides a unified interface for extracting data from
+Skype export files, transforming it into a structured format, and loading it
+into a PostgreSQL database.
 """
 
 import os
@@ -40,6 +33,18 @@ from ..parser.parser_module import (
     pretty_quotes
 )
 from ..utils.file_utils import safe_filename
+from ..utils.validation import (
+    ValidationError,
+    validate_file_exists,
+    validate_directory,
+    validate_file_type,
+    validate_json_file,
+    validate_tar_file,
+    validate_file_object,
+    validate_skype_data,
+    validate_user_display_name,
+    validate_db_config
+)
 
 # Set up logging
 logging.basicConfig(
@@ -89,6 +94,30 @@ CREATE TABLE IF NOT EXISTS skype_messages (
 );
 """
 
+def timestamp_parser(timestamp: str) -> Tuple[str, str, Optional[datetime.datetime]]:
+    """
+    Parse a timestamp string into date, time, and datetime components.
+
+    Args:
+        timestamp (str): Timestamp string in ISO format
+
+    Returns:
+        tuple: (date_str, time_str, datetime_obj)
+    """
+    try:
+        # Replace 'Z' with '+00:00' for ISO format compatibility
+        iso_timestamp = timestamp.replace('Z', '+00:00')
+        dt = datetime.datetime.fromisoformat(iso_timestamp)
+
+        # Format date and time strings
+        date_str = dt.strftime('%Y-%m-%d')
+        time_str = dt.strftime('%H:%M:%S')
+
+        return date_str, time_str, dt
+    except (ValueError, AttributeError) as e:
+        logger.warning(f"Error parsing timestamp {timestamp}: {e}")
+        return timestamp, "", None
+
 class SkypeETLPipeline:
     """
     Implements the ETL pipeline for Skype export data.
@@ -106,8 +135,21 @@ class SkypeETLPipeline:
         self.output_dir = output_dir
         self.conn = None
 
+        # Validate database configuration if provided
+        if db_config:
+            try:
+                validate_db_config(db_config)
+            except ValidationError as e:
+                logger.warning(f"Invalid database configuration: {e}")
+                self.db_config = None
+
+        # Validate and create output directory if provided
         if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
+            try:
+                validate_directory(output_dir, create_if_missing=True)
+            except ValidationError as e:
+                logger.warning(f"Invalid output directory: {e}")
+                self.output_dir = None
 
     def connect_db(self) -> None:
         """
@@ -150,19 +192,52 @@ class SkypeETLPipeline:
 
         Returns:
             dict: The raw data extracted from the file
+
+        Raises:
+            ValidationError: If the input is invalid
+            ValueError: If neither file_path nor file_obj is provided
         """
         logger.info("Starting extraction phase")
+
+        if not file_path and not file_obj:
+            error_msg = "Either file_path or file_obj must be provided"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         try:
             # Determine if we're dealing with a file path or file object
             if file_path:
+                # Validate file exists and is readable
+                try:
+                    validate_file_exists(file_path)
+                except ValidationError as e:
+                    logger.error(f"File validation error: {e}")
+                    raise
+
+                # Process based on file type
                 if file_path.endswith('.tar'):
-                    raw_data = read_tarfile(file_path, auto_select=True)
-                    logger.info(f"Extracted data from tar file: {file_path}")
+                    try:
+                        validate_tar_file(file_path)
+                        raw_data = read_tarfile(file_path, auto_select=True)
+                        logger.info(f"Extracted data from tar file: {file_path}")
+                    except ValidationError as e:
+                        logger.error(f"TAR file validation error: {e}")
+                        raise
                 else:
-                    raw_data = read_file(file_path)
-                    logger.info(f"Read data from JSON file: {file_path}")
+                    try:
+                        raw_data = validate_json_file(file_path)
+                        logger.info(f"Read data from JSON file: {file_path}")
+                    except ValidationError as e:
+                        logger.error(f"JSON file validation error: {e}")
+                        raise
             elif file_obj:
+                # Validate file object
+                try:
+                    validate_file_object(file_obj, allowed_extensions=['.json', '.tar'])
+                except ValidationError as e:
+                    logger.error(f"File object validation error: {e}")
+                    raise
+
                 # Try to determine file type from name if available
                 if hasattr(file_obj, 'name') and file_obj.name.endswith('.tar'):
                     raw_data = read_tarfile_object(file_obj, auto_select=True)
@@ -171,17 +246,13 @@ class SkypeETLPipeline:
                     # Assume JSON if not a tar file
                     raw_data = read_file_object(file_obj)
                     logger.info("Read data from uploaded JSON file")
-            else:
-                raise ValueError("Either file_path or file_obj must be provided")
 
-            # Basic validation of the extracted data
-            if not isinstance(raw_data, dict):
-                raise ValueError("Extracted data is not a valid JSON object")
-
-            required_fields = ['userId', 'exportDate', 'conversations']
-            for field in required_fields:
-                if field not in raw_data:
-                    raise ValueError(f"Required field '{field}' missing from extracted data")
+            # Validate the extracted data structure
+            try:
+                validate_skype_data(raw_data)
+            except ValidationError as e:
+                logger.error(f"Skype data validation error: {e}")
+                raise
 
             # Store raw data if output directory is specified
             if self.output_dir and file_path:
@@ -206,18 +277,34 @@ class SkypeETLPipeline:
 
         Returns:
             dict: The transformed data
+
+        Raises:
+            ValidationError: If the input data is invalid
         """
         logger.info("Starting transformation phase")
 
         try:
+            # Validate raw data
+            try:
+                validate_skype_data(raw_data)
+            except ValidationError as e:
+                logger.error(f"Raw data validation error: {e}")
+                raise
+
             # Extract key metadata
             user_id = raw_data['userId']
             export_date_time = raw_data['exportDate']
             export_date_str, export_time_str, export_datetime = timestamp_parser(export_date_time)
             conversations = raw_data['conversations']
 
-            # If user_display_name is not provided, use a default
-            if not user_display_name:
+            # Validate and sanitize user display name
+            if user_display_name:
+                try:
+                    user_display_name = validate_user_display_name(user_display_name)
+                except ValidationError as e:
+                    logger.warning(f"User display name validation error: {e}. Using user ID instead.")
+                    user_display_name = user_id
+            else:
                 user_display_name = user_id
 
             # Initialize the transformed data structure
@@ -305,34 +392,26 @@ class SkypeETLPipeline:
                                 msg_data['rawContent'] = msg_content_raw
 
                             # Check for edited messages
-                            if i > 0 and msg_content_raw == messages[i-1].get('content', '') and re.search(r'<e_m.*>', msg_content_raw):
-                                edited_msg = f"--This user edited the following message at {msg_time_str}, you are viewing the edited version--"
+                            if 'skypeeditedid' in message:
                                 msg_data['isEdited'] = True
-                                msg_data['editNote'] = edited_msg
-
-                            # Clean content
-                            cleaned_content = content_parser(msg_content_raw)
-                            msg_data['cleanedContent'] = cleaned_content
 
                             # Add message to conversation
                             transformed_data['conversations'][conv_id]['messages'].append(msg_data)
 
                         except Exception as e:
-                            logger.warning(f"Error processing message {i} in conversation {conv_id}: {e}")
+                            logger.warning(f"Error processing message in conversation {conv_id}: {e}")
                             continue
 
-                    # Sort messages by datetime if we have datetime objects
-                    if datetime_objects:
-                        # Sort indices by datetime
-                        sorted_indices = [idx for idx, dt in sorted(datetime_objects, key=lambda x: x[1])]
-
-                        # Reorder messages
-                        messages_list = transformed_data['conversations'][conv_id]['messages']
-                        sorted_messages = [messages_list[idx] for idx in sorted_indices]
-                        transformed_data['conversations'][conv_id]['messages'] = sorted_messages
-
-                    # Add first and last message timestamps
+                    # Sort messages by timestamp if datetime objects are available
                     messages_list = transformed_data['conversations'][conv_id]['messages']
+                    if datetime_objects:
+                        # Sort by datetime
+                        datetime_objects.sort(key=lambda x: x[1])
+                        sorted_indices = [x[0] for x in datetime_objects]
+                        messages_list = [messages_list[i] for i in sorted_indices]
+                        transformed_data['conversations'][conv_id]['messages'] = messages_list
+
+                    # Store first and last message timestamps
                     if messages_list:
                         first_msg = messages_list[0]
                         last_msg = messages_list[-1]
@@ -359,122 +438,114 @@ class SkypeETLPipeline:
 
     def load(self, raw_data: Dict[str, Any], transformed_data: Dict[str, Any], file_source: Optional[str] = None) -> int:
         """
-        Load both raw and transformed data into the database.
+        Load the data into the database.
 
         Args:
             raw_data (dict): The raw data extracted from the Skype export
             transformed_data (dict): The transformed data
-            file_source (str, optional): The source of the file (e.g., file path or upload info)
+            file_source (str, optional): The source of the data (e.g., file path)
 
         Returns:
-            int: The export_id of the inserted raw data
+            int: The export ID in the database
+
+        Raises:
+            ValueError: If the database connection is not available
         """
         logger.info("Starting loading phase")
 
         if not self.conn:
-            logger.warning("No database connection. Loading phase skipped.")
-            return None
+            error_msg = "Database connection not available"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         try:
-            # Begin transaction
-            with self.conn:
-                with self.conn.cursor() as cur:
-                    # Insert raw data
-                    metadata = transformed_data['metadata']
-                    user_id = metadata['userId']
-                    export_date = metadata['exportDate']
+            # Extract metadata
+            metadata = transformed_data['metadata']
+            user_id = metadata['userId']
+            export_date = metadata['exportDate']
 
-                    # Check if this export already exists
+            # Parse export date
+            _, _, export_datetime = timestamp_parser(export_date)
+
+            # Insert raw export data
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO skype_raw_exports (user_id, export_date, raw_data, file_source)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING export_id
+                    """,
+                    (user_id, export_datetime, json.dumps(raw_data), file_source)
+                )
+                export_id = cur.fetchone()[0]
+                self.conn.commit()
+                logger.info(f"Inserted raw export data with ID {export_id}")
+
+                # Insert conversations
+                for conv_id, conv_data in transformed_data['conversations'].items():
+                    display_name = conv_data['displayName']
+                    message_count = conv_data['messageCount']
+
+                    # Parse timestamps
+                    first_msg_time = None
+                    last_msg_time = None
+
+                    if 'firstMessageTime' in conv_data:
+                        _, _, first_msg_time = timestamp_parser(conv_data['firstMessageTime'])
+
+                    if 'lastMessageTime' in conv_data:
+                        _, _, last_msg_time = timestamp_parser(conv_data['lastMessageTime'])
+
+                    # Insert conversation
                     cur.execute(
-                        "SELECT export_id FROM skype_raw_exports WHERE user_id = %s AND export_date = %s",
-                        (user_id, export_date)
+                        """
+                        INSERT INTO skype_conversations (
+                            conversation_id, display_name, export_id,
+                            first_message_time, last_message_time, message_count
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (conversation_id)
+                        DO UPDATE SET
+                            display_name = EXCLUDED.display_name,
+                            export_id = EXCLUDED.export_id,
+                            first_message_time = EXCLUDED.first_message_time,
+                            last_message_time = EXCLUDED.last_message_time,
+                            message_count = EXCLUDED.message_count,
+                            updated_at = CURRENT_TIMESTAMP
+                        """,
+                        (
+                            conv_id, display_name, export_id,
+                            first_msg_time, last_msg_time, message_count
+                        )
                     )
-                    existing = cur.fetchone()
 
-                    if existing:
-                        export_id = existing[0]
-                        logger.info(f"Export already exists with ID {export_id}. Updating...")
+                    # Insert messages
+                    for msg in conv_data['messages']:
+                        # Parse timestamp
+                        _, _, msg_time = timestamp_parser(msg['timestamp'])
 
-                        # Update existing raw data
-                        cur.execute(
-                            "UPDATE skype_raw_exports SET raw_data = %s, file_source = %s WHERE export_id = %s",
-                            (Json(raw_data), file_source, export_id)
-                        )
-                    else:
-                        # Insert new raw data
-                        cur.execute(
-                            "INSERT INTO skype_raw_exports (user_id, export_date, raw_data, file_source) VALUES (%s, %s, %s, %s) RETURNING export_id",
-                            (user_id, export_date, Json(raw_data), file_source)
-                        )
-                        export_id = cur.fetchone()[0]
-                        logger.info(f"Inserted raw data with export_id {export_id}")
-
-                    # Process conversations and messages
-                    for conv_id, conversation in transformed_data['conversations'].items():
-                        display_name = conversation['displayName']
-                        messages = conversation.get('messages', [])
-
-                        # Get first and last message timestamps
-                        first_message_time = conversation.get('firstMessageTime')
-                        last_message_time = conversation.get('lastMessageTime')
-
-                        # Insert or update conversation
+                        # Insert message
                         cur.execute(
                             """
-                            INSERT INTO skype_conversations
-                            (conversation_id, display_name, export_id, first_message_time, last_message_time, message_count)
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                            ON CONFLICT (conversation_id)
-                            DO UPDATE SET
-                                display_name = EXCLUDED.display_name,
-                                export_id = EXCLUDED.export_id,
-                                first_message_time = EXCLUDED.first_message_time,
-                                last_message_time = EXCLUDED.last_message_time,
-                                message_count = EXCLUDED.message_count,
-                                updated_at = CURRENT_TIMESTAMP
+                            INSERT INTO skype_messages
+                            (conversation_id, timestamp, sender_id, sender_name, message_type, raw_content, is_edited)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
                             """,
                             (
-                                conv_id,
-                                display_name,
-                                export_id,
-                                first_message_time,
-                                last_message_time,
-                                len(messages)
+                                conv_id, msg_time, msg['fromId'], msg['fromName'],
+                                msg['type'], msg['rawContent'], msg['isEdited']
                             )
                         )
 
-                        # Delete existing messages for this conversation
-                        cur.execute(
-                            "DELETE FROM skype_messages WHERE conversation_id = %s",
-                            (conv_id,)
-                        )
-
-                        # Insert messages
-                        for message in messages:
-                            cur.execute(
-                                """
-                                INSERT INTO skype_messages
-                                (conversation_id, timestamp, sender_id, sender_name, message_type, raw_content, cleaned_content, is_edited)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                                """,
-                                (
-                                    conv_id,
-                                    message['timestamp'],
-                                    message['fromId'],
-                                    message['fromName'],
-                                    message['type'],
-                                    message['rawContent'],
-                                    message['cleanedContent'],
-                                    message['isEdited']
-                                )
-                            )
-
-                    logger.info(f"Loaded {len(transformed_data['conversations'])} conversations and their messages")
+                self.conn.commit()
+                logger.info(f"Inserted {len(transformed_data['conversations'])} conversations and their messages")
 
             return export_id
 
         except Exception as e:
             logger.error(f"Error during loading phase: {e}")
+            if self.conn:
+                self.conn.rollback()
             raise
 
     def run_pipeline(self, file_path: str = None, file_obj: BinaryIO = None,
@@ -489,8 +560,16 @@ class SkypeETLPipeline:
 
         Returns:
             dict: A dictionary containing the results of each phase
+
+        Raises:
+            ValueError: If neither file_path nor file_obj is provided
         """
         logger.info("Starting ETL pipeline")
+
+        if not file_path and not file_obj:
+            error_msg = "Either file_path or file_obj must be provided"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         results = {
             'extraction': None,
