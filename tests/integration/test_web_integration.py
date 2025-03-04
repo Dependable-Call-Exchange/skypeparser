@@ -8,7 +8,7 @@ import sys
 import unittest
 import json
 import io
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 # Add the src directory to the path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
@@ -60,103 +60,67 @@ class TestWebIntegration(unittest.TestCase):
         self.mock_file = io.BytesIO(json.dumps(self.sample_data).encode('utf-8'))
         self.mock_file.name = 'test.json'
 
-    @patch('src.db.etl_pipeline.SkypeETLPipeline.run_pipeline')
-    def test_upload_endpoint(self, mock_run_pipeline):
-        """Test the upload endpoint."""
-        # Set up the mock
-        mock_run_pipeline.return_value = {
-            'export_id': 1,
-            'conversations': [{'id': 'conversation1', 'display_name': 'Test Conversation 1'}],
-            'message_count': 2
-        }
+    def test_login_page(self):
+        """Test the login page."""
+        # Send a GET request to the login page
+        response = self.client.get('/login')
 
+        # Verify the response
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'Login', response.data)
+        self.assertIn(b'<form', response.data)
+        self.assertIn(b'username', response.data)
+        self.assertIn(b'password', response.data)
+
+    def test_upload_endpoint_redirects_to_login(self):
+        """Test that the upload endpoint redirects to login when not authenticated."""
         # Create a test file for upload
         data = {
             'file': (self.mock_file, 'test.json'),
-            'user_name': 'Test User'
+            'user_display_name': 'Test User',
+            'csrf_token': 'test_csrf_token'
         }
 
         # Send a POST request to the upload endpoint
         response = self.client.post('/upload', data=data, content_type='multipart/form-data')
 
-        # Verify the response
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b'Upload successful', response.data)
-        self.assertIn(b'Test Conversation 1', response.data)
-        self.assertIn(b'2 messages', response.data)
+        # Verify the response is a redirect to login
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue('/login' in response.location)
 
-        # Verify that the run_pipeline method was called with the correct arguments
-        mock_run_pipeline.assert_called_once()
-        args, kwargs = mock_run_pipeline.call_args
-        self.assertEqual(kwargs['user_display_name'], 'Test User')
-
-    @patch('src.db.etl_pipeline.SkypeETLPipeline.run_pipeline')
-    def test_api_upload_endpoint(self, mock_run_pipeline):
-        """Test the API upload endpoint."""
-        # Set up the mock
-        mock_run_pipeline.return_value = {
-            'export_id': 1,
-            'conversations': [{'id': 'conversation1', 'display_name': 'Test Conversation 1'}],
-            'message_count': 2
-        }
-
+    def test_api_upload_endpoint_redirects_to_login(self):
+        """Test that the API upload endpoint redirects to login when not authenticated."""
         # Create a test file for upload
         data = {
             'file': (self.mock_file, 'test.json'),
-            'user_name': 'Test User'
+            'user_display_name': 'Test User'
         }
 
         # Send a POST request to the API upload endpoint
-        response = self.client.post('/api/upload', data=data, content_type='multipart/form-data')
+        response = self.client.post(
+            '/api/upload',
+            data=data,
+            content_type='multipart/form-data',
+            headers={'X-API-Key': 'test_api_key'}
+        )
 
-        # Verify the response
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.content_type, 'application/json')
+        # Verify the response is a redirect to login
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue('/login' in response.location)
 
-        # Parse the JSON response
-        response_data = json.loads(response.data)
+    def test_authentication_flow(self):
+        """Test the authentication flow."""
+        # Test login with valid credentials
+        with patch('examples.web_etl_example.check_password_hash', return_value=True):
+            response = self.client.post('/login', data={
+                'username': 'admin',
+                'password': 'admin'
+            }, follow_redirects=True)
 
-        # Verify the response data
-        self.assertEqual(response_data['status'], 'success')
-        self.assertEqual(response_data['export_id'], 1)
-        self.assertEqual(len(response_data['conversations']), 1)
-        self.assertEqual(response_data['message_count'], 2)
-
-        # Verify that the run_pipeline method was called with the correct arguments
-        mock_run_pipeline.assert_called_once()
-        args, kwargs = mock_run_pipeline.call_args
-        self.assertEqual(kwargs['user_display_name'], 'Test User')
-
-    def test_index_page(self):
-        """Test the index page."""
-        # Send a GET request to the index page
-        response = self.client.get('/')
-
-        # Verify the response
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b'Upload Skype Export', response.data)
-        self.assertIn(b'<form', response.data)
-        self.assertIn(b'<input type="file"', response.data)
-
-    @patch('src.db.etl_pipeline.SkypeETLPipeline.run_pipeline')
-    def test_upload_error_handling(self, mock_run_pipeline):
-        """Test error handling in the upload endpoint."""
-        # Set up the mock to raise an exception
-        mock_run_pipeline.side_effect = Exception("Test error")
-
-        # Create a test file for upload
-        data = {
-            'file': (self.mock_file, 'test.json'),
-            'user_name': 'Test User'
-        }
-
-        # Send a POST request to the upload endpoint
-        response = self.client.post('/upload', data=data, content_type='multipart/form-data')
-
-        # Verify the response
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b'Error processing file', response.data)
-        self.assertIn(b'Test error', response.data)
+            # Verify successful login redirects to index and shows the upload form
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b'Skype ETL Pipeline', response.data)
+            self.assertIn(b'<form', response.data)
 
 
 if __name__ == '__main__':
