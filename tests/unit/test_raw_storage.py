@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import patch, mock_open, MagicMock
 
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.db.raw_storage.models import (
     User,

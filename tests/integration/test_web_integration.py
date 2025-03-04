@@ -11,10 +11,10 @@ import io
 from unittest.mock import patch
 
 # Add the src directory to the path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 # Import the Flask app from the example
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'examples')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..', 'examples')))
 from web_etl_example import app
 
 

@@ -7,16 +7,18 @@ This module contains tests for the functionality in src.utils.tar_extractor.
 
 import os
 import sys
+import json
 import unittest
+import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, mock_open
 
 # Add the parent directory to the path so we can import from src
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 # Import the functions from tar_extractor
 from src.utils.tar_extractor import main, parse_args
-from tests.test_helpers import TestBase, create_test_tar_file, mock_sys_exit
+from tests.fixtures import TestBase, create_test_tar_file, mock_sys_exit
 
 
 class TestTarExtractor(TestBase):

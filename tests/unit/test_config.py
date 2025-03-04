@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 # Add the parent directory to the path so we can import from src
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.utils.config import (
     load_config,

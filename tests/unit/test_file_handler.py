@@ -11,7 +11,7 @@ from pathlib import Path
 
 # Add the parent directory to the path so we can import from src
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.utils.file_handler import (
     read_file,
@@ -22,7 +22,7 @@ from src.utils.file_handler import (
     list_tar_contents
 )
 from src.utils.validation import ValidationError
-from tests.test_helpers import TestBase, patch_validation, create_test_file, create_test_json_file, create_test_tar_file
+from tests.fixtures import TestBase, patch_validation, create_test_file, create_test_json_file, create_test_tar_file
 
 
 class TestFileHandler(TestBase):
