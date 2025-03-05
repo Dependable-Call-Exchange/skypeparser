@@ -17,6 +17,7 @@ import multiprocessing
 import gc
 import sys
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple, Any, BinaryIO, Callable
 
@@ -49,6 +50,7 @@ from ..utils.validation import (
 )
 from .raw_storage.storage import SkypeDataStorage
 from .clean_storage.storage import SkypeCleanDataStorage
+from .progress_tracker import create_tracker, get_tracker, remove_tracker
 
 # Set up logging
 logging.basicConfig(
@@ -1597,24 +1599,47 @@ class SkypeETLPipeline:
         # Initialize results dictionary
         results = self._initialize_results()
 
+        # Create a unique task ID for tracking progress
+        task_id = str(uuid.uuid4())
+
+        # Create a progress tracker with 100 total steps
+        tracker = create_tracker(task_id, 100)
+        tracker.update(status="starting", message="Initializing ETL pipeline...")
+
         try:
             # Setup database connection if needed
             self._setup_database_connection()
+            tracker.update(increment=5, message="Database connection established")
 
             # Run extraction phase
+            tracker.update(status="extracting", message="Extracting data from Skype export...")
             raw_data, results = self._run_extraction_phase(file_path, file_obj, results)
+            tracker.update(increment=30, message=f"Extracted data with {len(raw_data.get('conversations', {}))} conversations")
 
             # Run transformation phase
+            tracker.update(status="transforming", message="Transforming data...")
             transformed_data, results = self._run_transformation_phase(raw_data, user_display_name, results)
+            tracker.update(increment=40, message=f"Transformed {results.get('transformation', {}).get('conversationCount', 0)} conversations")
 
             # Run loading phase if database connection is available
-            results = self._run_loading_phase(raw_data, transformed_data, file_path, results)
+            if self.conn:
+                tracker.update(status="loading", message="Loading data into database...")
+                results = self._run_loading_phase(raw_data, transformed_data, file_path, results)
+                tracker.update(increment=20, message="Data loaded into database")
+            else:
+                tracker.update(increment=20, message="Skipping database loading (no connection)")
 
             logger.info("ETL pipeline completed successfully")
+            tracker.complete(message="ETL pipeline completed successfully")
+
+            # Add task_id to results
+            results['task_id'] = task_id
+
             return results
 
         except Exception as e:
             logger.error(f"Error in ETL pipeline: {e}")
+            tracker.fail(message=f"Error in ETL pipeline: {str(e)}")
             raise
 
         finally:

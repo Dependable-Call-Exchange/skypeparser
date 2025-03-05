@@ -98,6 +98,27 @@ class MockDatabase:
         self.conn = MagicMock()
         self.cursor = MagicMock()
         self.conn.cursor.return_value = self.cursor
+
+        # Set up connection encoding for psycopg2.extras.execute_values
+        self.cursor.__enter__.return_value = self.cursor
+        self.cursor.__enter__.return_value.connection.encoding = 'UTF8'
+
+        # Set up mogrify to return bytes instead of a MagicMock
+        def mogrify_side_effect(query, params=None):
+            # Convert the query to bytes if it's not already
+            if isinstance(query, str):
+                query_bytes = query.encode('utf-8')
+            elif isinstance(query, bytes):
+                query_bytes = query
+            else:
+                query_bytes = str(query).encode('utf-8')
+
+            # Return bytes as expected by execute_values
+            return query_bytes
+
+        self.cursor.mogrify.side_effect = mogrify_side_effect
+        self.cursor.__enter__.return_value.mogrify.side_effect = mogrify_side_effect
+
         self.executed_queries = []
 
         # Set up cursor to record executed queries
@@ -110,7 +131,10 @@ class MockDatabase:
         self.cursor.execute.side_effect = execute_side_effect
 
         # Make sure fetchone returns something
-        self.cursor.fetchone.return_value = (1,)  # Return a tuple with an ID
+        fetchone_result = MagicMock()
+        fetchone_result.__getitem__.return_value = 1
+        self.cursor.fetchone.return_value = fetchone_result
+        self.cursor.__enter__.return_value.fetchone.return_value = fetchone_result
 
     def get_executed_queries(self) -> list:
         """

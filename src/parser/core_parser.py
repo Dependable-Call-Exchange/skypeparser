@@ -32,7 +32,8 @@ from ..utils.dependencies import (
 # Import content extraction module
 from .content_extractor import (
     extract_content_data,
-    format_content_with_markup
+    format_content_with_markup,
+    ContentExtractor
 )
 
 # Import configuration utility
@@ -300,7 +301,8 @@ def type_parser(msg_type: str) -> str:
     description = get_message_type_description(config, msg_type)
 
     # Log unknown message types to help identify gaps in our configuration
-    if description == config.get('default_message_format', '***Sent a {message_type}***').format(message_type=msg_type):
+    default_format = config.get('default_message_format', '***Sent a {message_type}***')
+    if description == default_format.format(message_type=msg_type):
         logger.info(f"Encountered unconfigured message type: {msg_type}")
 
     return description
@@ -676,8 +678,16 @@ def _process_single_message(msg: Dict[str, Any], id_to_display_name: Dict[str, s
         'is_edited': 'skypeeditedid' in msg
     }
 
-    # Handle message type and content
-    msg_data.update(_process_message_content(msg_type, msg_content_raw, full_message=msg))
+    # Process message content and extract structured data
+    processed_content, structured_data = _process_message_content(msg, msg_type)
+
+    # Update message data with processed content and structured data
+    msg_data['content_raw'] = msg_content_raw
+    msg_data['content'] = processed_content
+
+    # Add structured data if available
+    if structured_data:
+        msg_data['structured_content'] = structured_data
 
     return msg_data
 
@@ -698,63 +708,38 @@ def _parse_message_timestamp(timestamp: str) -> Tuple[str, str, Optional[datetim
         return "Unknown date", "Unknown time", None
 
 
-def _process_message_content(msg_type: str, msg_content_raw: str, full_message: Dict[str, Any] = None) -> Dict[str, str]:
+def _process_message_content(message_data, message_type):
     """
     Process message content based on message type.
 
     Args:
-        msg_type (str): Message type
-        msg_content_raw (str): Raw message content
-        full_message (Dict[str, Any], optional): The full message object for additional context
+        message_data (dict): Message data dictionary
+        message_type (str): Type of message
 
     Returns:
-        dict: Processed content data
+        tuple: (processed_content, structured_data)
     """
-    result = {
-        'content_raw': msg_content_raw,
-        'content': msg_content_raw
-    }
+    content = message_data.get('content', '')
+    structured_data = {}
 
-    # Handle message type
-    if msg_type != 'RichText':
-        try:
-            processed_content = type_parser(msg_type)
-            result['content'] = processed_content
-        except InvalidInputError:
-            result['content'] = f"***Unknown message type: {msg_type}***"
+    # Skip processing for empty content
+    if not content:
+        return content, structured_data
 
-    else:
-        # Parse content for RichText messages
-        try:
-            # Extract structured content data
-            structured_content = {}
+    # Use the ContentExtractor to extract structured data
+    extractor = ContentExtractor()
 
-            # Process the content with enhanced parser
-            cleaned_content = content_parser(msg_content_raw)
-            result['content'] = cleaned_content
+    # For RichText messages, use the content extractor to get structured data
+    if message_type == 'RichText':
+        structured_data = extractor.extract_all(content)
 
-            # Extract mentions using regex
-            mentions = re.findall(r'@(\w+)', cleaned_content)
-            if mentions:
-                structured_content['mentions'] = mentions
-
-            # Extract URLs using regex
-            urls = re.findall(r'https?://[^\s)]+', cleaned_content)
-            if urls:
-                structured_content['urls'] = urls
-
-            # Store structured content data if available
-            if structured_content:
-                result['structured_content'] = structured_content
-
-        except ContentParsingError:
-            # Keep the raw content if parsing fails
-            pass
-
-    # Extract structured data for specific message types if full message is provided
-    if full_message and get_handler_for_message_type(msg_type):
-        structured_data = extract_structured_data(full_message)
+        # Format the content with markup if needed
         if structured_data:
-            result.update(structured_data)
+            content = extractor.format_content_with_markup(content, structured_data)
 
-    return result
+    # For other message types, still try to extract structured data
+    # but don't modify the content
+    else:
+        structured_data = extractor.extract_all(content)
+
+    return content, structured_data

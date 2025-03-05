@@ -14,6 +14,7 @@ import logging
 from typing import Dict, List, Optional, Tuple, Any, BinaryIO, Callable
 
 from .etl_pipeline import SkypeETLPipeline, timestamp_parser
+from ..utils.file_utils import safe_filename
 
 # Set up logging
 logging.basicConfig(
@@ -370,16 +371,145 @@ class TestableETLPipeline(SkypeETLPipeline):
 
     def _type_parser(self, msg_type: str) -> str:
         """
-        Map message types to their human-readable descriptions.
-        Override to use injected function.
+        Parse message type into a human-readable format.
+        Override to use injected function if available.
 
         Args:
-            msg_type (str): Skype message type
+            msg_type (str): The message type to parse
 
         Returns:
-            str: Human-readable description
+            str: Human-readable message type description
         """
-        return self._get_message_type_description(self.config, msg_type)
+        if self._get_message_type_description:
+            return self._get_message_type_description(msg_type)
+        return super()._type_parser(msg_type)
+
+    def _get_conversation_timespan(self, messages: List[Dict[str, Any]]) -> Dict[str, str]:
+        """
+        Get the timespan of a conversation based on its messages.
+
+        Args:
+            messages (list): List of message data
+
+        Returns:
+            dict: Dictionary with firstMessageTime and lastMessageTime
+        """
+        if not messages:
+            return {
+                'firstMessageTime': '',
+                'lastMessageTime': ''
+            }
+
+        # Sort messages by timestamp to ensure correct order
+        sorted_messages = sorted(messages, key=lambda x: x.get('timestamp', ''))
+
+        # Get first and last message timestamps
+        first_message_time = sorted_messages[0].get('timestamp', '')
+        last_message_time = sorted_messages[-1].get('timestamp', '')
+
+        return {
+            'firstMessageTime': first_message_time,
+            'lastMessageTime': last_message_time
+        }
+
+    def _extract_conversation_metadata(self, conversation: Dict[str, Any]) -> Tuple[str, str]:
+        """
+        Extract and process conversation metadata.
+        Override to handle conversations with None display name differently.
+
+        Args:
+            conversation (dict): The conversation data
+
+        Returns:
+            tuple: (conv_id, display_name)
+
+        Raises:
+            ValueError: If display_name is None
+        """
+        conv_id = conversation['id']
+        display_name = conversation.get('displayName')
+
+        # Skip conversations with None display name
+        if display_name is None:
+            raise ValueError(f"Conversation {conv_id} has None display name and will be skipped")
+
+        # Sanitize display name (for non-None values)
+        safe_display_name = safe_filename(display_name)
+        return conv_id, safe_display_name
+
+    def _process_single_conversation(self, conversation: Dict[str, Any],
+                                    transformed_data: Dict[str, Any],
+                                    id_to_display_name: Dict[str, str]) -> None:
+        """
+        Process a single conversation.
+        Override to handle conversations with None display name.
+
+        Args:
+            conversation (dict): The conversation data
+            transformed_data (dict): The transformed data structure to populate
+            id_to_display_name (dict): Mapping of user IDs to display names
+        """
+        try:
+            # Extract and process conversation metadata
+            # This may raise ValueError for conversations with None display name
+            conv_id, display_name = self._extract_conversation_metadata(conversation)
+
+            # Update ID to display name mapping
+            id_to_display_name[conv_id] = display_name
+
+            # Initialize conversation data structure
+            self._initialize_conversation_structure(conv_id, display_name, transformed_data)
+
+            # Process messages
+            messages = conversation.get('MessageList', [])
+            self._update_message_count(conv_id, messages, transformed_data)
+
+            # Process and sort messages
+            self._process_messages(conv_id, messages, transformed_data, id_to_display_name)
+
+        except ValueError as e:
+            # Skip conversations with None display name
+            logger.info(f"Skipping conversation: {e}")
+            return
+
+    def _process_conversations(self, raw_data: Dict[str, Any], transformed_data: Dict[str, Any]) -> None:
+        """
+        Process all conversations from the raw data.
+        Override to handle conversations with None display name.
+
+        Args:
+            raw_data (dict): The raw data extracted from the Skype export
+            transformed_data (dict): The transformed data structure to populate
+        """
+        logger.info("Processing conversations")
+
+        # Create ID to display name mapping
+        id_to_display_name = {}
+
+        # Get conversations from raw data
+        conversations = raw_data.get('conversations', [])
+        total_conversations = len(conversations)
+        total_messages = sum(len(conv.get('MessageList', [])) for conv in conversations)
+
+        logger.info(f"Found {total_conversations} conversations with {total_messages} messages")
+
+        # Process each conversation
+        processed_count = 0
+        skipped_count = 0
+
+        for conversation in conversations:
+            try:
+                self._process_single_conversation(conversation, transformed_data, id_to_display_name)
+                processed_count += 1
+            except ValueError as e:
+                # This will catch conversations with None display name
+                logger.info(f"Skipping conversation: {e}")
+                skipped_count += 1
+
+        logger.info(f"Processed {processed_count} conversations, skipped {skipped_count} conversations")
+
+        # Update the ID to display name mapping in the transformed data
+        transformed_data['idToDisplayName'] = id_to_display_name
 
 
 if __name__ == "__main__":

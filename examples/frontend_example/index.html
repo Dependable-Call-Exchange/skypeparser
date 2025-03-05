@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skype Parser - Upload</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        h1 {
+            color: #0078d7;
+            border-bottom: 2px solid #0078d7;
+            padding-bottom: 10px;
+        }
+
+        .container {
+            background-color: #f9f9f9;
+            border-radius: 5px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+
+        input[type="text"],
+        input[type="file"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+
+        button {
+            background-color: #0078d7;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        button:hover {
+            background-color: #005a9e;
+        }
+
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+
+        .progress-container {
+            margin-top: 20px;
+            display: none;
+        }
+
+        .progress-bar {
+            height: 20px;
+            background-color: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background-color: #0078d7;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .status {
+            margin-top: 10px;
+            font-style: italic;
+        }
+
+        .results {
+            margin-top: 20px;
+            display: none;
+            background-color: #f0f7ff;
+            border-left: 4px solid #0078d7;
+            padding: 15px;
+        }
+
+        .error {
+            color: #d83b01;
+            background-color: #fde7e9;
+            border-left: 4px solid #d83b01;
+            padding: 15px;
+            margin-top: 20px;
+            display: none;
+        }
+
+        pre {
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>Skype Parser - Upload</h1>
+
+    <div class="container">
+        <div class="form-group">
+            <label for="apiKey">API Key:</label>
+            <input type="text" id="apiKey" placeholder="Enter your API key">
+        </div>
+
+        <div class="form-group">
+            <label for="userDisplayName">Your Display Name (optional):</label>
+            <input type="text" id="userDisplayName" placeholder="Enter your Skype display name">
+        </div>
+
+        <div class="form-group">
+            <label for="fileUpload">Skype Export File (.tar or .json):</label>
+            <input type="file" id="fileUpload" accept=".tar,.json">
+        </div>
+
+        <button id="uploadButton">Upload and Process</button>
+
+        <div class="progress-container" id="progressContainer">
+            <h3>Processing...</h3>
+            <div class="progress-bar">
+                <div class="progress-bar-fill" id="progressBarFill"></div>
+            </div>
+            <div class="status" id="statusText">Uploading file...</div>
+        </div>
+
+        <div class="error" id="errorContainer">
+            <h3>Error</h3>
+            <div id="errorText"></div>
+        </div>
+
+        <div class="results" id="resultsContainer">
+            <h3>Results</h3>
+            <pre id="resultsText"></pre>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const uploadButton = document.getElementById('uploadButton');
+            const fileUpload = document.getElementById('fileUpload');
+            const apiKey = document.getElementById('apiKey');
+            const userDisplayName = document.getElementById('userDisplayName');
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBarFill = document.getElementById('progressBarFill');
+            const statusText = document.getElementById('statusText');
+            const resultsContainer = document.getElementById('resultsContainer');
+            const resultsText = document.getElementById('resultsText');
+            const errorContainer = document.getElementById('errorContainer');
+            const errorText = document.getElementById('errorText');
+
+            uploadButton.addEventListener('click', function() {
+                // Validate inputs
+                if (!fileUpload.files.length) {
+                    showError('Please select a file to upload.');
+                    return;
+                }
+
+                if (!apiKey.value) {
+                    showError('Please enter your API key.');
+                    return;
+                }
+
+                const file = fileUpload.files[0];
+                const formData = new FormData();
+                formData.append('file', file);
+
+                if (userDisplayName.value) {
+                    formData.append('user_display_name', userDisplayName.value);
+                }
+
+                // Reset UI
+                hideError();
+                hideResults();
+                showProgress();
+
+                // Update progress bar to show upload starting
+                updateProgress(10, 'Uploading file...');
+
+                // Send the request
+                fetch('/api/upload', {
+                    method: 'POST',
+                    headers: {
+                        'X-API-Key': apiKey.value
+                    },
+                    body: formData
+                })
+                .then(response => {
+                    // Update progress
+                    updateProgress(90, 'Processing complete, getting results...');
+
+                    if (!response.ok) {
+                        return response.json().then(data => {
+                            throw new Error(data.error || 'Upload failed');
+                        });
+                    }
+
+                    return response.json();
+                })
+                .then(data => {
+                    // Update progress
+                    updateProgress(100, 'Complete!');
+
+                    // Show results
+                    showResults(data);
+
+                    // Hide progress after a delay
+                    setTimeout(() => {
+                        hideProgress();
+                    }, 1000);
+                })
+                .catch(error => {
+                    hideProgress();
+                    showError(error.message);
+                });
+            });
+
+            function updateProgress(percent, message) {
+                progressBarFill.style.width = `${percent}%`;
+                statusText.textContent = message;
+            }
+
+            function showProgress() {
+                progressContainer.style.display = 'block';
+                uploadButton.disabled = true;
+            }
+
+            function hideProgress() {
+                progressContainer.style.display = 'none';
+                uploadButton.disabled = false;
+            }
+
+            function showResults(data) {
+                resultsText.textContent = JSON.stringify(data, null, 2);
+                resultsContainer.style.display = 'block';
+            }
+
+            function hideResults() {
+                resultsContainer.style.display = 'none';
+            }
+
+            function showError(message) {
+                errorText.textContent = message;
+                errorContainer.style.display = 'block';
+            }
+
+            function hideError() {
+                errorContainer.style.display = 'none';
+            }
+        });
+    </script>
+</body>
+</html>

@@ -323,9 +323,11 @@ def format_content_with_markup(content: str) -> str:
             # Get the processed text
             text = soup.get_text()
 
-            # Clean up extra whitespace
-            text = re.sub(r'\s+', ' ', text).strip()
-            text = re.sub(r'\n\s+', '\n', text)
+            # Clean up extra whitespace but preserve line breaks
+            text = re.sub(r'[ \t]+', ' ', text)  # Replace multiple spaces/tabs with a single space
+            text = re.sub(r' *\n *', '\n', text)  # Clean up spaces around newlines
+            text = re.sub(r'\n{3,}', '\n\n', text)  # Replace 3+ consecutive newlines with 2
+            text = text.strip()  # Remove leading/trailing whitespace
 
             return text
         except Exception as e:
@@ -405,9 +407,11 @@ def format_content_with_regex(content: str) -> str:
         # Decode all HTML entities
         content = html.unescape(content)
 
-        # Clean up extra whitespace
-        content = re.sub(r'\s+', ' ', content).strip()
-        content = re.sub(r'\n\s+', '\n', content)
+        # Clean up extra whitespace but preserve line breaks
+        content = re.sub(r'[ \t]+', ' ', content)  # Replace multiple spaces/tabs with a single space
+        content = re.sub(r' *\n *', '\n', content)  # Clean up spaces around newlines
+        content = re.sub(r'\n{3,}', '\n\n', content)  # Replace 3+ consecutive newlines with 2
+        content = content.strip()  # Remove leading/trailing whitespace
 
         return content
     except Exception as e:

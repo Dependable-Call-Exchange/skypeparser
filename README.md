@@ -38,6 +38,9 @@ SkypeParser/
 │   │   ├── file_output.py     # File output utilities
 │   │   ├── parser_module.py   # Additional parsing utilities
 │   │   └── skype_parser.py    # Command-line interface
+│   ├── api/                   # API modules
+│   │   ├── skype_api.py       # API implementation
+│   │   └── run_api.py         # API server script
 │   └── db/                    # Database modules
 │       ├── etl_pipeline.py    # ETL pipeline implementation
 │       ├── raw_storage/       # Raw data storage utilities
@@ -45,7 +48,10 @@ SkypeParser/
 │       └── store_skype_export.py (deprecated)
 ├── examples/                  # Example scripts
 │   ├── web_etl_example.py     # Web application example
-│   └── upload_handler_example.py # File upload example
+│   ├── upload_handler_example.py # File upload example
+│   └── frontend_example/      # Front-end example
+│       ├── index.html         # Example HTML interface
+│       └── serve.py           # Example server script
 ├── tests/                     # Test modules
 │   ├── test_validation.py     # Validation tests
 │   ├── test_config.py         # Configuration tests
@@ -124,6 +130,67 @@ if result:
     print("ETL pipeline completed successfully")
 else:
     print("ETL pipeline failed")
+```
+
+### API Usage
+
+#### Running the API Server
+
+```bash
+# Set environment variables
+export API_KEY=your_secure_api_key
+export DB_NAME=skype
+export DB_USER=postgres
+export DB_PASSWORD=your_password
+
+# Run the API server
+python -m src.api.run_api --host 0.0.0.0 --port 5000 --debug
+```
+
+#### API Endpoints
+
+- `GET /api/health` - Health check endpoint
+- `POST /api/upload` - Upload and process a Skype export file
+
+#### Using the API from JavaScript
+
+```javascript
+// Example using fetch API
+async function uploadSkypeExport(file, userDisplayName, apiKey) {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('user_display_name', userDisplayName);
+
+  try {
+    const response = await fetch('/api/upload', {
+      method: 'POST',
+      headers: {
+        'X-API-Key': apiKey
+      },
+      body: formData
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Upload failed');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error uploading file:', error);
+    throw error;
+  }
+}
+```
+
+#### Running the Front-end Example
+
+```bash
+# Navigate to the example directory
+cd examples/frontend_example
+
+# Run the server
+python serve.py --host localhost --port 8080 --api-url http://localhost:5000
 ```
 
 ### Using the Parser Modules Directly

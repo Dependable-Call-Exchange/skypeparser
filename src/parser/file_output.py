@@ -14,7 +14,8 @@ import datetime
 from typing import Dict, Any
 
 from ..utils.file_utils import safe_filename
-from .core_parser import timestamp_parser, content_parser, tag_stripper, banner_constructor
+from .core_parser import timestamp_parser, content_parser, banner_constructor
+from .content_extractor import format_content_with_markup
 from .exceptions import (
     FileOperationError,
     ExportError,
@@ -367,7 +368,7 @@ def export_conversations_to_text(structured_data: Dict[str, Any], output_dir: st
                     write_to_file(output_file, pretty_parsed_content)
                 else:
                     # no bs4, so we use regex
-                    compiled_message = tag_stripper(compiled_message)
+                    compiled_message = format_content_with_markup(compiled_message)
                     write_to_file(output_file, compiled_message)
             except (ContentParsingError, FileOperationError) as e:
                 logger.error(f"Error writing conversation to file: {e}")

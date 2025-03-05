@@ -10,7 +10,7 @@ import tempfile
 from unittest.mock import patch, MagicMock
 
 from src.parser.core_parser import type_parser
-from src.utils.config import load_config
+from src.utils.config import load_config, get_message_type_description
 from src.parser.exceptions import InvalidInputError
 
 class TestMessageTypes(unittest.TestCase):
@@ -45,12 +45,22 @@ class TestMessageTypes(unittest.TestCase):
         """Tear down test fixtures."""
         self.temp_dir.cleanup()
 
-    @patch('src.parser.core_parser.config')
-    def test_known_message_types(self, mock_config):
+    @patch('src.parser.core_parser.get_message_type_description')
+    def test_known_message_types(self, mock_get_description):
         """Test type_parser with known message types."""
-        # Set up mock config
-        mock_config.get.return_value = self.test_config["default_message_format"]
-        mock_config.__getitem__.return_value = self.test_config["message_types"]
+        # Configure the mock to return appropriate descriptions
+        message_types = {
+            "RichText": "***Text message***",
+            "RichText/UriObject": "***Sent a photo or file***",
+            "Poll": "***Created a poll***",
+            "ThreadActivity/AddMember": "***Added a member to the conversation***",
+            "CustomType": "***Custom message type***"
+        }
+
+        mock_get_description.side_effect = lambda config, msg_type: message_types.get(
+            msg_type,
+            "***Sent a {message_type}***".format(message_type=msg_type)
+        )
 
         # Test known message types
         self.assertEqual(type_parser("RichText"), "***Text message***")
@@ -59,15 +69,14 @@ class TestMessageTypes(unittest.TestCase):
         self.assertEqual(type_parser("ThreadActivity/AddMember"), "***Added a member to the conversation***")
         self.assertEqual(type_parser("CustomType"), "***Custom message type***")
 
-    @patch('src.parser.core_parser.config')
+    @patch('src.parser.core_parser.get_message_type_description')
     @patch('src.parser.core_parser.logger')
-    def test_unknown_message_types(self, mock_logger, mock_config):
+    def test_unknown_message_types(self, mock_logger, mock_get_description):
         """Test type_parser with unknown message types."""
-        # Set up mock config
-        mock_config.get.return_value = self.test_config["default_message_format"]
-        mock_config.__getitem__.side_effect = lambda key: (
-            self.test_config["message_types"] if key == "message_types" else None
-        )
+        # Configure the mock to return the default format for unknown types
+        default_format = "***Sent a {message_type}***"
+
+        mock_get_description.side_effect = lambda config, msg_type: default_format.format(message_type=msg_type)
 
         # Test unknown message type
         unknown_type = "UnknownType"
