@@ -173,6 +173,28 @@ The API includes several advanced features:
 2. **Asynchronous Processing**: Large files are processed asynchronously using a task queue (Celery).
 3. **Detailed Progress Information**: Provides detailed progress information, including current status, percent complete, and elapsed time.
 4. **Automatic File Cleanup**: Temporary files are automatically cleaned up after processing.
+5. **User Management**: Complete user management system with registration, authentication, and API key management.
+6. **Session-based Authentication**: Support for both API key and session-based authentication.
+
+#### User Management
+
+The API includes a complete user management system:
+
+```bash
+# Create a new user
+python -m src.api.run_api --create-user --username johndoe --password securepassword --email john.doe@example.com --display-name "John Doe"
+
+# List all users
+python -m src.api.run_api --list-users
+```
+
+User management endpoints:
+
+- `POST /api/register` - Register a new user
+- `POST /api/login` - Log in a user
+- `POST /api/logout` - Log out a user
+- `GET /api/profile` - Get user profile
+- `POST /api/regenerate-api-key` - Regenerate API key
 
 #### Using the API from JavaScript
 

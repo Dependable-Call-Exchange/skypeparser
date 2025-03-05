@@ -36,6 +36,7 @@ from ..utils.message_type_handlers import (
     extract_structured_data,
     get_handler_for_message_type
 )
+from ..parser.content_extractor import ContentExtractor
 from ..utils.file_utils import safe_filename
 from ..utils.validation import (
     ValidationError,
@@ -1132,20 +1133,44 @@ class SkypeETLPipeline:
         message_metadata = self._extract_message_metadata(message)
 
         # Create message data structure
-        msg_data = self._create_message_data_structure(message_metadata, id_to_display_name)
+        transformed_message = {
+            'id': message_metadata['id'],
+            'timestamp': message_metadata['timestamp'],
+            'datetime': message_metadata['datetime'],
+            'date': message_metadata['date'],
+            'time': message_metadata['time'],
+            'from_id': message_metadata['from'],
+            'from_name': id_to_display_name.get(message_metadata['from'], message_metadata['from']),
+            'type': message_metadata['type'],
+            'content': message_metadata['content'],  # Will be processed by the parser
+            'rawContent': message_metadata['content'],
+            'isEdited': message_metadata['isEdited']
+        }
+
+        # Extract structured data if available
+        if get_handler_for_message_type(message_metadata['type']):
+            structured_data = extract_structured_data(message)
+            if structured_data:
+                transformed_message['structuredData'] = structured_data
+
+        # Extract general content data using ContentExtractor
+        if message_metadata['content']:
+            content_data = ContentExtractor.extract_all(message_metadata['content'])
+            if content_data:
+                transformed_message['contentData'] = content_data
 
         # Store datetime object for sorting if available
         if message_metadata['datetime']:
             datetime_objects.append((index, message_metadata['datetime']))
 
         # Handle special message types
-        self._handle_special_message_types(msg_data, message_metadata['type'])
+        self._handle_special_message_types(transformed_message, message_metadata['type'])
 
         # Check for edited messages
-        self._check_for_edited_message(msg_data, message)
+        self._check_for_edited_message(transformed_message, message)
 
         # Add message to conversation
-        transformed_data['conversations'][conv_id]['messages'].append(msg_data)
+        transformed_data['conversations'][conv_id]['messages'].append(transformed_message)
 
         # Update message progress
         self.progress_tracker.update_message_progress()
@@ -1176,30 +1201,6 @@ class SkypeETLPipeline:
             'from': msg_from,
             'content_raw': msg_content_raw,
             'type': msg_type
-        }
-
-    def _create_message_data_structure(self, metadata: Dict[str, Any],
-                                      id_to_display_name: Dict[str, str]) -> Dict[str, Any]:
-        """
-        Create a message data structure.
-
-        Args:
-            metadata (dict): Message metadata
-            id_to_display_name (dict): Mapping of user IDs to display names
-
-        Returns:
-            dict: Message data structure
-        """
-        return {
-            'timestamp': metadata['timestamp'],
-            'timestampFormatted': f"{metadata['date_str']} {metadata['time_str']}",
-            'date': metadata['date_str'],
-            'time': metadata['time_str'],
-            'fromId': metadata['from'],
-            'fromName': id_to_display_name.get(metadata['from'], metadata['from']),
-            'type': metadata['type'],
-            'rawContent': metadata['content_raw'],
-            'isEdited': False
         }
 
     def _handle_special_message_types(self, msg_data: Dict[str, Any], msg_type: str) -> None:
@@ -1817,6 +1818,12 @@ class SkypeETLPipeline:
             structured_data = extract_structured_data(message)
             if structured_data:
                 transformed_message['structuredData'] = structured_data
+
+        # Extract general content data using ContentExtractor
+        if msg_content_raw:
+            content_data = ContentExtractor.extract_all(msg_content_raw)
+            if content_data:
+                transformed_message['contentData'] = content_data
 
         return transformed_message
 

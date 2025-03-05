@@ -93,6 +93,125 @@ Returns the current status of the API server.
 }
 ```
 
+### User Management
+
+#### Register
+
+```
+POST /api/register
+```
+
+Registers a new user.
+
+##### Request Body
+
+```json
+{
+  "username": "johndoe",
+  "password": "securepassword",
+  "email": "john.doe@example.com",
+  "display_name": "John Doe"
+}
+```
+
+##### Response
+
+```json
+{
+  "username": "johndoe",
+  "email": "john.doe@example.com",
+  "display_name": "John Doe",
+  "api_key": "550e8400e29b41d4a716446655440000"
+}
+```
+
+#### Login
+
+```
+POST /api/login
+```
+
+Logs in a user and creates a session.
+
+##### Request Body
+
+```json
+{
+  "username": "johndoe",
+  "password": "securepassword"
+}
+```
+
+##### Response
+
+```json
+{
+  "username": "johndoe",
+  "email": "john.doe@example.com",
+  "display_name": "John Doe",
+  "api_key": "550e8400e29b41d4a716446655440000"
+}
+```
+
+#### Logout
+
+```
+POST /api/logout
+```
+
+Logs out the current user by clearing the session.
+
+##### Response
+
+```json
+{
+  "message": "Logged out successfully"
+}
+```
+
+#### Profile
+
+```
+GET /api/profile
+```
+
+Returns the profile of the authenticated user.
+
+##### Request Headers
+
+- `X-API-Key`: API key for authentication
+
+##### Response
+
+```json
+{
+  "username": "johndoe",
+  "email": "john.doe@example.com",
+  "display_name": "John Doe",
+  "api_key": "550e8400e29b41d4a716446655440000"
+}
+```
+
+#### Regenerate API Key
+
+```
+POST /api/regenerate-api-key
+```
+
+Regenerates the API key for the authenticated user.
+
+##### Request Headers
+
+- `X-API-Key`: API key for authentication
+
+##### Response
+
+```json
+{
+  "api_key": "550e8400e29b41d4a716446655440000"
+}
+```
+
 ### Upload and Process
 
 ```
@@ -172,6 +291,22 @@ Returns the current status of a task.
   "elapsed_time": 42.5,
   "timestamp": 1646476800.0
 }
+```
+
+## Command-line User Management
+
+The API server provides command-line tools for user management:
+
+### Creating a User
+
+```bash
+python -m src.api.run_api --create-user --username johndoe --password securepassword --email john.doe@example.com --display-name "John Doe"
+```
+
+### Listing Users
+
+```bash
+python -m src.api.run_api --list-users
 ```
 
 ## WebSocket API
