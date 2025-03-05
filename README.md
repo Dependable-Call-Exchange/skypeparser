@@ -19,6 +19,8 @@ A comprehensive toolkit for extracting, transforming, and loading Skype export d
 - **Enhanced message type handling** (extracting structured data from polls, calls, locations, etc.)
 - **Performance optimization** for large datasets (chunked processing, parallel execution, memory management)
 - **Advanced content extraction** (mentions, links, quotes, formatting)
+- **Shared Context Management** for coordinating state across ETL components
+- **Supabase Integration** for storing data in Supabase PostgreSQL
 
 ## Project Structure
 
@@ -42,30 +44,36 @@ SkypeParser/
 │   │   ├── skype_api.py       # API implementation
 │   │   └── run_api.py         # API server script
 │   └── db/                    # Database modules
-│       ├── etl_pipeline.py    # ETL pipeline implementation
+│       ├── etl/               # Modular ETL pipeline
+│       │   ├── context.py     # Shared context for ETL components
+│       │   ├── extractor.py   # Data extraction component
+│       │   ├── transformer.py # Data transformation component
+│       │   ├── loader.py      # Data loading component
+│       │   ├── pipeline_manager.py # ETL orchestration
+│       │   └── utils.py       # ETL utilities
+│       ├── etl_pipeline_compat.py # Compatibility layer for old ETL pipeline
+│       ├── etl_pipeline.py    # Legacy ETL pipeline implementation
 │       ├── raw_storage/       # Raw data storage utilities
 │       ├── skype_to_postgres.py (deprecated)
 │       └── store_skype_export.py (deprecated)
 ├── examples/                  # Example scripts
 │   ├── web_etl_example.py     # Web application example
 │   ├── upload_handler_example.py # File upload example
+│   ├── etl_context_example.py # Example using ETLContext
 │   └── frontend_example/      # Front-end example
 │       ├── index.html         # Example HTML interface
 │       └── serve.py           # Example server script
 ├── tests/                     # Test modules
-│   ├── test_validation.py     # Validation tests
-│   ├── test_config.py         # Configuration tests
-│   ├── test_file_handler.py   # File handler tests
-│   ├── test_etl_pipeline.py   # ETL pipeline tests
-│   ├── test_web_integration.py # Web integration tests
-│   ├── test_core_parser.py    # Core parser tests
-│   ├── test_skype_parser.py   # Skype parser tests
-│   ├── test_file_output.py    # File output tests
-│   ├── test_parser_module.py  # Parser module tests
-│   ├── test_raw_storage.py    # Raw storage tests
-│   ├── test_dependencies.py   # Dependencies tests
-│   ├── test_tar_extractor.py  # TAR extractor tests
-│   └── test_file_utils.py     # File utilities tests
+│   ├── unit/                  # Unit tests
+│   │   ├── test_etl_context.py # ETLContext tests
+│   │   ├── test_etl_pipeline.py # ETL pipeline tests
+│   │   └── ...                # Other unit tests
+│   ├── integration/           # Integration tests
+│   │   ├── test_modular_etl_integration.py # Modular ETL integration tests
+│   │   └── ...                # Other integration tests
+│   ├── performance/           # Performance tests
+│   │   └── test_etl_performance.py # ETL performance tests
+│   └── ...                    # Other test files
 ├── run_tests.py               # Test runner script
 └── requirements.txt           # Project dependencies
 ```
@@ -106,6 +114,8 @@ python -m src.parser.skype_parser path/to/skype_export.tar -t --store-db --db-na
 
 ### Python API Usage
 
+#### Legacy ETL Pipeline
+
 ```python
 from src.db.etl_pipeline import SkypeETLPipeline
 
@@ -131,6 +141,140 @@ if result:
 else:
     print("ETL pipeline failed")
 ```
+
+#### Modular ETL Pipeline with ETLContext
+
+```python
+from src.db.etl import ETLContext, ETLPipeline
+
+# Create a context for managing state across ETL components
+context = ETLContext(
+    db_config={
+        'dbname': 'skype_archive',
+        'user': 'postgres',
+        'password': 'your_password',
+        'host': 'localhost',
+        'port': 5432
+    },
+    output_dir='output_dir',
+    memory_limit_mb=1024,
+    parallel_processing=True,
+    task_id='my-etl-task'
+)
+
+# Create the ETL pipeline with the context
+pipeline = ETLPipeline(context=context)
+
+# Run the pipeline
+results = pipeline.run_pipeline(
+    file_path='path/to/skype_export.tar',
+    user_display_name='Your Name'
+)
+
+if results['success']:
+    print(f"ETL pipeline completed successfully with export ID: {results['export_id']}")
+    print(f"Processed {results['phases']['transform']['processed_conversations']} conversations")
+    print(f"Processed {results['phases']['transform']['processed_messages']} messages")
+    print(f"Total duration: {results['total_duration_seconds']:.2f} seconds")
+else:
+    print(f"ETL pipeline failed: {results.get('error', 'Unknown error')}")
+```
+
+#### Using ETL Components Individually
+
+```python
+from src.db.etl import ETLContext, Extractor, Transformer, Loader
+
+# Create a context
+context = ETLContext(
+    db_config={'dbname': 'skype_archive', 'user': 'postgres'},
+    output_dir='output_dir'
+)
+
+# Create components with the shared context
+extractor = Extractor(context=context)
+transformer = Transformer(context=context)
+loader = Loader(context=context)
+
+try:
+    # Extract data
+    context.start_phase("extract")
+    raw_data = extractor.extract(file_path='path/to/skype_export.tar')
+    context.end_phase()
+
+    # Transform data
+    context.start_phase("transform")
+    transformed_data = transformer.transform(raw_data, 'Your Name')
+    context.end_phase()
+
+    # Load data
+    loader.connect_db()
+    context.start_phase("load")
+    export_id = loader.load(raw_data, transformed_data, 'path/to/skype_export.tar')
+    context.end_phase()
+    loader.close_db()
+
+    # Get summary
+    summary = context.get_summary()
+    print(f"ETL process completed in {summary['total_duration_seconds']:.2f} seconds")
+    print(f"Export ID: {summary['export_id']}")
+
+except Exception as e:
+    print(f"Error in ETL process: {e}")
+    # Record error in context
+    context.record_error(phase=context.current_phase or "unknown", error=e, fatal=True)
+```
+
+### Supabase PostgreSQL Integration
+
+The ETL pipeline can connect to [Supabase](https://supabase.com/) PostgreSQL databases for storing Skype data. Supabase provides a managed PostgreSQL service with additional features like authentication, storage, and real-time subscriptions.
+
+#### Configuration
+
+Create a `supabase.json` configuration file:
+
+```json
+{
+  "database": {
+    "host": "aws-0-[REGION].pooler.supabase.com",
+    "port": 5432,
+    "dbname": "postgres",
+    "user": "postgres.[YOUR-PROJECT-REF]",
+    "password": "[YOUR-PASSWORD]",
+    "sslmode": "require"
+  },
+  "batch_size": 100,
+  "checkpoint_interval": 1000
+}
+```
+
+#### Example Usage
+
+```python
+from src.db.etl.pipeline import ETLPipeline
+from src.db.etl.context import ETLContext
+import json
+
+# Load Supabase configuration
+with open('config/supabase.json', 'r') as f:
+    config = json.load(f)
+
+# Create ETL context with Supabase configuration
+context = ETLContext(
+    db_config=config['database'],
+    batch_size=config.get('batch_size', 100),
+    checkpoint_interval=config.get('checkpoint_interval', 1000)
+)
+
+# Create and run ETL pipeline
+pipeline = ETLPipeline(context)
+result = pipeline.run(
+    input_file='path/to/export.tar',
+    user_display_name='Your Name'
+)
+```
+
+For detailed information about Supabase integration, see [docs/SUPABASE_INTEGRATION.md](docs/SUPABASE_INTEGRATION.md).
 
 ### API Usage
 

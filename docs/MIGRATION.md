@@ -11,6 +11,8 @@ The following modules are deprecated and will be removed in a future version:
 
 These modules have been replaced by the `SkypeETLPipeline` class, which provides a more robust and flexible solution for extracting, transforming, and loading Skype export data.
 
+Additionally, a new modular ETL pipeline has been introduced, which provides a more maintainable and extensible architecture for ETL operations.
+
 ## Migration Steps
 
 ### From `skype_to_postgres.py`
@@ -198,6 +200,103 @@ def upload_file():
     # Return the results
     return jsonify(results)
 ```
+
+## Modular ETL Pipeline
+
+A new modular ETL pipeline has been introduced, which provides a more maintainable and extensible architecture for ETL operations. The modular pipeline separates the ETL process into distinct components:
+
+- **Extractor**: Handles file reading and validation
+- **Transformer**: Processes raw data into structured format
+- **Loader**: Manages database operations
+
+### Using the Modular ETL Pipeline
+
+You can use the modular ETL pipeline directly:
+
+```python
+from src.db.etl import ETLPipeline
+
+# Create the ETL pipeline
+pipeline = ETLPipeline(
+    db_config={
+        'dbname': 'skype_logs',
+        'user': 'postgres',
+        'password': 'your_password',
+        'host': 'localhost',
+        'port': 5432
+    },
+    output_dir='output'
+)
+
+# Run the pipeline
+result = pipeline.run_pipeline(
+    file_path='skype_export.tar',
+    user_display_name='Your Name'
+)
+
+print(f"Processed {result['phases']['transform']['processed_messages']} messages")
+```
+
+### Advanced Usage
+
+The modular pipeline provides more flexibility and control over the ETL process:
+
+```python
+from src.db.etl import ETLPipeline
+
+# Create the ETL pipeline with custom settings
+pipeline = ETLPipeline(
+    db_config=db_config,
+    output_dir='output',
+    memory_limit_mb=2048,  # 2GB memory limit
+    parallel_processing=True,  # Enable parallel processing
+    chunk_size=2000  # Process messages in chunks of 2000
+)
+
+# Run the pipeline
+result = pipeline.run_pipeline(
+    file_path='skype_export.tar',
+    user_display_name='Your Name'
+)
+
+# Access detailed phase statistics
+for phase, stats in result['phases'].items():
+    print(f"{phase.capitalize()} phase:")
+    print(f"  Duration: {stats.get('duration_seconds', 0):.2f} seconds")
+    print(f"  Messages: {stats.get('processed_messages', 0)}")
+    print(f"  Conversations: {stats.get('processed_conversations', 0)}")
+```
+
+### Using Individual Components
+
+For advanced use cases, you can use the individual components directly:
+
+```python
+from src.db.etl import Extractor, Transformer, Loader
+
+# Create components
+extractor = Extractor(output_dir='output')
+transformer = Transformer(parallel_processing=True)
+loader = Loader(db_config=db_config)
+
+# Extract data
+raw_data = extractor.extract(file_path='skype_export.tar')
+
+# Transform data
+transformed_data = transformer.transform(raw_data, user_display_name='Your Name')
+
+# Load data
+loader.connect_db()
+try:
+    export_id = loader.load(raw_data, transformed_data, 'skype_export.tar')
+    print(f"Data loaded with export ID: {export_id}")
+finally:
+    loader.close_db()
+```
+
+## Compatibility Layer
+
+For backward compatibility, the `SkypeETLPipeline` class now uses the modular ETL pipeline internally. This means you can continue to use the `SkypeETLPipeline` class as before, but with the benefits of the modular architecture.
 
 ## Timeline for Removal
 

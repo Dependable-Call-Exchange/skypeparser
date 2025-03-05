@@ -460,6 +460,15 @@ def validate_db_config(config: Dict[str, Any]) -> bool:
         if config['port'] < 1 or config['port'] > 65535:
             raise ValidationError("Database port must be between 1 and 65535")
 
+    # Validate SSL mode if present
+    if 'sslmode' in config:
+        if not isinstance(config['sslmode'], str):
+            raise ValidationError("SSL mode must be a string")
+
+        valid_ssl_modes = ['disable', 'allow', 'prefer', 'require', 'verify-ca', 'verify-full']
+        if config['sslmode'] not in valid_ssl_modes:
+            raise ValidationError(f"Invalid SSL mode: {config['sslmode']}. Valid modes are: {', '.join(valid_ssl_modes)}")
+
     return True
 
 def validate_config(config: Dict[str, Any]) -> bool:

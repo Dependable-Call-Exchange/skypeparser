@@ -34,7 +34,8 @@ from flask import (
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # Import the ETL pipeline and validation functions
-from src.db.etl_pipeline import SkypeETLPipeline
+from src.db.etl import ETLPipeline  # Import the modular ETL pipeline
+from src.db.etl_pipeline_compat import SkypeETLPipeline  # Import the compatibility layer
 from src.utils.validation import (
     ValidationError,
     validate_file_object,
@@ -56,6 +57,7 @@ UPLOAD_FOLDER = 'uploads'
 OUTPUT_FOLDER = 'output'
 ALLOWED_EXTENSIONS = {'.json', '.tar'}
 MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB
+USE_MODULAR_PIPELINE = os.environ.get('USE_MODULAR_PIPELINE', 'true').lower() == 'true'
 
 # Create upload and output directories
 try:
@@ -181,6 +183,72 @@ def allowed_file(filename: str) -> bool:
     _, ext = os.path.splitext(filename.lower())
     return ext in ALLOWED_EXTENSIONS
 
+# Create ETL pipeline based on configuration
+def create_etl_pipeline():
+    """
+    Create an ETL pipeline based on configuration.
+
+    Returns:
+        ETLPipeline or SkypeETLPipeline: The ETL pipeline instance
+    """
+    if USE_MODULAR_PIPELINE:
+        logger.info("Using modular ETL pipeline")
+        return ETLPipeline(
+            db_config=db_config,
+            output_dir=OUTPUT_FOLDER
+        )
+    else:
+        logger.info("Using legacy ETL pipeline")
+        return SkypeETLPipeline(
+            db_config=db_config,
+            output_dir=OUTPUT_FOLDER
+        )
+
+# Process file through ETL pipeline
+def process_file(file, user_display_name):
+    """
+    Process a file through the ETL pipeline.
+
+    Args:
+        file: The file to process
+        user_display_name: The user display name
+
+    Returns:
+        dict: The results of the ETL pipeline
+    """
+    # Create ETL pipeline
+    pipeline = create_etl_pipeline()
+
+    # Run the pipeline
+    result = pipeline.run_pipeline(
+        file_obj=file,
+        user_display_name=user_display_name
+    )
+
+    # Format the result for display
+    if USE_MODULAR_PIPELINE:
+        # Extract conversation and message counts from the modular pipeline result
+        conversation_count = 0
+        message_count = 0
+
+        for phase, stats in result['phases'].items():
+            if phase == 'transform' and stats:
+                conversation_count = stats.get('processed_conversations', 0)
+                message_count = stats.get('processed_messages', 0)
+
+        # Return in the legacy format for compatibility
+        return {
+            'success': result['success'],
+            'export_id': result.get('export_id'),
+            'conversations': conversation_count,
+            'message_count': message_count,
+            'error': result.get('error'),
+            'phases': result.get('phases')  # Include phase details for advanced usage
+        }
+    else:
+        # Legacy pipeline already returns the expected format
+        return result
+
 # Login page
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -231,7 +299,8 @@ def index():
     return render_template_string(
         UPLOAD_TEMPLATE,
         csrf_token=session['csrf_token'],
-        username=session.get('username')
+        username=session.get('username'),
+        use_modular_pipeline=USE_MODULAR_PIPELINE
     )
 
 # File upload handler
@@ -248,84 +317,76 @@ def upload_file():
         # Verify CSRF token
         token = request.form.get('csrf_token')
         if not token or token != session.get('csrf_token'):
-            return jsonify({'error': 'Invalid CSRF token'}), 403
+            result['error'] = 'Invalid CSRF token'
+            return render_template_string(
+                RESULT_TEMPLATE,
+                result=result,
+                username=session.get('username')
+            )
 
         # Check if a file was uploaded
         if 'file' not in request.files:
             result['error'] = 'No file part'
-            return render_template_string(UPLOAD_TEMPLATE, result=result, csrf_token=session['csrf_token'])
+            return render_template_string(
+                RESULT_TEMPLATE,
+                result=result,
+                username=session.get('username')
+            )
 
         file = request.files['file']
 
         # Check if the file is empty
         if file.filename == '':
             result['error'] = 'No file selected'
-            return render_template_string(UPLOAD_TEMPLATE, result=result, csrf_token=session['csrf_token'])
+            return render_template_string(
+                RESULT_TEMPLATE,
+                result=result,
+                username=session.get('username')
+            )
 
-        # Check if the file type is allowed
+        # Check if the file has an allowed extension
         if not allowed_file(file.filename):
-            result['error'] = 'File type not allowed. Please upload a .tar or .json file.'
-            return render_template_string(UPLOAD_TEMPLATE, result=result, csrf_token=session['csrf_token'])
-
-        # Secure the filename
-        filename = secure_filename(file.filename)
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-
-        # Save the file temporarily
-        file.save(file_path)
+            result['error'] = 'File type not allowed'
+            return render_template_string(
+                RESULT_TEMPLATE,
+                result=result,
+                username=session.get('username')
+            )
 
         # Get user display name
-        user_display_name = request.form.get('user_display_name', session.get('username', ''))
-
-        # Validate user display name
+        user_display_name = request.form.get('user_display_name', '')
         try:
-            user_display_name = validate_user_display_name(user_display_name)
+            validate_user_display_name(user_display_name)
         except ValidationError as e:
-            logger.warning(f"User display name validation error: {e}")
-            user_display_name = session.get('username', '')
+            result['error'] = str(e)
+            return render_template_string(
+                RESULT_TEMPLATE,
+                result=result,
+                username=session.get('username')
+            )
+
+        # Save the file
+        filename = secure_filename(file.filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
 
         # Process the file through the ETL pipeline
-        pipeline = SkypeETLPipeline(
-            db_config=db_config,
-            output_dir=OUTPUT_FOLDER
-        )
+        file.seek(0)  # Reset file pointer to beginning
+        result = process_file(file, user_display_name)
 
-        # Run the pipeline with the uploaded file
-        results = pipeline.run_pipeline(
-            file_path=file_path,
-            user_display_name=user_display_name
-        )
-
-        # Clean up the temporary file
-        try:
-            os.remove(file_path)
-        except Exception as e:
-            logger.warning(f"Failed to remove temporary file {file_path}: {e}")
-
-        # Return the results
         return render_template_string(
-            UPLOAD_TEMPLATE,
-            result=results,
-            csrf_token=session['csrf_token'],
-            username=session.get('username')
-        )
-
-    except ValidationError as e:
-        logger.error(f"Validation error: {e}", exc_info=True)
-        result['error'] = str(e)
-        return render_template_string(
-            UPLOAD_TEMPLATE,
+            RESULT_TEMPLATE,
             result=result,
-            csrf_token=session['csrf_token'],
-            username=session.get('username')
+            username=session.get('username'),
+            use_modular_pipeline=USE_MODULAR_PIPELINE
         )
+
     except Exception as e:
-        logger.error(f"Error processing uploaded file: {e}", exc_info=True)
+        logger.exception(f"Error processing file: {e}")
         result['error'] = str(e)
         return render_template_string(
-            UPLOAD_TEMPLATE,
+            RESULT_TEMPLATE,
             result=result,
-            csrf_token=session['csrf_token'],
             username=session.get('username')
         )
 
@@ -338,11 +399,6 @@ def api_upload_file():
     API endpoint for file upload and processing.
     """
     try:
-        # API key authentication for programmatic access
-        api_key = request.headers.get('X-API-Key')
-        if not api_key or api_key != os.environ.get('API_KEY'):
-            return jsonify({'error': 'Invalid API key'}), 401
-
         # Check if a file was uploaded
         if 'file' not in request.files:
             return jsonify({'error': 'No file part'}), 400
@@ -353,75 +409,65 @@ def api_upload_file():
         if file.filename == '':
             return jsonify({'error': 'No file selected'}), 400
 
-        # Check if the file type is allowed
+        # Check if the file has an allowed extension
         if not allowed_file(file.filename):
             return jsonify({'error': 'File type not allowed'}), 400
 
-        # Validate file object
-        try:
-            validate_file_object(file, allowed_extensions=ALLOWED_EXTENSIONS)
-        except ValidationError as e:
-            logger.error(f"File validation error: {e}")
-            return jsonify({'error': str(e)}), 400
-
-        # Secure the filename
-        filename = secure_filename(file.filename)
-        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-
-        # Save the file temporarily
-        file.save(file_path)
-
         # Get user display name
         user_display_name = request.form.get('user_display_name', '')
+        try:
+            validate_user_display_name(user_display_name)
+        except ValidationError as e:
+            return jsonify({'error': str(e)}), 400
 
-        # Validate user display name if provided
-        if user_display_name:
-            try:
-                user_display_name = validate_user_display_name(user_display_name)
-            except ValidationError as e:
-                logger.warning(f"User display name validation error: {e}")
-                user_display_name = ''
+        # Save the file
+        filename = secure_filename(file.filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
 
         # Process the file through the ETL pipeline
-        pipeline = SkypeETLPipeline(
-            db_config=db_config,
-            output_dir=OUTPUT_FOLDER
-        )
+        file.seek(0)  # Reset file pointer to beginning
+        result = process_file(file, user_display_name)
 
-        # Run the pipeline with the uploaded file
-        results = pipeline.run_pipeline(
-            file_path=file_path,
-            user_display_name=user_display_name
-        )
+        return jsonify(result)
 
-        # Clean up the temporary file
-        try:
-            os.remove(file_path)
-        except Exception as e:
-            logger.warning(f"Failed to remove temporary file {file_path}: {e}")
-
-        # Return the results
-        return jsonify(results)
-
-    except ValidationError as e:
-        logger.error(f"Validation error: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 400
     except Exception as e:
-        logger.error(f"Error processing uploaded file: {e}", exc_info=True)
+        logger.exception(f"API error processing file: {e}")
         return jsonify({'error': str(e)}), 500
 
 # Error handlers
 @app.errorhandler(404)
 def page_not_found(e):
-    return render_template_string(ERROR_TEMPLATE, error="Page not found"), 404
+    """
+    Handle 404 errors.
+    """
+    return render_template_string(
+        ERROR_TEMPLATE,
+        error='Page not found',
+        username=session.get('username')
+    ), 404
 
 @app.errorhandler(500)
 def server_error(e):
-    return render_template_string(ERROR_TEMPLATE, error="Internal server error"), 500
+    """
+    Handle 500 errors.
+    """
+    return render_template_string(
+        ERROR_TEMPLATE,
+        error='Server error',
+        username=session.get('username')
+    ), 500
 
 @app.errorhandler(413)
 def request_entity_too_large(e):
-    return render_template_string(ERROR_TEMPLATE, error=f"File too large. Maximum size is {MAX_CONTENT_LENGTH/(1024*1024)}MB"), 413
+    """
+    Handle 413 errors (file too large).
+    """
+    return render_template_string(
+        ERROR_TEMPLATE,
+        error=f'File too large. Maximum size is {MAX_CONTENT_LENGTH / (1024 * 1024)}MB',
+        username=session.get('username')
+    ), 413
 
 # HTML Templates
 LOGIN_TEMPLATE = """
@@ -429,27 +475,24 @@ LOGIN_TEMPLATE = """
 <html>
 <head>
     <title>Skype ETL Pipeline - Login</title>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         body {
             font-family: Arial, sans-serif;
-            line-height: 1.6;
             margin: 0;
             padding: 20px;
             background-color: #f5f5f5;
         }
         .container {
-            max-width: 600px;
+            max-width: 500px;
             margin: 0 auto;
             background-color: white;
             padding: 20px;
             border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
         }
         h1 {
-            color: #333;
-            margin-bottom: 20px;
+            color: #0078d7;
+            text-align: center;
         }
         .form-group {
             margin-bottom: 15px;
@@ -468,45 +511,31 @@ LOGIN_TEMPLATE = """
             box-sizing: border-box;
         }
         button {
-            background-color: #4CAF50;
+            background-color: #0078d7;
             color: white;
-            padding: 10px 15px;
             border: none;
+            padding: 10px 15px;
             border-radius: 4px;
             cursor: pointer;
+            font-size: 16px;
         }
         button:hover {
-            background-color: #45a049;
+            background-color: #005a9e;
         }
         .error {
             color: red;
             margin-bottom: 15px;
         }
-        .flash {
-            padding: 10px;
-            margin-bottom: 15px;
-            background-color: #d4edda;
-            border-color: #c3e6cb;
-            color: #155724;
-            border-radius: 4px;
-        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Skype ETL Pipeline - Login</h1>
+        <h1>Skype ETL Pipeline</h1>
+        <h2>Login</h2>
 
         {% if error %}
         <div class="error">{{ error }}</div>
         {% endif %}
-
-        {% with messages = get_flashed_messages() %}
-        {% if messages %}
-        {% for message in messages %}
-        <div class="flash">{{ message }}</div>
-        {% endfor %}
-        {% endif %}
-        {% endwith %}
 
         <form method="post">
             <div class="form-group">
@@ -530,13 +559,10 @@ UPLOAD_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Skype ETL Pipeline</title>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skype ETL Pipeline - Upload</title>
     <style>
         body {
             font-family: Arial, sans-serif;
-            line-height: 1.6;
             margin: 0;
             padding: 20px;
             background-color: #f5f5f5;
@@ -547,11 +573,11 @@ UPLOAD_TEMPLATE = """
             background-color: white;
             padding: 20px;
             border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
         }
         h1 {
-            color: #333;
-            margin-bottom: 20px;
+            color: #0078d7;
+            text-align: center;
         }
         .form-group {
             margin-bottom: 15px;
@@ -570,34 +596,16 @@ UPLOAD_TEMPLATE = """
             box-sizing: border-box;
         }
         button {
-            background-color: #4CAF50;
+            background-color: #0078d7;
             color: white;
-            padding: 10px 15px;
             border: none;
+            padding: 10px 15px;
             border-radius: 4px;
             cursor: pointer;
+            font-size: 16px;
         }
         button:hover {
-            background-color: #45a049;
-        }
-        .error {
-            color: red;
-            margin-bottom: 15px;
-        }
-        .success {
-            color: green;
-            margin-bottom: 15px;
-        }
-        .result {
-            margin-top: 20px;
-            padding: 15px;
-            background-color: #f8f9fa;
-            border-radius: 4px;
-            border: 1px solid #ddd;
-        }
-        .result pre {
-            white-space: pre-wrap;
-            word-wrap: break-word;
+            background-color: #005a9e;
         }
         .header {
             display: flex;
@@ -605,21 +613,23 @@ UPLOAD_TEMPLATE = """
             align-items: center;
             margin-bottom: 20px;
         }
-        .user-info {
-            text-align: right;
-        }
         .logout {
-            color: #dc3545;
-            text-decoration: none;
-            margin-left: 10px;
+            background-color: #d9534f;
         }
-        .flash {
+        .logout:hover {
+            background-color: #c9302c;
+        }
+        .info {
+            margin-top: 20px;
             padding: 10px;
-            margin-bottom: 15px;
-            background-color: #d4edda;
-            border-color: #c3e6cb;
-            color: #155724;
-            border-radius: 4px;
+            background-color: #f0f7fd;
+            border-left: 5px solid #0078d7;
+        }
+        .pipeline-info {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #dff0d8;
+            border-left: 5px solid #3c763d;
         }
     </style>
 </head>
@@ -627,60 +637,173 @@ UPLOAD_TEMPLATE = """
     <div class="container">
         <div class="header">
             <h1>Skype ETL Pipeline</h1>
-            <div class="user-info">
-                {% if username %}
-                Logged in as: <strong>{{ username }}</strong>
-                <a href="/logout" class="logout">Logout</a>
-                {% endif %}
+            <div>
+                <span>Welcome, {{ username }}</span>
+                <a href="{{ url_for('logout') }}"><button class="logout">Logout</button></a>
             </div>
         </div>
 
-        {% with messages = get_flashed_messages() %}
-        {% if messages %}
-        {% for message in messages %}
-        <div class="flash">{{ message }}</div>
-        {% endfor %}
-        {% endif %}
-        {% endwith %}
-
-        <form method="post" action="/upload" enctype="multipart/form-data">
+        <form method="post" action="{{ url_for('upload_file') }}" enctype="multipart/form-data">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
             <div class="form-group">
-                <label for="file">Select Skype export file (.json or .tar):</label>
-                <input type="file" id="file" name="file" accept=".json,.tar" required>
+                <label for="file">Skype Export File:</label>
+                <input type="file" id="file" name="file" required>
+                <small>Allowed file types: .json, .tar</small>
             </div>
 
             <div class="form-group">
-                <label for="user_display_name">Your display name (optional):</label>
-                <input type="text" id="user_display_name" name="user_display_name" value="{{ username }}">
+                <label for="user_display_name">User Display Name:</label>
+                <input type="text" id="user_display_name" name="user_display_name" placeholder="Your name in Skype">
+                <small>Optional: Your display name in Skype</small>
             </div>
 
             <button type="submit">Upload and Process</button>
         </form>
 
-        {% if result %}
-        <div class="result">
-            <h2>Processing Results</h2>
+        <div class="info">
+            <h3>Instructions</h3>
+            <p>Upload your Skype export file to process it through the ETL pipeline. The file will be validated, processed, and loaded into the database.</p>
+            <p>You can optionally provide your display name in Skype to help identify your messages in the processed data.</p>
+        </div>
 
-            {% if result.error %}
-            <div class="error">Error: {{ result.error }}</div>
-            {% else %}
-            <div class="success">File processed successfully!</div>
+        <div class="pipeline-info">
+            <h3>Pipeline Information</h3>
+            <p>Currently using: <strong>{% if use_modular_pipeline %}Modular ETL Pipeline{% else %}Legacy ETL Pipeline{% endif %}</strong></p>
+            <p>The modular pipeline provides improved performance, better error handling, and more detailed progress tracking.</p>
+        </div>
+    </div>
+</body>
+</html>
+"""
 
-            <h3>Extraction</h3>
-            <pre>{{ result.extraction }}</pre>
+RESULT_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Skype ETL Pipeline - Result</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #0078d7;
+            text-align: center;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 4px;
+        }
+        .success {
+            background-color: #dff0d8;
+            border-left: 5px solid #3c763d;
+            color: #3c763d;
+        }
+        .error {
+            background-color: #f2dede;
+            border-left: 5px solid #a94442;
+            color: #a94442;
+        }
+        .details {
+            margin-top: 20px;
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+        }
+        .button {
+            display: inline-block;
+            background-color: #0078d7;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            text-decoration: none;
+            margin-top: 20px;
+        }
+        .button:hover {
+            background-color: #005a9e;
+        }
+        .logout {
+            background-color: #d9534f;
+        }
+        .logout:hover {
+            background-color: #c9302c;
+        }
+        .phase {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #f0f7fd;
+            border-left: 3px solid #0078d7;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Skype ETL Pipeline</h1>
+            <div>
+                <span>Welcome, {{ username }}</span>
+                <a href="{{ url_for('logout') }}"><button class="logout">Logout</button></a>
+            </div>
+        </div>
 
-            <h3>Transformation</h3>
-            <pre>{{ result.transformation }}</pre>
+        <h2>Processing Result</h2>
 
-            {% if result.loading %}
-            <h3>Loading</h3>
-            <pre>{{ result.loading }}</pre>
+        {% if result.error %}
+        <div class="result error">
+            <h3>Error</h3>
+            <p>{{ result.error }}</p>
+        </div>
+        {% else %}
+        <div class="result success">
+            <h3>Success</h3>
+            <p>The file was processed successfully.</p>
+        </div>
+
+        <div class="details">
+            <h3>Details</h3>
+            <p><strong>Export ID:</strong> {{ result.export_id }}</p>
+            <p><strong>Conversations:</strong> {{ result.conversations }}</p>
+            <p><strong>Messages:</strong> {{ result.message_count }}</p>
+
+            {% if use_modular_pipeline and result.phases %}
+            <h3>Phase Statistics</h3>
+            {% for phase_name, phase_stats in result.phases.items() %}
+            {% if phase_stats %}
+            <div class="phase">
+                <h4>{{ phase_name|capitalize }} Phase</h4>
+                <p><strong>Duration:</strong> {{ phase_stats.duration_seconds|round(2) }} seconds</p>
+                <p><strong>Messages:</strong> {{ phase_stats.processed_messages }}</p>
+                <p><strong>Conversations:</strong> {{ phase_stats.processed_conversations }}</p>
+                <p><strong>Messages per second:</strong> {{ phase_stats.messages_per_second|round(2) }}</p>
+            </div>
             {% endif %}
+            {% endfor %}
             {% endif %}
         </div>
         {% endif %}
+
+        <a href="{{ url_for('index') }}" class="button">Upload Another File</a>
     </div>
 </body>
 </html>
@@ -690,49 +813,82 @@ ERROR_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Error - Skype ETL Pipeline</title>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skype ETL Pipeline - Error</title>
     <style>
         body {
             font-family: Arial, sans-serif;
-            line-height: 1.6;
             margin: 0;
             padding: 20px;
             background-color: #f5f5f5;
         }
         .container {
-            max-width: 600px;
+            max-width: 800px;
             margin: 0 auto;
             background-color: white;
             padding: 20px;
             border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-            text-align: center;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
         }
         h1 {
-            color: #dc3545;
+            color: #0078d7;
+            text-align: center;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
             margin-bottom: 20px;
         }
-        .error-message {
-            margin-bottom: 20px;
-        }
-        .back-link {
-            display: inline-block;
+        .error {
             margin-top: 20px;
-            color: #007bff;
-            text-decoration: none;
+            padding: 15px;
+            background-color: #f2dede;
+            border-left: 5px solid #a94442;
+            color: #a94442;
+            border-radius: 4px;
         }
-        .back-link:hover {
-            text-decoration: underline;
+        .button {
+            display: inline-block;
+            background-color: #0078d7;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            text-decoration: none;
+            margin-top: 20px;
+        }
+        .button:hover {
+            background-color: #005a9e;
+        }
+        .logout {
+            background-color: #d9534f;
+        }
+        .logout:hover {
+            background-color: #c9302c;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Error</h1>
-        <div class="error-message">{{ error }}</div>
-        <a href="/" class="back-link">Back to Home</a>
+        <div class="header">
+            <h1>Skype ETL Pipeline</h1>
+            {% if username %}
+            <div>
+                <span>Welcome, {{ username }}</span>
+                <a href="{{ url_for('logout') }}"><button class="logout">Logout</button></a>
+            </div>
+            {% endif %}
+        </div>
+
+        <h2>Error</h2>
+
+        <div class="error">
+            <p>{{ error }}</p>
+        </div>
+
+        <a href="{{ url_for('index') }}" class="button">Return to Upload</a>
     </div>
 </body>
 </html>

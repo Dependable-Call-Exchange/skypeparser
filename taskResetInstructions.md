@@ -1,259 +1,149 @@
-# Enhanced Content Parsing - Development Context Summary
+# Development Context: ETLContext Implementation and Modular ETL Pipeline
 
 ## Task Overview & Current Status
 
 ### Core Problem/Feature
-The Enhanced Content Parsing feature addresses the need to better handle complex HTML content in Skype messages, particularly:
-- Extracting structured data from message content (mentions, links, quotes, formatting)
-- Preserving semantic meaning while cleaning up content
-- Handling Skype-specific elements like `<at>` tags for mentions
-- Providing fallback mechanisms when BeautifulSoup is not available
+We've implemented a shared context object (`ETLContext`) to manage state across the modular ETL pipeline components. This addresses the need for better coordination, state management, error handling, and telemetry across the Extract-Transform-Load process.
 
 ### Current Implementation Status
-✅ **COMPLETED**: The feature has been fully implemented with the following components:
-- Created a dedicated `content_extractor.py` module
-- Implemented a `ContentExtractor` class with specialized extraction methods
-- Added helper functions for formatting message content
-- Updated the core parser to use the new module
-- Added comprehensive unit tests
-- Created detailed documentation
+- ✅ Created `ETLContext` class with comprehensive state management capabilities
+- ✅ Updated all ETL components (Extractor, Transformer, Loader, Pipeline Manager) to use the context
+- ✅ Created unit tests for the ETLContext class
+- ✅ Fixed import path issues in the modular components
+- ✅ Created an example script demonstrating ETLContext usage
+- ✅ Updated documentation to reflect the new implementation
 
 ### Key Architectural Decisions
-
-1. **Separation of Concerns**:
-   - Moved content extraction logic from `core_parser.py` to a dedicated `content_extractor.py` module
-   - This improves maintainability and allows for more specialized handling of different content types
-
-2. **Class-based Design with Static Methods**:
-   - Used a class (`ContentExtractor`) with static methods for different extraction tasks
-   - This provides a clean API while avoiding unnecessary instantiation
-
-3. **Fallback Mechanisms**:
-   - Primary implementation uses BeautifulSoup for robust HTML parsing
-   - Fallback to regex patterns when BeautifulSoup is not available or fails
-   - This ensures the module works in all environments
-
-4. **Structured Data Format**:
-   - Standardized the format for extracted data (mentions, links, quotes, formatting)
-   - This makes it easier to use the extracted data in downstream processes
+1. **Shared Context Pattern**: Implemented a shared context object that's passed between components rather than using global state or complex parameter passing.
+2. **Phase-Based Processing**: Structured the ETL process into distinct phases (extract, transform, load) with clear start/end boundaries.
+3. **Centralized Telemetry**: Consolidated progress tracking, memory monitoring, and error recording in the context.
+4. **Checkpointing Capability**: Added support for creating checkpoints after phases to enable resumable operations.
+5. **Backward Compatibility**: Maintained compatibility with the legacy ETL pipeline through a compatibility layer.
 
 ### Critical Constraints/Requirements
-
-1. **Backward Compatibility**:
-   - Must maintain compatibility with existing code that uses the `content_parser` function
-   - The `tag_stripper` function was replaced with `format_content_with_markup`
-
-2. **Dependency Handling**:
-   - Must work with or without BeautifulSoup installed
-   - Uses the centralized dependency handling from `utils.dependencies`
-
-3. **Error Handling**:
-   - Must handle malformed HTML gracefully
-   - Includes comprehensive error handling and logging
-
-4. **Performance Considerations**:
-   - Optimized for processing large numbers of messages
-   - Avoids unnecessary processing when possible
+- Must maintain backward compatibility with existing code
+- Must support both synchronous and asynchronous processing
+- Must handle large datasets efficiently with memory monitoring
+- Must provide detailed telemetry for monitoring and debugging
 
 ## Codebase Navigation
 
 ### Key Files (Ranked by Importance)
 
-1. **`src/parser/content_extractor.py`** (NEW)
-   - **Role**: Core implementation of content extraction functionality
-   - **Modifications**: Created from scratch with the `ContentExtractor` class and helper functions
-   - **Key Components**:
-     - `ContentExtractor` class with methods for extracting different types of data
-     - `extract_content_data` function for extracting all structured data
-     - `format_content_with_markup` function for formatting message content
-     - `format_content_with_regex` function as a fallback
+1. **`src/db/etl/context.py`**
+   - **Role**: Defines the `ETLContext` class that manages shared state across ETL components
+   - **Modifications**: Created from scratch with methods for phase management, progress tracking, error recording, and checkpointing
 
-2. **`src/parser/core_parser.py`** (MODIFIED)
-   - **Role**: Core parsing functions for Skype export data
-   - **Modifications**:
-     - Updated `content_parser` to use the new content extraction module
-     - Updated `_process_message_content` to extract structured content data
-     - Removed redundant code that was moved to `content_extractor.py`
+2. **`src/db/etl/pipeline_manager.py`**
+   - **Role**: Orchestrates the ETL process by coordinating the Extractor, Transformer, and Loader
+   - **Modifications**: Updated to use ETLContext for state management instead of managing state internally
 
-3. **`src/parser/__init__.py`** (MODIFIED)
-   - **Role**: Defines the public API for the parser module
-   - **Modifications**:
-     - Added imports for the new content extraction module
-     - Removed `tag_stripper` from imports and `__all__`
-     - Added content extraction functions to `__all__`
+3. **`src/db/etl/extractor.py`**
+   - **Role**: Handles extraction of data from Skype export files
+   - **Modifications**: Updated to use ETLContext for state management and fixed import paths
 
-4. **`src/parser/file_output.py`** (MODIFIED)
-   - **Role**: Handles exporting parsed data to various file formats
-   - **Modifications**:
-     - Updated imports to use `format_content_with_markup` instead of `tag_stripper`
-     - Updated code that used `tag_stripper` to use `format_content_with_markup`
+4. **`src/db/etl/transformer.py`**
+   - **Role**: Transforms raw data into a structured format
+   - **Modifications**: Updated to use ETLContext for state management and fixed import paths
 
-5. **`tests/unit/test_content_extractor.py`** (NEW)
-   - **Role**: Unit tests for the content extraction module
-   - **Modifications**: Created from scratch with comprehensive tests for all functions
-   - **Key Components**:
-     - Tests for extracting mentions, links, quotes, and formatting
-     - Tests for formatting message content
-     - Tests for handling edge cases and errors
+5. **`src/db/etl/loader.py`**
+   - **Role**: Loads transformed data into the database
+   - **Modifications**: Updated to use ETLContext for state management and fixed import paths
 
-6. **`tests/unit/test_core_parser.py`** (MODIFIED)
-   - **Role**: Unit tests for the core parser module
-   - **Modifications**:
-     - Updated imports to use `format_content_with_markup` instead of `tag_stripper`
-     - Removed test for `tag_stripper` function
+6. **`src/db/etl/utils.py`**
+   - **Role**: Provides utility classes for progress tracking and memory monitoring
+   - **Modifications**: No changes needed as it's used by the ETLContext
 
-7. **`docs/content_extraction.md`** (NEW)
-   - **Role**: Documentation for the content extraction module
-   - **Modifications**: Created from scratch with comprehensive documentation
-   - **Key Components**:
-     - Overview of the module
-     - Description of components and functions
-     - Usage examples
-     - Structured data format
-     - Supported HTML elements
-     - Integration with core parser
+7. **`src/db/etl/__init__.py`**
+   - **Role**: Exports the ETL module components
+   - **Modifications**: Updated to export the ETLContext class
 
-8. **`README.md`** (MODIFIED)
-   - **Role**: Main project documentation
-   - **Modifications**:
-     - Added information about the new content extraction module
-     - Updated project structure to include `content_extractor.py`
-     - Added "Advanced content extraction" to features list
+8. **`src/db/etl_pipeline_compat.py`**
+   - **Role**: Provides backward compatibility with the legacy ETL pipeline
+   - **Modifications**: Updated to use ETLContext internally
+
+9. **`tests/unit/test_etl_context.py`**
+   - **Role**: Unit tests for the ETLContext class
+   - **Modifications**: Created from scratch to test all ETLContext functionality
+
+10. **`examples/etl_context_example.py`**
+    - **Role**: Demonstrates how to use the ETLContext with the modular ETL pipeline
+    - **Modifications**: Created from scratch as an example
 
 ### Dependencies and Configurations
-
-1. **BeautifulSoup (Optional)**:
-   - Used for robust HTML parsing
-   - Handled through `utils.dependencies` module
-   - Falls back to regex patterns if not available
-
-2. **Logging Configuration**:
-   - Uses the standard logging module
-   - Logs warnings and errors for debugging purposes
+- **psutil**: Required for memory monitoring in the ETLContext
+- **PostgreSQL**: Required for the database operations in the Loader
+- **Python 3.6+**: Required for type hints and other language features
 
 ## Technical Context
 
-### Non-obvious Technical Assumptions
+### Technical Assumptions
+1. The ETL pipeline processes one file at a time
+2. The ETL process is divided into three distinct phases: extract, transform, load
+3. The database schema is already created and matches the expected structure
+4. The ETL process may be memory-intensive for large datasets
 
-1. **HTML Structure in Skype Messages**:
-   - Skype messages use specific HTML elements like `<at>` for mentions
-   - Links are formatted as `<a href="url">link text</a>`
-   - Quotes are formatted as `<quote author="name">text</quote>`
-
-2. **Message Processing Flow**:
-   - The `content_parser` function is called by `_process_message_content`
-   - Structured data is stored in the `structured_content` field of the message
-
-3. **Line Break Handling**:
-   - Line breaks in HTML (`<br>`) should be preserved as newlines in the output
-   - This required special handling in the whitespace cleanup code
+### External Services/APIs
+- **PostgreSQL Database**: Used for storing the processed data
+- **File System**: Used for reading input files and optionally saving intermediate results
 
 ### Performance Considerations
-
-1. **BeautifulSoup vs. Regex**:
-   - BeautifulSoup is more robust but slower than regex
-   - Regex is used as a fallback for performance when BeautifulSoup is not available
-
-2. **Selective Extraction**:
-   - The module only extracts data that is present in the content
-   - This avoids unnecessary processing for messages without specific elements
-
-3. **Whitespace Handling**:
-   - Special care was taken to efficiently clean up whitespace while preserving line breaks
-   - This improves readability without sacrificing performance
+1. **Memory Management**: The ETLContext includes memory monitoring to prevent out-of-memory errors
+2. **Parallel Processing**: The Transformer supports parallel processing for large datasets
+3. **Chunked Processing**: Messages are processed in chunks to reduce memory usage
+4. **Batch Database Operations**: The Loader uses batch inserts for better database performance
 
 ### Security Considerations
-
-1. **HTML Sanitization**:
-   - The module does not sanitize HTML input (assumes it's already safe)
-   - It focuses on extraction and formatting, not security
-
-2. **HTML Entity Decoding**:
-   - HTML entities are decoded using `html.unescape`
-   - This could potentially introduce security issues if the input is not trusted
+1. **Database Credentials**: Stored in the ETLContext and passed to the Loader
+2. **Input Validation**: The Extractor validates input files before processing
+3. **Error Handling**: Errors are recorded in the ETLContext for later analysis
 
 ## Development Progress
 
 ### Last Completed Milestone
-✅ Successfully implemented the Enhanced Content Parsing feature, including:
-- Created the `content_extractor.py` module
-- Updated the core parser to use the new module
-- Added comprehensive unit tests
-- Created detailed documentation
-- Fixed import issues and ensured backward compatibility
+- Implemented the ETLContext class and updated all ETL components to use it
+- Fixed import path issues in the modular components
+- Created unit tests for the ETLContext class
+- Created an example script demonstrating ETLContext usage
+- Updated documentation to reflect the new implementation
 
 ### Immediate Next Steps
-1. Fix remaining test failures in other modules:
-   - Some tests are still failing due to the removal of `tag_stripper`
-   - Need to update `test_message_types.py` to handle the new config format
+1. Implement integration tests for the modular ETL pipeline with ETLContext
+2. Add support for resuming from checkpoints in the ETLPipeline class
+3. Enhance error recovery mechanisms in the ETL components
+4. Optimize memory usage further for very large datasets
+5. Add more detailed telemetry for monitoring and debugging
 
-2. Consider adding support for additional Skype message elements:
-   - Emoticons and emojis
-   - Tables and other complex HTML structures
-   - Custom Skype elements not currently handled
-
-3. Improve performance for large datasets:
-   - Consider adding caching for frequently processed content
-   - Optimize regex patterns for better performance
-
-### Known Issues
-1. **Test Failures**:
-   - Several tests are failing in the full test suite
-   - Most failures are related to the ETL pipeline and database operations
-   - These failures are not directly related to the content extraction module
-
-2. **Message Type Handling**:
-   - The `type_parser` function has issues with the new config format
-   - This needs to be fixed to ensure proper message type handling
+### Known Issues/Technical Debt
+1. The compatibility layer (`etl_pipeline_compat.py`) needs more comprehensive testing
+2. Some error handling scenarios may not be fully covered
+3. The memory monitoring could be more sophisticated (e.g., predicting memory usage)
+4. Documentation for advanced usage scenarios could be improved
 
 ### Attempted Approaches That Didn't Work
-1. **Simple Regex Replacement**:
-   - Initially tried to use simple regex patterns to extract and format content
-   - This approach was not robust enough for complex HTML structures
-   - Switched to BeautifulSoup with regex fallback for better results
-
-2. **Preserving Line Breaks with `\s+` Regex**:
-   - Initially used `re.sub(r'\s+', ' ', text)` to clean up whitespace
-   - This removed line breaks, which was not desired
-   - Changed to more specific regex patterns that preserve line breaks
+1. **Global State Management**: Initially considered using global variables or a singleton for state management, but this created tight coupling and made testing difficult
+2. **Parameter Passing**: Tried passing state through method parameters, but this became unwieldy with many parameters
+3. **Event-Based Communication**: Considered an event system for component communication, but this added complexity without clear benefits
 
 ## Developer Notes
 
 ### Codebase Structure Insights
-1. **Dependency Handling**:
-   - The project uses a centralized dependency handling approach in `utils.dependencies`
-   - This makes it easy to handle optional dependencies like BeautifulSoup
+1. The modular ETL pipeline follows a clear separation of concerns with distinct components for each phase
+2. The ETLContext serves as a central hub for state management, reducing coupling between components
+3. The compatibility layer allows for a gradual transition from the legacy pipeline to the modular approach
 
-2. **Error Handling Pattern**:
-   - The project uses a consistent error handling pattern with custom exceptions
-   - Each function includes try/except blocks with specific error messages
-
-3. **Testing Infrastructure**:
-   - The project has a comprehensive testing infrastructure
-   - Tests are organized by module and can be run individually or all at once
-
-### Workarounds and Temporary Solutions
-1. **Line Break Handling**:
-   - The current solution for preserving line breaks while cleaning up whitespace is a bit complex
-   - A more elegant solution might be possible in the future
-
-2. **BeautifulSoup Fallback**:
-   - The fallback to regex when BeautifulSoup fails is a temporary solution
-   - A more robust approach might be to use a different HTML parser as a secondary fallback
+### Workarounds/Temporary Solutions
+1. The import path issues were fixed by changing relative imports to absolute imports, but a more consistent import strategy could be implemented
+2. The memory monitoring currently uses a simple threshold approach, but could be enhanced with more sophisticated algorithms
 
 ### Areas Needing Attention
-1. **Message Type Handling**:
-   - The integration with message type handling needs careful attention
-   - The `type_parser` function needs to be updated to work with the new config format
+1. **Error Recovery**: The error handling and recovery mechanisms need further development
+2. **Checkpoint Resumption**: The ability to resume from checkpoints needs to be fully implemented
+3. **Performance Testing**: More comprehensive performance testing with large datasets is needed
+4. **Documentation**: The documentation should be expanded to cover more advanced usage scenarios
+5. **API Integration**: The integration with the API layer needs to be updated to use the new ETLContext
 
-2. **Database Schema**:
-   - The database schema includes a `structured_data` column for storing extracted data
-   - This needs to be properly populated with the extracted structured data
-
-3. **Performance Optimization**:
-   - The content extraction process could be a bottleneck for large datasets
-   - Further optimization might be needed for production use
-
-4. **Test Coverage**:
-   - While the content extraction module has good test coverage, some edge cases might not be covered
-   - Additional tests for complex HTML structures would be beneficial
+### Testing Considerations
+1. Unit tests for the ETLContext are in place, but integration tests are needed
+2. Performance tests should be updated to use the ETLContext
+3. Edge cases like memory limits and error scenarios need more thorough testing

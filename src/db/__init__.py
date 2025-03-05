@@ -9,9 +9,13 @@ a complete Extract-Transform-Load pipeline for Skype export data.
 
 import warnings
 
-# Import the ETL pipeline
-from .etl_pipeline import (
+# Import the ETL pipeline (now using the compatibility layer)
+from .etl_pipeline_compat import (
     SkypeETLPipeline,
+)
+
+# Import the database schema definitions from the modular ETL pipeline
+from .etl.loader import (
     RAW_EXPORTS_TABLE,
     CONVERSATIONS_TABLE,
     MESSAGES_TABLE

@@ -2,170 +2,176 @@
 
 ## Architectural Overview
 
-![ETL Pipeline Architecture](diagrams/etl_architecture_v2.png)
+The ETL pipeline has been modularized to improve maintainability, testability, and extensibility. The new architecture separates the ETL process into distinct components with clear responsibilities.
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  Extractor  │────▶│ Transformer │────▶│   Loader    │
+└─────────────┘     └─────────────┘     └─────────────┘
+       ▲                  ▲                   ▲
+       │                  │                   │
+       └──────────────────┼───────────────────┘
+                          │
+                   ┌─────────────┐
+                   │ ETLPipeline │
+                   └─────────────┘
+```
 
 ## Core Components
 
-### 1. Centralized Management
-```python
+### 1. Implemented Structure
+```
 src/db/etl/
-├── context.py          # ETLContext, ConfigManager
-├── coordination/       # TransactionCoordinator, CheckpointManager
-└── telemetry/          # TelemetryCollector, MetricsRegistry
+├── __init__.py         # Public interface
+├── extractor.py        # Extraction logic
+├── transformer.py      # Transformation logic
+├── loader.py           # Loading logic
+├── pipeline_manager.py # Orchestration
+└── utils.py            # Shared utilities
 ```
 
-### 2. Modular Components
-```python
-src/db/etl/
-├── extract/
-│   ├── file_handlers/  # TarHandler, JsonHandler, StreamHandler
-│   └── validator.py    # Schema validation
-├── transform/
-│   ├── processors/     # MessageProcessor, ConversationProcessor
-│   └── normalizer.py   # Data normalization
-└── load/
-    ├── storage/       # DatabaseStorage, FileStorage
-    └── batcher.py     # Batch processing
+### 2. Compatibility Layer
+```
+src/db/
+├── etl/                # Modular implementation
+└── etl_pipeline_compat.py # Compatibility layer
 ```
 
-## Key Improvements from Analysis
+## Key Improvements from Implementation
 
-### 1. State Management
+### 1. Single Responsibility Principle
+Each component has a single responsibility:
+- **Extractor**: Handles file reading and validation
+- **Transformer**: Processes raw data into structured format
+- **Loader**: Manages database operations
+- **ETLPipeline**: Orchestrates the ETL process
+
+### 2. Progress Tracking and Memory Monitoring
 ```python
-class ETLContext:
-    def __init__(self):
-        self.progress = ProgressTracker()
-        self.memory = MemoryMonitor()
-        self.config = ConfigManager()
-        self.telemetry = TelemetryCollector()
-        self.checkpoints = CheckpointManager()
+class ETLPipeline:
+    def __init__(self, db_config, output_dir=None, memory_limit_mb=1024):
+        self.progress_tracker = ProgressTracker()
+        self.memory_monitor = MemoryMonitor(memory_limit_mb=memory_limit_mb)
+
+    def _run_extraction_phase(self, file_path, file_obj, results):
+        self.progress_tracker.start_phase('extract')
+        self.memory_monitor.check_memory()
+
+        raw_data = self.extractor.extract(file_path=file_path, file_obj=file_obj)
+
+        self.memory_monitor.check_memory()
+        phase_stats = self.progress_tracker.finish_phase()
+        results['phases']['extract'] = phase_stats
+
+        return raw_data
 ```
 
-### 2. Transaction Handling
+### 3. Detailed Phase Statistics
 ```python
-class AtomicETL:
-    def execute(self):
-        with TransactionCoordinator() as tx:
-            self.extract(tx)
-            self.transform(tx)
-            self.load(tx)
-
-            if self.context.checkpoints:
-                self.save_state()
-```
-
-### 3. Resilient Processing
-```python
-class CheckpointManager:
-    def save_state(self, phase: str, data: dict):
-        """Compressed serialization with incremental diffs"""
-        state = {
-            'phase': phase,
-            'data': compress(data),
-            'timestamp': datetime.utcnow()
+class ProgressTracker:
+    def finish_phase(self) -> Dict[str, Any]:
+        stats = {
+            'phase': self.phase,
+            'total_conversations': self.total_conversations,
+            'processed_conversations': self.processed_conversations,
+            'total_messages': self.total_messages,
+            'processed_messages': self.processed_messages,
+            'duration_seconds': duration,
+            'messages_per_second': self.processed_messages / duration if duration > 0 else 0
         }
-        self.storage.save(state)
 
-    def recover(self) -> dict:
-        """Automatically resume from last valid state"""
-        return self.load_latest_valid()
+        return stats
 ```
 
 ### 4. Performance Optimization
 ```python
-class TransformOptimizer:
-    def __init__(self):
-        self.cache = LRUCache(maxsize=1000)
-        self.batch_queue = PriorityQueue()
+class Transformer:
+    def __init__(self, parallel_processing=True, chunk_size=1000):
+        self.parallel_processing = parallel_processing
+        self.chunk_size = chunk_size
 
-    def process_message(self, msg):
-        if msg_hash in self.cache:
-            return self.cache[msg_hash]
+    def _process_messages(self, conv_id, messages, transformed_data, id_to_display_name):
+        # Sort messages by timestamp
+        sorted_messages = sorted(messages, key=lambda x: x.get('originalarrivaltime', ''))
 
-        # Process and cache
-        result = self._process(msg)
-        self.cache[msg_hash] = result
-        return result
+        # Process in chunks
+        for i in range(0, len(sorted_messages), self.chunk_size):
+            chunk = sorted_messages[i:i + self.chunk_size]
+            self._process_message_batch(conv_id, chunk, transformed_data, id_to_display_name)
 ```
 
-## Implementation Roadmap
+## Implementation Status
 
-### Phase 1: Foundation (2 Weeks)
-1. Implement core context system
-2. Build configuration service
-3. Set up telemetry infrastructure
-4. Create baseline performance tests
+### Phase 1: Foundation (Completed)
+1. ✅ Created modular components with clear responsibilities
+2. ✅ Implemented progress tracking and memory monitoring
+3. ✅ Added detailed phase statistics
+4. ✅ Created compatibility layer for backward compatibility
 
-### Phase 2: Modular Migration (3 Weeks)
-1. Extract components with adapter pattern:
-   ```python
-   class LegacyAdapter:
-       def run_pipeline(self):
-           return NewETL().run()
-   ```
-2. Implement checkpoint system
-3. Add transaction coordination
-4. Develop comprehensive integration tests
+### Phase 2: Testing (Completed)
+1. ✅ Created unit tests for each component
+2. ✅ Created integration tests for the complete pipeline
+3. ✅ Added performance tests to compare old and new implementations
 
-### Phase 3: Optimization (1 Week)
-1. Profile and optimize critical paths
-2. Implement caching strategies
-3. Finalize monitoring integration
-4. Conduct load testing
+### Phase 3: Documentation (Completed)
+1. ✅ Updated migration guide with modular pipeline information
+2. ✅ Created README for the modular ETL pipeline
+3. ✅ Updated example scripts to use the modular pipeline
 
-### Phase 4: Transition (1 Week)
-1. Parallel run validation
-2. Feature flag rollout
-3. Documentation finalization
-4. Operational handoff
+### Phase 4: Future Enhancements
+1. ⬜ Implement checkpoint system for resumable processing
+2. ⬜ Add transaction coordination for improved reliability
+3. ⬜ Implement caching strategies for better performance
+4. ⬜ Add telemetry collection for monitoring
 
-## Risk Mitigation Table
+## Performance Comparison
 
-| Risk | Probability | Impact | Mitigation Strategy |
-|------|-------------|--------|---------------------|
-| Data corruption during migration | Medium | High | Shadow mode testing with reconciliation |
-| Performance degradation | High | Medium | Gradual cutover with load shedding |
-| Transaction integrity loss | Low | Critical | Two-phase commit protocol |
-| Monitoring gaps | Medium | Medium | Synthetic transaction monitoring |
+Performance tests have been implemented to compare the original ETL pipeline with the new modular ETL pipeline. The tests measure:
 
-## Monitoring Requirements
+- **Execution Time**: Time taken to process the data
+- **Memory Usage**: Memory consumed during processing
+- **CPU Usage**: CPU utilization during processing
 
-```yaml
-# telemetry_config.yaml
-metrics:
-  - name: extraction_rate
-    type: gauge
-    labels: [source_type]
-  - name: transformation_errors
-    type: counter
-    labels: [error_code]
+The tests are run with different dataset sizes (small, medium, large) and different dataset types (basic, complex).
 
-alerts:
-  - name: high_memory_usage
-    condition: memory_usage > 90%
-    severity: critical
-```
+## Migration Guide
+
+A comprehensive migration guide has been created to help users transition from the old ETL pipeline to the new modular ETL pipeline. The guide includes:
+
+- **Basic Usage**: How to use the modular ETL pipeline
+- **Advanced Usage**: How to customize the pipeline behavior
+- **Individual Components**: How to use the individual components directly
+- **Compatibility Layer**: How to use the compatibility layer for backward compatibility
+
+## Testing Strategy
+
+The modular ETL pipeline has been thoroughly tested with:
+
+- **Unit Tests**: Tests for each component in isolation
+- **Integration Tests**: Tests for the complete pipeline
+- **Performance Tests**: Tests to compare performance with the original pipeline
 
 ## Documentation Plan
 
-1. **Architecture Decision Records**
-   - ADR-001: Modularization Strategy
-   - ADR-002: Transaction Handling
+1. **Component Documentation**
+   - README.md for the modular ETL pipeline
+   - Docstrings for all classes and methods
 
-2. **Operational Guide**
-   - Failure Recovery Procedures
-   - Performance Tuning Handbook
+2. **Usage Examples**
+   - Basic usage example
+   - Advanced usage example
+   - Web integration example
 
-3. **Developer Documentation**
-   - Module Interaction Contracts
-   - Extension Points Guide
+3. **Migration Guide**
+   - How to migrate from the old ETL pipeline
+   - Compatibility considerations
 
 ## Migration Checklist
 
-- [ ] Legacy compatibility tests passing
-- [ ] Performance parity verified
-- [ ] Monitoring dashboards operational
-- [ ] Rollback procedure documented
-- [ ] Team training completed
-
-This revised strategy addresses critical analysis findings through systematic state management, transactional guarantees, and phased risk mitigation. The implementation plan balances structural improvements with operational stability.
+- [x] Modular components implemented
+- [x] Unit tests passing
+- [x] Integration tests passing
+- [x] Performance tests implemented
+- [x] Documentation updated
+- [x] Examples updated
+- [x] Compatibility layer implemented
