@@ -131,13 +131,27 @@ def output_structured_data(structured_data: Dict[str, Any], output_format: str,
                 with open(csv_filename, 'w', encoding='utf-8', newline='\n') as f:
                     # Define CSV writer and headers
                     csv_writer = csv.writer(f)
-                    headers = ['timestamp', 'date', 'time', 'from_id', 'from_name', 'type', 'is_edited', 'content']
+
+                    # Enhanced headers with structured data fields
+                    headers = [
+                        'timestamp', 'date', 'time', 'from_id', 'from_name', 'type', 'is_edited', 'content',
+                        # Media fields
+                        'media_filename', 'media_filesize', 'media_filetype', 'media_url',
+                        # Poll fields
+                        'poll_question', 'poll_options',
+                        # Location fields
+                        'location_latitude', 'location_longitude', 'location_address'
+                    ]
                     csv_writer.writerow(headers)
 
                     # Check if messages is a list (expected structure)
                     if 'messages' in conv_data and isinstance(conv_data['messages'], list):
                         # Write each message as a row
                         for msg in conv_data['messages']:
+                            # Extract structured data if available
+                            structured_data = msg.get('structuredData', {})
+
+                            # Basic message fields
                             row = [
                                 msg.get('timestamp', ''),
                                 msg.get('date', ''),
@@ -148,6 +162,29 @@ def output_structured_data(structured_data: Dict[str, Any], output_format: str,
                                 msg.get('is_edited', False),
                                 msg.get('content', '')
                             ]
+
+                            # Media fields
+                            row.extend([
+                                structured_data.get('media_filename', ''),
+                                structured_data.get('media_filesize_formatted', structured_data.get('media_filesize', '')),
+                                structured_data.get('media_filetype', ''),
+                                structured_data.get('media_url', '')
+                            ])
+
+                            # Poll fields
+                            poll_options = structured_data.get('poll_options', [])
+                            row.extend([
+                                structured_data.get('poll_question', ''),
+                                '; '.join(poll_options) if poll_options else ''
+                            ])
+
+                            # Location fields
+                            row.extend([
+                                structured_data.get('location_latitude', ''),
+                                structured_data.get('location_longitude', ''),
+                                structured_data.get('location_address', '')
+                            ])
+
                             csv_writer.writerow(row)
                     else:
                         logger.warning(f"No valid messages found for conversation {conv_id}")
@@ -259,6 +296,8 @@ def export_conversations_to_text(structured_data: Dict[str, Any], output_dir: st
                 time_str = msg.get('time', '')
                 from_name = msg.get('from_name', '')
                 content_raw = msg.get('content_raw', '')
+                msg_type = msg.get('type', '')
+                structured_data = msg.get('structuredData', {})
 
                 # Add date header if new date
                 if date_str and date_str not in date_set:
@@ -267,6 +306,58 @@ def export_conversations_to_text(structured_data: Dict[str, Any], output_dir: st
 
                 # Add message
                 compiled_message += f"[{time_str}] {from_name}: {content_raw}\n"
+
+                # Add structured data for special message types
+                if structured_data:
+                    # Handle media data
+                    if any(key.startswith('media_') for key in structured_data.keys()):
+                        media_filename = structured_data.get('media_filename', '')
+                        media_filesize = structured_data.get('media_filesize_formatted',
+                                                           structured_data.get('media_filesize', ''))
+                        media_url = structured_data.get('media_url', '')
+
+                        if media_filename or media_url:
+                            compiled_message += f"    File: {media_filename}\n"
+                        if media_filesize:
+                            compiled_message += f"    Size: {media_filesize}\n"
+                        if media_url:
+                            compiled_message += f"    URL: {media_url}\n"
+
+                    # Handle poll data
+                    if 'poll_question' in structured_data:
+                        poll_question = structured_data.get('poll_question', '')
+                        poll_options = structured_data.get('poll_options', [])
+
+                        if poll_question:
+                            compiled_message += f"    Poll Question: {poll_question}\n"
+                        if poll_options:
+                            compiled_message += "    Poll Options:\n"
+                            for option in poll_options:
+                                compiled_message += f"      - {option}\n"
+
+                    # Handle location data
+                    if any(key.startswith('location_') for key in structured_data.keys()):
+                        location_address = structured_data.get('location_address', '')
+                        location_latitude = structured_data.get('location_latitude', '')
+                        location_longitude = structured_data.get('location_longitude', '')
+
+                        if location_address:
+                            compiled_message += f"    Location: {location_address}\n"
+                        if location_latitude and location_longitude:
+                            compiled_message += f"    Coordinates: {location_latitude}, {location_longitude}\n"
+
+                    # Handle call data
+                    if 'call_duration' in structured_data:
+                        call_duration = structured_data.get('call_duration', '')
+                        call_participants = structured_data.get('call_participants', [])
+
+                        if call_duration:
+                            compiled_message += f"    Call Duration: {call_duration}\n"
+                        if call_participants:
+                            compiled_message += "    Call Participants:\n"
+                            for participant in call_participants:
+                                name = participant.get('name', '')
+                                compiled_message += f"      - {name}\n"
 
             # Write to file
             try:

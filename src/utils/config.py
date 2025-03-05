@@ -47,6 +47,15 @@ DEFAULT_CONFIG = {
     'default_message_format': '***Sent a {message_type}***'
 }
 
+# Default performance configuration
+DEFAULT_PERFORMANCE_CONFIG = {
+    'chunk_size': 1000,  # Number of messages to process in each chunk
+    'db_batch_size': 100,  # Number of messages to insert in each database batch
+    'use_parallel_processing': False,  # Whether to use parallel processing for conversations
+    'max_workers': None,  # Maximum number of worker threads (None = CPU count)
+    'memory_limit_mb': 1024,  # Memory limit in MB before forcing garbage collection
+}
+
 def load_config(config_file: Optional[str] = None, message_types_file: Optional[str] = None) -> Dict[str, Any]:
     """
     Load configuration from environment variables and optionally from JSON files.
@@ -111,6 +120,11 @@ def load_config(config_file: Optional[str] = None, message_types_file: Optional[
         config['logging']['level'] = os.getenv('LOG_LEVEL')
     if os.getenv('LOG_FILE'):
         config['logging']['file'] = os.getenv('LOG_FILE')
+
+    # Add default performance configuration if not present
+    for key, value in DEFAULT_PERFORMANCE_CONFIG.items():
+        if key not in config:
+            config[key] = value
 
     return config
 

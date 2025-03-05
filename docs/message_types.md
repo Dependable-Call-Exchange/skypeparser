@@ -326,3 +326,93 @@ For topic updates and other value-based activities:
     "activity_initiator": "John Doe"
 }
 ```
+
+### Export Formats with Structured Data
+
+The structured data extracted from different message types is included in all export formats:
+
+#### JSON Export
+
+In JSON exports, the structured data is included directly in the message object under the `structuredData` key:
+
+```json
+{
+  "timestamp": "2023-01-01T12:00:00Z",
+  "from_name": "John Doe",
+  "content": "***Sent a video***",
+  "structuredData": {
+    "media_filename": "vacation.mp4",
+    "media_filesize": "10485760",
+    "media_filesize_formatted": "10.0 MB",
+    "media_filetype": "video/mp4",
+    "media_url": "https://example.com/videos/vacation.mp4",
+    "media_thumbnail_url": "https://example.com/thumbnails/vacation.jpg",
+    "media_width": "1920",
+    "media_height": "1080",
+    "media_duration": "00:02:30",
+    "media_description": "Our summer vacation"
+  }
+}
+```
+
+#### CSV Export
+
+In CSV exports, common structured data fields are included as additional columns:
+
+- Media fields: `media_filename`, `media_filesize`, `media_filetype`, `media_url`
+- Poll fields: `poll_question`, `poll_options`
+- Location fields: `location_latitude`, `location_longitude`, `location_address`
+
+#### Text Export
+
+In text exports, structured data is included as additional lines after the message content:
+
+```
+[12:00:00] John Doe: ***Sent a video***
+    File: vacation.mp4
+    Size: 10.0 MB
+    URL: https://example.com/videos/vacation.mp4
+```
+
+For polls:
+
+```
+[12:00:00] John Doe: ***Created a poll***
+    Poll Question: What's your favorite color?
+    Poll Options:
+      - Red
+      - Green
+      - Blue
+```
+
+### Database Schema for Structured Data
+
+The database schema has been updated to store structured data in a JSONB column:
+
+```sql
+CREATE TABLE IF NOT EXISTS skype_messages (
+    id SERIAL PRIMARY KEY,
+    message_id VARCHAR(255) UNIQUE,
+    conversation_id VARCHAR(255) REFERENCES skype_conversations(conversation_id),
+    timestamp TIMESTAMP,
+    from_id VARCHAR(255),
+    from_name VARCHAR(255),
+    content TEXT,
+    content_raw TEXT,
+    message_type VARCHAR(50),
+    is_edited BOOLEAN DEFAULT FALSE,
+    structured_data JSONB,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+The `structured_data` column stores the extracted structured data in JSON format, allowing for flexible querying and indexing of the structured data fields.
+
+For specialized storage, the clean storage module also includes dedicated tables for different types of structured data:
+
+- `clean_skype_message_media`: Stores media-specific data
+- `clean_skype_message_polls`: Stores poll questions and options
+- `clean_skype_message_locations`: Stores location data
+
+This dual approach provides both flexibility (through the JSONB column) and structured querying capabilities (through the specialized tables).

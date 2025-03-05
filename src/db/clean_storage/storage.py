@@ -13,10 +13,17 @@ from .models import (
     CREATE_CLEAN_TABLES_SQL,
     INSERT_CONVERSATION_SQL,
     INSERT_MESSAGE_SQL,
+    INSERT_MEDIA_SQL,
+    INSERT_POLL_SQL,
+    INSERT_POLL_OPTION_SQL,
+    INSERT_LOCATION_SQL,
     GET_CONVERSATIONS_SQL,
     GET_MESSAGES_SQL,
     GET_CONVERSATION_BY_ID_SQL,
-    GET_MESSAGE_BY_ID_SQL
+    GET_MESSAGE_BY_ID_SQL,
+    GET_MEDIA_BY_MESSAGE_ID_SQL,
+    GET_POLL_BY_MESSAGE_ID_SQL,
+    GET_LOCATION_BY_MESSAGE_ID_SQL
 )
 
 # Set up logging
@@ -135,12 +142,13 @@ class SkypeCleanDataStorage:
         conversation_id: str,
         timestamp: datetime,
         sender_id: str,
-        sender_name: Optional[str] = None,
-        message_type: Optional[str] = None,
-        content: Optional[str] = None,
-        raw_content: Optional[str] = None,
-        is_edited: bool = False
-    ) -> Optional[int]:
+        sender_name: str,
+        message_type: str,
+        content: str,
+        raw_content: str,
+        is_edited: bool = False,
+        structured_data: Optional[Dict[str, Any]] = None
+    ) -> int:
         """
         Store a message in the database.
 
@@ -150,43 +158,114 @@ class SkypeCleanDataStorage:
             timestamp: Timestamp of the message
             sender_id: ID of the sender
             sender_name: Name of the sender
-            message_type: Type of the message
-            content: Processed content of the message
+            message_type: Type of message
+            content: Cleaned content of the message
             raw_content: Raw content of the message
             is_edited: Whether the message has been edited
+            structured_data: Structured data extracted from the message
 
         Returns:
-            Optional[int]: ID of the inserted record, or None if the message already exists
+            int: ID of the inserted message
         """
         conn = self.get_connection()
         try:
             with conn.cursor() as cur:
+                # Insert the message
                 cur.execute(
                     INSERT_MESSAGE_SQL,
                     (
-                        message_id,
-                        conversation_id,
-                        timestamp,
-                        sender_id,
-                        sender_name,
-                        message_type,
-                        content,
-                        raw_content,
-                        is_edited
+                        message_id, conversation_id, timestamp, sender_id,
+                        sender_name, message_type, content, raw_content, is_edited,
+                        Json(structured_data) if structured_data else None
                     )
                 )
                 result = cur.fetchone()
-                message_db_id = result[0] if result else None
+
+                # If structured data is provided, store specific data in specialized tables
+                if structured_data and result:
+                    message_db_id = result[0]
+                    self._store_specialized_data(cur, message_id, structured_data)
+
             conn.commit()
-            if message_db_id:
-                logger.debug(f"Stored message {message_id} with ID: {message_db_id}")
-            return message_db_id
+            return result[0] if result else None
         except Exception as e:
-            logger.error(f"Failed to store message {message_id}: {e}")
+            logger.error(f"Failed to store message: {e}")
             conn.rollback()
             raise
         finally:
             self.return_connection(conn)
+
+    def _store_specialized_data(self, cursor, message_id: str, structured_data: Dict[str, Any]) -> None:
+        """
+        Store specialized data in appropriate tables based on message type.
+
+        Args:
+            cursor: Database cursor
+            message_id: ID of the message
+            structured_data: Structured data extracted from the message
+        """
+        # Store media data if present
+        if any(key.startswith('media_') for key in structured_data.keys()):
+            self._store_media_data(cursor, message_id, structured_data)
+
+        # Store poll data if present
+        if 'poll_question' in structured_data and 'poll_options' in structured_data:
+            self._store_poll_data(cursor, message_id, structured_data)
+
+        # Store location data if present
+        if any(key.startswith('location_') for key in structured_data.keys()):
+            self._store_location_data(cursor, message_id, structured_data)
+
+    def _store_media_data(self, cursor, message_id: str, structured_data: Dict[str, Any]) -> None:
+        """Store media data in the media table."""
+        cursor.execute(
+            INSERT_MEDIA_SQL,
+            (
+                message_id,
+                structured_data.get('media_filename', ''),
+                int(structured_data.get('media_filesize', 0)) if structured_data.get('media_filesize', '').isdigit() else 0,
+                structured_data.get('media_filetype', ''),
+                structured_data.get('media_url', ''),
+                structured_data.get('media_thumbnail_url', ''),
+                int(structured_data.get('media_width', 0)) if structured_data.get('media_width', '').isdigit() else None,
+                int(structured_data.get('media_height', 0)) if structured_data.get('media_height', '').isdigit() else None,
+                structured_data.get('media_duration', ''),
+                structured_data.get('media_description', '')
+            )
+        )
+
+    def _store_poll_data(self, cursor, message_id: str, structured_data: Dict[str, Any]) -> None:
+        """Store poll data in the poll tables."""
+        # Insert poll
+        cursor.execute(
+            INSERT_POLL_SQL,
+            (
+                message_id,
+                structured_data.get('poll_question', '')
+            )
+        )
+        poll_result = cursor.fetchone()
+
+        if poll_result and 'poll_options' in structured_data:
+            poll_id = poll_result[0]
+            # Insert poll options
+            for option in structured_data['poll_options']:
+                cursor.execute(
+                    INSERT_POLL_OPTION_SQL,
+                    (poll_id, option)
+                )
+
+    def _store_location_data(self, cursor, message_id: str, structured_data: Dict[str, Any]) -> None:
+        """Store location data in the location table."""
+        cursor.execute(
+            INSERT_LOCATION_SQL,
+            (
+                message_id,
+                structured_data.get('location_latitude', ''),
+                structured_data.get('location_longitude', ''),
+                structured_data.get('location_address', '')
+            )
+        )
 
     def get_conversations(self, raw_export_id: int) -> List[Dict[str, Any]]:
         """
@@ -210,21 +289,44 @@ class SkypeCleanDataStorage:
 
     def get_messages(self, conversation_id: str) -> List[Dict[str, Any]]:
         """
-        Get all messages for a conversation.
+        Get all messages for a conversation with structured data.
 
         Args:
             conversation_id: ID of the conversation
 
         Returns:
-            List[Dict[str, Any]]: List of message data
+            list: List of message data
         """
         conn = self.get_connection()
         try:
             with conn.cursor() as cur:
                 cur.execute(GET_MESSAGES_SQL, (conversation_id,))
-                columns = [desc[0] for desc in cur.description]
-                messages = [dict(zip(columns, row)) for row in cur.fetchall()]
-            return messages
+                messages = []
+
+                for row in cur.fetchall():
+                    message = {
+                        'id': row[0],
+                        'message_id': row[1],
+                        'conversation_id': row[2],
+                        'timestamp': row[3],
+                        'sender_id': row[4],
+                        'sender_name': row[5],
+                        'message_type': row[6],
+                        'content': row[7],
+                        'raw_content': row[8],
+                        'is_edited': row[9],
+                        'structured_data': row[10],
+                        'created_at': row[11]
+                    }
+
+                    # Enrich with specialized data
+                    message = self._enrich_message_with_specialized_data(cur, message)
+                    messages.append(message)
+
+                return messages
+        except Exception as e:
+            logger.error(f"Failed to get messages: {e}")
+            raise
         finally:
             self.return_connection(conn)
 
@@ -252,25 +354,108 @@ class SkypeCleanDataStorage:
 
     def get_message(self, message_id: str) -> Optional[Dict[str, Any]]:
         """
-        Get a message by ID.
+        Get a message by ID with all associated structured data.
 
         Args:
-            message_id: ID of the message
+            message_id: ID of the message to retrieve
 
         Returns:
-            Optional[Dict[str, Any]]: Message data if found, None otherwise
+            dict: Message data or None if not found
         """
         conn = self.get_connection()
         try:
             with conn.cursor() as cur:
+                # Get basic message data
                 cur.execute(GET_MESSAGE_BY_ID_SQL, (message_id,))
-                result = cur.fetchone()
-                if result:
-                    columns = [desc[0] for desc in cur.description]
-                    return dict(zip(columns, result))
-                return None
+                message_row = cur.fetchone()
+
+                if not message_row:
+                    return None
+
+                # Create message dict
+                message = {
+                    'id': message_row[0],
+                    'message_id': message_row[1],
+                    'conversation_id': message_row[2],
+                    'timestamp': message_row[3],
+                    'sender_id': message_row[4],
+                    'sender_name': message_row[5],
+                    'message_type': message_row[6],
+                    'content': message_row[7],
+                    'raw_content': message_row[8],
+                    'is_edited': message_row[9],
+                    'structured_data': message_row[10],
+                    'created_at': message_row[11]
+                }
+
+                # Get specialized data if available
+                message = self._enrich_message_with_specialized_data(cur, message)
+
+                return message
+        except Exception as e:
+            logger.error(f"Failed to get message: {e}")
+            raise
         finally:
             self.return_connection(conn)
+
+    def _enrich_message_with_specialized_data(self, cursor, message: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Enrich a message with specialized data from related tables.
+
+        Args:
+            cursor: Database cursor
+            message: Message data
+
+        Returns:
+            dict: Enriched message data
+        """
+        message_id = message['message_id']
+
+        # Get media data
+        cursor.execute(GET_MEDIA_BY_MESSAGE_ID_SQL, (message_id,))
+        media_row = cursor.fetchone()
+        if media_row:
+            message['media'] = {
+                'id': media_row[0],
+                'message_id': media_row[1],
+                'filename': media_row[2],
+                'filesize': media_row[3],
+                'filetype': media_row[4],
+                'url': media_row[5],
+                'thumbnail_url': media_row[6],
+                'width': media_row[7],
+                'height': media_row[8],
+                'duration': media_row[9],
+                'description': media_row[10],
+                'created_at': media_row[11]
+            }
+
+        # Get poll data
+        cursor.execute(GET_POLL_BY_MESSAGE_ID_SQL, (message_id,))
+        poll_row = cursor.fetchone()
+        if poll_row:
+            message['poll'] = {
+                'id': poll_row[0],
+                'message_id': poll_row[1],
+                'question': poll_row[2],
+                'created_at': poll_row[3],
+                'options': poll_row[4] if poll_row[4] and poll_row[4][0] is not None else []
+            }
+
+        # Get location data
+        cursor.execute(GET_LOCATION_BY_MESSAGE_ID_SQL, (message_id,))
+        location_row = cursor.fetchone()
+        if location_row:
+            message['location'] = {
+                'id': location_row[0],
+                'message_id': location_row[1],
+                'latitude': location_row[2],
+                'longitude': location_row[3],
+                'address': location_row[4],
+                'created_at': location_row[5]
+            }
+
+        return message
 
     def store_transformed_data(
         self,
@@ -315,7 +500,8 @@ class SkypeCleanDataStorage:
                         message_type=msg.get('type', ''),
                         content=msg.get('content', ''),
                         raw_content=msg.get('rawContent', ''),
-                        is_edited=msg.get('isEdited', False)
+                        is_edited=msg.get('isEdited', False),
+                        structured_data=msg.get('structuredData', {})
                     )
                     message_count += 1
 

@@ -17,6 +17,8 @@ A comprehensive toolkit for extracting, transforming, and loading Skype export d
 - **Handle various message types** (text, media, system messages, etc.)
 - **Generate reports and statistics**
 - **Enhanced message type handling** (extracting structured data from polls, calls, locations, etc.)
+- **Performance optimization** for large datasets (chunked processing, parallel execution, memory management)
+- **Advanced content extraction** (mentions, links, quotes, formatting)
 
 ## Project Structure
 
@@ -32,6 +34,7 @@ SkypeParser/
 │   │   └── tar_extractor.py   # Command-line tool for TAR extraction
 │   ├── parser/                # Parsing modules
 │   │   ├── core_parser.py     # Core parsing functions
+│   │   ├── content_extractor.py # Content extraction utilities
 │   │   ├── file_output.py     # File output utilities
 │   │   ├── parser_module.py   # Additional parsing utilities
 │   │   └── skype_parser.py    # Command-line interface
@@ -164,6 +167,20 @@ Contains the core parsing functions for processing Skype export data:
 - `type_parser`: Maps message types to human-readable descriptions
 - `parse_skype_data`: Main function that parses raw Skype export data into a structured format
 
+### Content Extractor (`content_extractor.py`)
+
+Provides specialized functions for extracting structured data from message content:
+
+- `ContentExtractor`: Class with static methods for extracting different types of structured data
+  - `extract_mentions`: Extracts @mentions from message content
+  - `extract_links`: Extracts links from message content
+  - `extract_quotes`: Extracts quotes from message content
+  - `extract_formatting`: Extracts formatted text from message content
+  - `extract_all`: Extracts all structured data from message content
+- `extract_content_data`: Extracts all structured data from message content
+- `format_content_with_markup`: Formats message content with markup for better readability
+- `format_content_with_regex`: Formats message content with markup using regex
+
 ### File Output (`file_output.py`)
 
 Handles exporting parsed data to various file formats:
@@ -252,10 +269,19 @@ CREATE TABLE IF NOT EXISTS skype_messages (
     content_raw TEXT,
     message_type VARCHAR(50),
     is_edited BOOLEAN DEFAULT FALSE,
+    structured_data JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
+
+The `structured_data` column in the `skype_messages` table stores extracted structured data from different message types in JSONB format. This includes:
+
+- Media metadata (filename, filesize, filetype, URL, dimensions, etc.)
+- Poll data (question, options)
+- Location data (coordinates, address)
+- Call information (duration, participants)
+- And other message-type specific data
 
 ## Testing
 
@@ -379,3 +405,27 @@ For more details on the refactoring approach, benefits, and future recommendatio
 - [API Reference](docs/api.md)
 - [Message Type Handling](docs/message_types.md)
 - [Contributing Guidelines](docs/contributing.md)
+
+## Performance Optimization
+
+The ETL pipeline includes several performance optimizations for handling large datasets:
+
+- **Chunked Processing**: Process large conversations in smaller chunks to reduce memory usage
+- **Batch Database Operations**: Use batch inserts for better database performance
+- **Progress Tracking**: Provide detailed progress information during processing
+- **Parallel Processing**: Process independent conversations concurrently
+- **Memory Management**: Monitor and manage memory usage to prevent out-of-memory errors
+
+Performance settings can be configured in the `config/performance.json` file:
+
+```json
+{
+    "chunk_size": 1000,
+    "db_batch_size": 100,
+    "use_parallel_processing": true,
+    "max_workers": null,
+    "memory_limit_mb": 1024
+}
+```
+
+For more details, see the [Performance Optimization Documentation](docs/performance.md).

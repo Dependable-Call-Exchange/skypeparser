@@ -29,6 +29,12 @@ from ..utils.dependencies import (
     BS_PARSER
 )
 
+# Import content extraction module
+from .content_extractor import (
+    extract_content_data,
+    format_content_with_markup
+)
+
 # Import configuration utility
 from ..utils.config import load_config, get_message_type_description
 
@@ -110,13 +116,20 @@ def timestamp_parser(timestamp: str) -> Tuple[str, str, Optional[datetime.dateti
 
 def content_parser(msg_content: str) -> str:
     """
-    Parse message content using BeautifulSoup.
+    Parse message content using BeautifulSoup with enhanced handling for Skype-specific elements.
+
+    This function processes HTML/XML content from Skype messages, handling special elements like:
+    - @mentions (<at id="user123">User Name</at>)
+    - Links (<a href="url">link text</a>)
+    - Formatting (bold, italic, etc.)
+    - Quotes and replies
+    - Emoticons and emojis
 
     Args:
         msg_content (str): Raw message content with HTML/XML tags
 
     Returns:
-        str: Cleaned and formatted message content
+        str: Cleaned and formatted message content with preserved semantic meaning
 
     Raises:
         ContentParsingError: If the content cannot be parsed correctly
@@ -124,60 +137,103 @@ def content_parser(msg_content: str) -> str:
     if not msg_content:
         return ""
 
-    if BEAUTIFULSOUP:
-        try:
-            # Use the detected parser (lxml or html.parser)
-            soup = BeautifulSoup(msg_content, BS_PARSER)
-            text = soup.get_text()
-            text = pretty_quotes(text)
-            return text
-        except Exception as e:
-            logger.warning(f"Error parsing content with BeautifulSoup: {e}")
-            # Fall back to regex if BeautifulSoup fails
-            try:
-                return tag_stripper(msg_content)
-            except Exception as nested_e:
-                error_msg = f"Failed to parse content with both BeautifulSoup and regex: {nested_e}"
-                logger.error(error_msg)
-                raise ContentParsingError(error_msg) from nested_e
-    else:
-        try:
-            return tag_stripper(msg_content)
-        except Exception as e:
-            error_msg = f"Failed to parse content with regex: {e}"
-            logger.error(error_msg)
-            raise ContentParsingError(error_msg) from e
+    try:
+        # Use the new content formatter from the content_extractor module
+        return format_content_with_markup(msg_content)
+    except Exception as e:
+        error_msg = f"Error parsing content: {e}"
+        logger.error(error_msg)
+        raise ContentParsingError(error_msg) from e
 
 
-def tag_stripper(text: str) -> str:
+def enhanced_tag_stripper(text: str) -> str:
     """
-    Strip HTML tags from text using regex and properly decode all HTML entities.
+    Enhanced version of tag_stripper that preserves semantic meaning of special elements.
+
+    This function uses regex patterns to handle:
+    - @mentions
+    - Links
+    - Formatting
+    - Quotes
 
     Args:
         text (str): Text to strip HTML tags from
 
     Returns:
-        str: Text with HTML tags removed and entities decoded
+        str: Text with HTML tags processed and entities decoded
 
     Raises:
-        ContentParsingError: If the HTML tags cannot be stripped correctly
+        ContentParsingError: If the HTML tags cannot be processed correctly
     """
     if not text:
         return ""
 
     try:
-        # Remove HTML tags with a more precise regex
+        # Process @mentions - <at id="user123">User Name</at> -> @User Name
+        text = re.sub(r'<at[^>]*>(.*?)</at>', r'@\1', text)
+
+        # Process links - <a href="url">link text</a> -> link text (url)
+        def process_link(match):
+            href = re.search(r'href=["\'](.*?)["\']', match.group(0))
+            link_text = re.search(r'>(.*?)</a>', match.group(0))
+
+            if href and link_text:
+                href_val = href.group(1)
+                text_val = link_text.group(1)
+
+                if href_val != text_val:
+                    return f"{text_val} ({href_val})"
+                else:
+                    return href_val
+            elif href:
+                return href.group(1)
+            elif link_text:
+                return link_text.group(1)
+            else:
+                return ""
+
+        text = re.sub(r'<a[^>]*>.*?</a>', process_link, text)
+
+        # Process formatting
+        text = re.sub(r'<(?:b|strong)[^>]*>(.*?)</(?:b|strong)>', r'*\1*', text)
+        text = re.sub(r'<(?:i|em)[^>]*>(.*?)</(?:i|em)>', r'_\1_', text)
+        text = re.sub(r'<u[^>]*>(.*?)</u>', r'_\1_', text)
+        text = re.sub(r'<(?:s|strike|del)[^>]*>(.*?)</(?:s|strike|del)>', r'~\1~', text)
+        text = re.sub(r'<(?:code|pre)[^>]*>(.*?)</(?:code|pre)>', r'`\1`', text)
+
+        # Process quotes
+        def process_quote(match):
+            author = re.search(r'author=["\'](.*?)["\']', match.group(0))
+            quote_text = re.search(r'>(.*?)</quote>', match.group(0), re.DOTALL)
+
+            if author and quote_text:
+                return f"\n> {author.group(1)} wrote:\n> {quote_text.group(1).strip()}\n"
+            elif quote_text:
+                return f"\n> {quote_text.group(1).strip()}\n"
+            else:
+                return ""
+
+        text = re.sub(r'<quote[^>]*>.*?</quote>', process_quote, text, flags=re.DOTALL)
+
+        # Process line breaks
+        text = re.sub(r'<br[^>]*>', '\n', text)
+
+        # Remove remaining HTML tags
         text = re.sub(r'<[^>]+>', '', text)
 
-        # Decode all HTML entities using html.unescape
+        # Decode all HTML entities
         text = html.unescape(text)
 
         # Apply pretty quotes formatting
         text = pretty_quotes(text)
 
+        # Clean up extra whitespace
+        text = re.sub(r'\s+', ' ', text).strip()
+        text = re.sub(r'\n\s+', '\n', text)
+
         return text
     except Exception as e:
-        error_msg = f"Error stripping tags: {e}"
+        error_msg = f"Error in enhanced tag stripper: {e}"
         logger.warning(error_msg)
         raise ContentParsingError(error_msg) from e
 
@@ -670,8 +726,27 @@ def _process_message_content(msg_type: str, msg_content_raw: str, full_message: 
     else:
         # Parse content for RichText messages
         try:
+            # Extract structured content data
+            structured_content = {}
+
+            # Process the content with enhanced parser
             cleaned_content = content_parser(msg_content_raw)
             result['content'] = cleaned_content
+
+            # Extract mentions using regex
+            mentions = re.findall(r'@(\w+)', cleaned_content)
+            if mentions:
+                structured_content['mentions'] = mentions
+
+            # Extract URLs using regex
+            urls = re.findall(r'https?://[^\s)]+', cleaned_content)
+            if urls:
+                structured_content['urls'] = urls
+
+            # Store structured content data if available
+            if structured_content:
+                result['structured_content'] = structured_content
+
         except ContentParsingError:
             # Keep the raw content if parsing fails
             pass

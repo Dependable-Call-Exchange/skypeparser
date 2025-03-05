@@ -13,7 +13,12 @@ import json
 import logging
 import datetime
 import psycopg2
-from typing import Dict, List, Optional, Tuple, Any, BinaryIO
+import multiprocessing
+import gc
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, List, Optional, Tuple, Any, BinaryIO, Callable
 
 from ..utils.file_handler import (
     read_file_object,
@@ -22,6 +27,13 @@ from ..utils.file_handler import (
 )
 from ..parser.parser_module import (
     timestamp_parser
+)
+from ..parser.core_parser import (
+    parse_skype_data
+)
+from ..utils.message_type_handlers import (
+    extract_structured_data,
+    get_handler_for_message_type
 )
 from ..utils.file_utils import safe_filename
 from ..utils.validation import (
@@ -82,6 +94,7 @@ CREATE TABLE IF NOT EXISTS skype_messages (
     raw_content TEXT,
     cleaned_content TEXT,
     is_edited BOOLEAN DEFAULT FALSE,
+    structured_data JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
@@ -110,6 +123,169 @@ def timestamp_parser(timestamp: str) -> Tuple[str, str, Optional[datetime.dateti
         logger.warning(f"Error parsing timestamp {timestamp}: {e}")
         return timestamp, "", None
 
+class ProgressTracker:
+    """
+    Tracks progress of ETL operations and provides reporting.
+    """
+
+    def __init__(self):
+        """Initialize the progress tracker."""
+        self.total_conversations = 0
+        self.processed_conversations = 0
+        self.total_messages = 0
+        self.processed_messages = 0
+        self.start_time = None
+        self.phase = None
+
+    def start_phase(self, phase: str, total_conversations: int = 0, total_messages: int = 0) -> None:
+        """
+        Start tracking a new phase.
+
+        Args:
+            phase (str): Name of the phase (extraction, transformation, loading)
+            total_conversations (int): Total number of conversations to process
+            total_messages (int): Total number of messages to process
+        """
+        self.phase = phase
+        self.total_conversations = total_conversations
+        self.total_messages = total_messages
+        self.processed_conversations = 0
+        self.processed_messages = 0
+        self.start_time = datetime.datetime.now()
+        logger.info(f"Starting {phase} phase with {total_conversations} conversations and {total_messages} messages")
+
+    def update_conversation_progress(self, increment: int = 1) -> None:
+        """
+        Update the conversation progress.
+
+        Args:
+            increment (int): Number of conversations processed
+        """
+        self.processed_conversations += increment
+        self._log_progress()
+
+    def update_message_progress(self, increment: int = 1) -> None:
+        """
+        Update the message progress.
+
+        Args:
+            increment (int): Number of messages processed
+        """
+        self.processed_messages += increment
+        # Only log every 1000 messages to avoid log spam
+        if self.processed_messages % 1000 == 0:
+            self._log_progress()
+
+    def _log_progress(self) -> None:
+        """Log the current progress."""
+        if self.total_conversations > 0:
+            conv_progress = (self.processed_conversations / self.total_conversations) * 100
+            logger.info(f"{self.phase} progress: {self.processed_conversations}/{self.total_conversations} conversations ({conv_progress:.1f}%)")
+
+        if self.total_messages > 0:
+            msg_progress = (self.processed_messages / self.total_messages) * 100
+            logger.info(f"{self.phase} progress: {self.processed_messages}/{self.total_messages} messages ({msg_progress:.1f}%)")
+
+    def finish_phase(self) -> Dict[str, Any]:
+        """
+        Finish the current phase and return statistics.
+
+        Returns:
+            dict: Statistics about the completed phase
+        """
+        end_time = datetime.datetime.now()
+        duration = (end_time - self.start_time).total_seconds()
+
+        stats = {
+            'phase': self.phase,
+            'total_conversations': self.total_conversations,
+            'processed_conversations': self.processed_conversations,
+            'total_messages': self.total_messages,
+            'processed_messages': self.processed_messages,
+            'duration_seconds': duration,
+            'messages_per_second': self.processed_messages / duration if duration > 0 else 0
+        }
+
+        logger.info(f"Completed {self.phase} phase in {duration:.2f} seconds")
+        logger.info(f"Processed {self.processed_conversations}/{self.total_conversations} conversations and {self.processed_messages}/{self.total_messages} messages")
+        logger.info(f"Processing rate: {stats['messages_per_second']:.2f} messages per second")
+
+        return stats
+
+class MemoryMonitor:
+    """
+    Monitors memory usage and triggers garbage collection when needed.
+    """
+
+    def __init__(self, memory_limit_mb: int = 1024):
+        """
+        Initialize the memory monitor.
+
+        Args:
+            memory_limit_mb (int): Memory limit in MB before forcing garbage collection
+        """
+        self.memory_limit_mb = memory_limit_mb
+        self.last_gc_time = time.time()
+        self.gc_interval = 60  # Minimum time between forced GC in seconds
+
+    def check_memory(self) -> None:
+        """
+        Check current memory usage and trigger garbage collection if needed.
+        """
+        # Only check memory usage if psutil is available
+        try:
+            import psutil
+            process = psutil.Process(os.getpid())
+            memory_info = process.memory_info()
+            memory_mb = memory_info.rss / (1024 * 1024)
+
+            # Log memory usage every 5 minutes or when approaching limit
+            current_time = time.time()
+            if current_time - self.last_gc_time > 300 or memory_mb > self.memory_limit_mb * 0.8:
+                logger.info(f"Current memory usage: {memory_mb:.2f} MB (limit: {self.memory_limit_mb} MB)")
+
+            # Force garbage collection if memory usage exceeds limit and enough time has passed
+            if memory_mb > self.memory_limit_mb and current_time - self.last_gc_time > self.gc_interval:
+                logger.warning(f"Memory usage ({memory_mb:.2f} MB) exceeds limit ({self.memory_limit_mb} MB). Forcing garbage collection.")
+                self._force_garbage_collection()
+                self.last_gc_time = current_time
+
+                # Log memory usage after garbage collection
+                memory_info = process.memory_info()
+                memory_mb_after = memory_info.rss / (1024 * 1024)
+                logger.info(f"Memory usage after garbage collection: {memory_mb_after:.2f} MB (freed {memory_mb - memory_mb_after:.2f} MB)")
+        except ImportError:
+            # psutil not available, use simpler approach with gc module
+            if time.time() - self.last_gc_time > self.gc_interval:
+                self._force_garbage_collection()
+                self.last_gc_time = time.time()
+
+    def _force_garbage_collection(self) -> None:
+        """
+        Force garbage collection to free memory.
+        """
+        # Get counts before collection
+        gc_counts_before = gc.get_count()
+
+        # Disable automatic garbage collection
+        gc_enabled = gc.isenabled()
+        if gc_enabled:
+            gc.disable()
+
+        # Run garbage collection multiple times to ensure all cycles are collected
+        gc.collect(0)  # Collect generation 0 (youngest objects)
+        gc.collect(1)  # Collect generation 1
+        gc.collect(2)  # Collect generation 2 (oldest objects)
+
+        # Re-enable automatic garbage collection if it was enabled
+        if gc_enabled:
+            gc.enable()
+
+        # Get counts after collection
+        gc_counts_after = gc.get_count()
+
+        logger.debug(f"Garbage collection: {gc_counts_before} -> {gc_counts_after}")
+
 class SkypeETLPipeline:
     """
     Extract-Transform-Load pipeline for Skype export data.
@@ -122,7 +298,8 @@ class SkypeETLPipeline:
         db_password: Optional[str] = None,
         db_host: str = "localhost",
         db_port: int = 5432,
-        output_dir: Optional[str] = None
+        output_dir: Optional[str] = None,
+        performance_config: Optional[str] = None
     ):
         """
         Initialize the ETL pipeline.
@@ -134,6 +311,7 @@ class SkypeETLPipeline:
             db_host (str, optional): Database host. Defaults to "localhost".
             db_port (int, optional): Database port. Defaults to 5432.
             output_dir (str, optional): Output directory for transformed data
+            performance_config (str, optional): Path to performance configuration file
         """
         self.db_config = {
             'dbname': db_name,
@@ -146,6 +324,7 @@ class SkypeETLPipeline:
         self.conn = None
         self.raw_storage = None
         self.clean_storage = None
+        self.progress_tracker = ProgressTracker()
 
         # Initialize storage if database config is provided
         if all(v is not None for v in [db_name, db_user, db_password]):
@@ -157,9 +336,30 @@ class SkypeETLPipeline:
             except Exception as e:
                 logger.error(f"Failed to initialize storage: {e}")
 
-        # Load message types configuration
+        # Load configuration
         from ..utils.config import load_config
-        self.config = load_config(message_types_file='config/message_types.json')
+        self.config = load_config(
+            config_file=performance_config or 'config/performance.json',
+            message_types_file='config/message_types.json'
+        )
+
+        # Log performance settings
+        self._log_performance_settings()
+
+        # Initialize memory monitor
+        self.memory_monitor = MemoryMonitor(memory_limit_mb=self.config.get('memory_limit_mb', 1024))
+
+    def _log_performance_settings(self) -> None:
+        """Log the current performance settings."""
+        performance_settings = {
+            'chunk_size': self.config.get('chunk_size', 1000),
+            'db_batch_size': self.config.get('db_batch_size', 100),
+            'use_parallel_processing': self.config.get('use_parallel_processing', False),
+            'max_workers': self.config.get('max_workers', multiprocessing.cpu_count()),
+            'memory_limit_mb': self.config.get('memory_limit_mb', 1024)
+        }
+
+        logger.info(f"Performance settings: {performance_settings}")
 
     def connect_db(self) -> None:
         """
@@ -405,8 +605,20 @@ class SkypeETLPipeline:
         logger.info("Starting transformation phase")
 
         try:
+            # Count total conversations and messages for progress tracking
+            total_conversations = len(raw_data.get('conversations', []))
+            total_messages = sum(len(conv.get('MessageList', [])) for conv in raw_data.get('conversations', []))
+
+            # Start progress tracking
+            self.progress_tracker.start_phase('transformation', total_conversations, total_messages)
+
             # Execute the transformation pipeline
             transformed_data = self._execute_transformation_pipeline(raw_data, user_display_name)
+
+            # Finish progress tracking
+            stats = self.progress_tracker.finish_phase()
+            logger.info(f"Transformation complete. Processed {stats['processed_conversations']} conversations with {stats['processed_messages']} messages")
+
             return transformed_data
         except ValidationError as e:
             logger.error(f"Validation error during transformation phase: {e}")
@@ -514,8 +726,19 @@ class SkypeETLPipeline:
         # Create ID to display name mapping
         id_to_display_name = self._create_id_display_name_mapping(raw_data, transformed_data)
 
-        # Process each conversation
-        self._process_all_conversations(raw_data['conversations'], transformed_data, id_to_display_name)
+        # Count total conversations and messages for progress tracking
+        conversations = raw_data['conversations']
+        total_conversations = len(conversations)
+        total_messages = sum(len(conv.get('MessageList', [])) for conv in conversations)
+
+        # Start progress tracking
+        self.progress_tracker.start_phase('processing', total_conversations, total_messages)
+
+        # Process all conversations
+        self._process_all_conversations(conversations, transformed_data, id_to_display_name)
+
+        # Finish progress tracking
+        self.progress_tracker.finish_phase()
 
     def _create_id_display_name_mapping(self, raw_data: Dict[str, Any],
                                        transformed_data: Dict[str, Any]) -> Dict[str, str]:
@@ -544,13 +767,158 @@ class SkypeETLPipeline:
             transformed_data (dict): The transformed data structure to populate
             id_to_display_name (dict): Mapping of user IDs to display names
         """
-        for conversation in conversations:
+        # Check if parallel processing is enabled
+        use_parallel = self.config.get('use_parallel_processing', False)
+        max_workers = self.config.get('max_workers', multiprocessing.cpu_count())
+
+        if use_parallel and len(conversations) > 1:
+            logger.info(f"Using parallel processing with {max_workers} workers for {len(conversations)} conversations")
+            self._process_conversations_parallel(conversations, transformed_data, id_to_display_name, max_workers)
+        else:
+            # Sequential processing
+            for i, conversation in enumerate(conversations):
+                try:
+                    self._process_single_conversation(conversation, transformed_data, id_to_display_name)
+                    # Update conversation progress
+                    self.progress_tracker.update_conversation_progress()
+                except Exception as e:
+                    conv_id = conversation.get('id', 'unknown')
+                    logger.warning(f"Error processing conversation {conv_id}: {e}")
+                    continue
+
+    def _process_conversations_parallel(self, conversations: List[Dict[str, Any]],
+                                       transformed_data: Dict[str, Any],
+                                       id_to_display_name: Dict[str, str],
+                                       max_workers: int) -> None:
+        """
+        Process conversations in parallel using a thread pool.
+
+        Args:
+            conversations (list): List of conversation data
+            transformed_data (dict): The transformed data structure to populate
+            id_to_display_name (dict): Mapping of user IDs to display names
+            max_workers (int): Maximum number of worker threads
+        """
+        # Create a thread-safe dictionary for results
+        from threading import Lock
+        results_lock = Lock()
+
+        # Function to process a single conversation in a worker thread
+        def process_conversation_worker(conversation: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
             try:
-                self._process_single_conversation(conversation, transformed_data, id_to_display_name)
+                conv_id = conversation.get('id', '')
+                if not conv_id:
+                    logger.warning(f"Skipping conversation with no ID")
+                    return None, None
+
+                # Get conversation display name
+                display_name = conversation.get('displayName', conv_id)
+
+                # Create a local copy of id_to_display_name to avoid thread safety issues
+                local_id_to_display_name = dict(id_to_display_name)
+                local_id_to_display_name[conv_id] = display_name
+
+                # Process messages
+                messages = []
+                message_list = conversation.get('MessageList', [])
+
+                # Check if chunked processing is needed
+                chunk_size = self.config.get('chunk_size', 1000)
+                if len(message_list) > chunk_size:
+                    # Process in chunks to manage memory
+                    for i in range(0, len(message_list), chunk_size):
+                        chunk = message_list[i:i + chunk_size]
+                        for msg in chunk:
+                            if not msg:
+                                continue
+
+                            # Transform message
+                            transformed_message = self._transform_message(msg, local_id_to_display_name)
+                            messages.append(transformed_message)
+
+                            # Update message progress (thread-safe)
+                            self.progress_tracker.update_message_progress()
+
+                        # Free memory after processing each chunk
+                        del chunk
+
+                        # Check memory usage
+                        self.memory_monitor.check_memory()
+                else:
+                    # Process all messages at once for smaller conversations
+                    for msg in message_list:
+                        if not msg:
+                            continue
+
+                        # Transform message
+                        transformed_message = self._transform_message(msg, local_id_to_display_name)
+                        messages.append(transformed_message)
+
+                        # Update message progress (thread-safe)
+                        self.progress_tracker.update_message_progress()
+
+                # Sort messages by timestamp
+                messages = self._sort_messages(messages)
+
+                # Create conversation data structure
+                conversation_data = {
+                    'display_name': display_name,
+                    'id': conv_id,
+                    'messages': messages,
+                    'timespan': self._get_conversation_timespan(messages)
+                }
+
+                return conv_id, conversation_data
+
             except Exception as e:
-                conv_id = conversation.get('id', 'unknown')
-                logger.warning(f"Error processing conversation {conv_id}: {e}")
-                continue
+                logger.warning(f"Error processing conversation {conversation.get('id', 'unknown')}: {e}")
+                return None, None
+
+        # Process conversations in parallel
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_conv = {
+                executor.submit(process_conversation_worker, conv): i
+                for i, conv in enumerate(conversations)
+            }
+
+            # Process results as they complete
+            for future in as_completed(future_to_conv):
+                conv_idx = future_to_conv[future]
+                try:
+                    conv_id, conversation_data = future.result()
+                    if conv_id and conversation_data:
+                        # Thread-safe update of the transformed data
+                        with results_lock:
+                            # Add export date and time from metadata
+                            conversation_data['export_date'] = transformed_data['metadata'].get('exportDate', '')
+                            conversation_data['export_time'] = transformed_data['metadata'].get('exportTime', '')
+
+                            # Store conversation data
+                            transformed_data['conversations'][conv_id] = conversation_data
+
+                            # Update conversation progress
+                            self.progress_tracker.update_conversation_progress()
+
+                            # Update id_to_display_name with any new mappings
+                            id_to_display_name[conv_id] = conversation_data['display_name']
+
+                            # Check memory usage
+                            self.memory_monitor.check_memory()
+                except Exception as e:
+                    logger.warning(f"Error processing result for conversation {conv_idx}: {e}")
+
+    def _sort_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Sort messages by timestamp.
+
+        Args:
+            messages (list): List of message data
+
+        Returns:
+            list: Sorted list of message data
+        """
+        return sorted(messages, key=lambda msg: msg['timestamp'])
 
     def _process_single_conversation(self, conversation: Dict[str, Any],
                                     transformed_data: Dict[str, Any],
@@ -643,14 +1011,76 @@ class SkypeETLPipeline:
             transformed_data (dict): The transformed data structure to populate
             id_to_display_name (dict): Mapping of user IDs to display names
         """
-        # Process each message and collect datetime objects for sorting
-        datetime_objects = self._process_message_batch(conv_id, messages, transformed_data, id_to_display_name)
+        # Check if chunked processing is needed (for large conversations)
+        message_count = len(messages)
+        chunk_size = self.config.get('chunk_size', 1000)  # Default chunk size of 1000 messages
+
+        if message_count > chunk_size:
+            logger.info(f"Processing large conversation {conv_id} with {message_count} messages in chunks of {chunk_size}")
+            # Process messages in chunks
+            datetime_objects = self._process_message_chunks(conv_id, messages, transformed_data, id_to_display_name, chunk_size)
+        else:
+            # Process all messages at once for smaller conversations
+            datetime_objects = self._process_message_batch(conv_id, messages, transformed_data, id_to_display_name)
 
         # Sort messages by timestamp if datetime objects are available
-        self._sort_messages(conv_id, transformed_data, datetime_objects)
+        self._sort_messages(transformed_data['conversations'][conv_id]['messages'])
 
         # Store first and last message timestamps
         self._store_conversation_timespan(conv_id, transformed_data)
+
+    def _process_message_chunks(self, conv_id: str, messages: List[Dict[str, Any]],
+                               transformed_data: Dict[str, Any],
+                               id_to_display_name: Dict[str, str],
+                               chunk_size: int) -> List[Tuple[int, datetime]]:
+        """
+        Process messages in chunks to handle large conversations efficiently.
+
+        Args:
+            conv_id (str): The conversation ID
+            messages (list): List of message data
+            transformed_data (dict): The transformed data structure to populate
+            id_to_display_name (dict): Mapping of user IDs to display names
+            chunk_size (int): Number of messages to process in each chunk
+
+        Returns:
+            list: List of tuples (index, datetime) for sorting
+        """
+        # Track datetime objects for sorting
+        all_datetime_objects = []
+        total_chunks = (len(messages) + chunk_size - 1) // chunk_size  # Ceiling division
+
+        for chunk_index in range(total_chunks):
+            start_idx = chunk_index * chunk_size
+            end_idx = min(start_idx + chunk_size, len(messages))
+            chunk = messages[start_idx:end_idx]
+
+            # Log progress
+            progress = (chunk_index + 1) / total_chunks * 100
+            logger.info(f"Processing chunk {chunk_index + 1}/{total_chunks} ({progress:.1f}%) of conversation {conv_id}")
+
+            # Process this chunk of messages
+            chunk_datetime_objects = []
+            for i, message in enumerate(chunk):
+                try:
+                    # Calculate the global index in the original messages list
+                    global_index = start_idx + i
+                    self._process_single_message(global_index, message, conv_id, transformed_data,
+                                               id_to_display_name, chunk_datetime_objects)
+                except Exception as e:
+                    logger.warning(f"Error processing message in conversation {conv_id}: {e}")
+                    continue
+
+            # Add datetime objects from this chunk to the overall list
+            all_datetime_objects.extend(chunk_datetime_objects)
+
+            # Free up memory by clearing the chunk
+            del chunk
+
+            # Check memory usage
+            self.memory_monitor.check_memory()
+
+        return all_datetime_objects
 
     def _process_message_batch(self, conv_id: str, messages: List[Dict[str, Any]],
                               transformed_data: Dict[str, Any],
@@ -714,6 +1144,9 @@ class SkypeETLPipeline:
 
         # Add message to conversation
         transformed_data['conversations'][conv_id]['messages'].append(msg_data)
+
+        # Update message progress
+        self.progress_tracker.update_message_progress()
 
     def _extract_message_metadata(self, message: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -790,43 +1223,35 @@ class SkypeETLPipeline:
         if 'skypeeditedid' in message:
             msg_data['isEdited'] = True
 
-    def _sort_messages(self, conv_id: str, transformed_data: Dict[str, Any],
-                      datetime_objects: List[Tuple[int, datetime]]) -> None:
+    def _sort_messages(self, messages_list: List[Dict[str, Any]]) -> None:
         """
         Sort messages by timestamp.
 
         Args:
-            conv_id (str): The conversation ID
-            transformed_data (dict): The transformed data structure
-            datetime_objects (list): List of datetime objects for sorting
+            messages_list (list): List of message data
         """
-        if not datetime_objects:
-            logger.debug(f"No datetime objects available for sorting messages in conversation {conv_id}")
+        if not messages_list:
+            logger.debug(f"No messages to determine timespan for conversation")
             return
 
         try:
-            messages_list = transformed_data['conversations'][conv_id]['messages']
-            sorted_messages = self._sort_messages_by_datetime(messages_list, datetime_objects)
-            transformed_data['conversations'][conv_id]['messages'] = sorted_messages
+            sorted_messages = self._sort_messages_by_datetime(messages_list)
+            messages_list[:] = sorted_messages
         except Exception as e:
-            logger.warning(f"Error sorting messages in conversation {conv_id}: {e}")
+            logger.warning(f"Error sorting messages in conversation: {e}")
 
-    def _sort_messages_by_datetime(self, messages_list: List[Dict[str, Any]],
-                                  datetime_objects: List[Tuple[int, datetime]]) -> List[Dict[str, Any]]:
+    def _sort_messages_by_datetime(self, messages_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Sort messages by datetime objects.
 
         Args:
             messages_list (list): List of message data
-            datetime_objects (list): List of datetime objects for sorting
 
         Returns:
             list: Sorted list of message data
         """
         # Sort by datetime
-        datetime_objects.sort(key=lambda x: x[1])
-        sorted_indices = [x[0] for x in datetime_objects]
-        return [messages_list[i] for i in sorted_indices]
+        return sorted(messages_list, key=lambda msg: msg['timestamp'])
 
     def _store_conversation_timespan(self, conv_id: str, transformed_data: Dict[str, Any]) -> None:
         """
@@ -922,6 +1347,13 @@ class SkypeETLPipeline:
             raise ValueError(error_msg)
 
         try:
+            # Count total conversations and messages for progress tracking
+            total_conversations = len(transformed_data.get('conversations', {}))
+            total_messages = sum(len(conv.get('messages', [])) for conv in transformed_data.get('conversations', {}).values())
+
+            # Start progress tracking
+            self.progress_tracker.start_phase('loading', total_conversations, total_messages)
+
             # Use storage classes if available
             if self.raw_storage and self.clean_storage:
                 # Store raw data
@@ -938,6 +1370,10 @@ class SkypeETLPipeline:
                     raw_export_id=raw_export_id
                 )
 
+                # Finish progress tracking
+                stats = self.progress_tracker.finish_phase()
+                logger.info(f"Loading complete. Processed {stats['processed_conversations']} conversations with {stats['processed_messages']} messages")
+
                 return raw_export_id
             else:
                 # Legacy direct database operations
@@ -946,6 +1382,10 @@ class SkypeETLPipeline:
 
                 # Insert conversations and messages
                 self._insert_conversations_and_messages(transformed_data, export_id)
+
+                # Finish progress tracking
+                stats = self.progress_tracker.finish_phase()
+                logger.info(f"Loading complete. Processed {stats['processed_conversations']} conversations with {stats['processed_messages']} messages")
 
                 return export_id
 
@@ -1066,22 +1506,72 @@ class SkypeETLPipeline:
             conv_id (str): The conversation ID
             messages (list): List of message data
         """
-        for msg in messages:
-            # Parse timestamp
-            _, _, msg_time = timestamp_parser(msg['timestamp'])
+        # Determine batch size from config or use default
+        batch_size = self.config.get('db_batch_size', 100)  # Default batch size of 100 messages
+        total_messages = len(messages)
 
-            # Insert message
-            cursor.execute(
-                """
-                INSERT INTO skype_messages
-                (conversation_id, timestamp, sender_id, sender_name, message_type, raw_content, is_edited)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    conv_id, msg_time, msg['fromId'], msg['fromName'],
-                    msg['type'], msg['rawContent'], msg['isEdited']
-                )
-            )
+        if total_messages == 0:
+            logger.warning(f"No messages to insert for conversation {conv_id}")
+            return
+
+        logger.info(f"Inserting {total_messages} messages for conversation {conv_id} in batches of {batch_size}")
+
+        # Prepare the SQL statement for batch insert
+        insert_sql = """
+        INSERT INTO skype_messages
+        (conversation_id, timestamp, sender_id, sender_name, message_type, raw_content, is_edited, structured_data)
+        VALUES %s
+        """
+
+        # Process messages in batches
+        for i in range(0, total_messages, batch_size):
+            batch = messages[i:i + batch_size]
+            batch_values = []
+
+            # Log progress
+            progress = min(i + batch_size, total_messages) / total_messages * 100
+            logger.info(f"Inserting batch {i // batch_size + 1}/{(total_messages + batch_size - 1) // batch_size} ({progress:.1f}%)")
+
+            # Prepare batch values
+            for msg in batch:
+                # Parse timestamp
+                _, _, msg_time = timestamp_parser(msg['timestamp'])
+
+                # Prepare values for this message
+                batch_values.append((
+                    conv_id,
+                    msg_time,
+                    msg['fromId'],
+                    msg['fromName'],
+                    msg['type'],
+                    msg['rawContent'],
+                    msg['isEdited'],
+                    json.dumps(msg.get('structuredData', {}))
+                ))
+
+            # Execute batch insert using psycopg2's execute_values
+            try:
+                from psycopg2.extras import execute_values
+                execute_values(cursor, insert_sql, batch_values)
+            except ImportError:
+                # Fall back to individual inserts if execute_values is not available
+                logger.warning("psycopg2.extras.execute_values not available, falling back to individual inserts")
+                for values in batch_values:
+                    cursor.execute(
+                        """
+                        INSERT INTO skype_messages
+                        (conversation_id, timestamp, sender_id, sender_name, message_type, raw_content, is_edited, structured_data)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        values
+                    )
+
+            # Free up memory
+            del batch
+            del batch_values
+
+            # Check memory usage
+            self.memory_monitor.check_memory()
 
     def run_pipeline(self, file_path: str = None, file_obj: BinaryIO = None,
                     user_display_name: Optional[str] = None) -> Dict[str, Any]:
@@ -1259,6 +1749,51 @@ class SkypeETLPipeline:
         # Use the configuration utility to get the message type description
         from ..utils.config import get_message_type_description
         return get_message_type_description(self.config, msg_type)
+
+    def _transform_message(self, message: Dict[str, Any], id_to_display_name: Dict[str, str]) -> Dict[str, Any]:
+        """
+        Transform a single message.
+
+        Args:
+            message (dict): Raw message data
+            id_to_display_name (dict): Mapping of user IDs to display names
+
+        Returns:
+            dict: Transformed message data
+        """
+        # Extract message data
+        msg_id = message.get('id', '')
+        msg_timestamp = message.get('originalarrivaltime', '')
+        msg_from = message.get('from', '')
+        msg_content_raw = message.get('content', '')
+        msg_type = message.get('messagetype', '')
+        is_edited = 'skypeeditedid' in message
+
+        # Parse timestamp
+        msg_date_str, msg_time_str, msg_datetime = timestamp_parser(msg_timestamp)
+
+        # Create message data structure
+        transformed_message = {
+            'id': msg_id,
+            'timestamp': msg_timestamp,
+            'datetime': msg_datetime,
+            'date': msg_date_str,
+            'time': msg_time_str,
+            'from_id': msg_from,
+            'from_name': id_to_display_name.get(msg_from, msg_from),
+            'type': msg_type,
+            'content': msg_content_raw,  # Will be processed by the parser
+            'rawContent': msg_content_raw,
+            'isEdited': is_edited
+        }
+
+        # Extract structured data if available
+        if get_handler_for_message_type(msg_type):
+            structured_data = extract_structured_data(message)
+            if structured_data:
+                transformed_message['structuredData'] = structured_data
+
+        return transformed_message
 
 
 if __name__ == "__main__":
