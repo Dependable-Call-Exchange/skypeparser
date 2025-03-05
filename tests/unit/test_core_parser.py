@@ -2,123 +2,133 @@
 """
 Tests for the core_parser module.
 
-This module contains tests for the functionality in src.parser.core_parser.
+This module contains test cases for the core parser functions in src.parser.core_parser.
 """
 
 import os
 import json
 import tempfile
 import unittest
+import shutil
 from pathlib import Path
+from unittest.mock import patch, mock_open
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.parser.core_parser import (
-    CoreParser,
-    parse_skype_data,
-    extract_messages,
-    extract_users,
-    extract_conversations
+    timestamp_parser,
+    content_parser,
+    tag_stripper,
+    pretty_quotes,
+    type_parser,
+    banner_constructor,
+    id_selector,
+    parse_skype_data
 )
-from src.parser.exceptions import ParserError
+from src.parser.exceptions import DataExtractionError
 
 
 class TestCoreParser(unittest.TestCase):
-    """Test cases for the CoreParser class and related functions."""
+    """Test cases for core parser functions."""
 
     def setUp(self):
         """Set up test fixtures."""
-        # Sample Skype data for testing
+        # Create a temporary directory for testing
+        self.temp_dir = tempfile.mkdtemp()
+
+        # Sample Skype export data for testing
         self.sample_skype_data = {
             "userId": "test_user",
-            "exportDate": "2023-01-01",
+            "userDisplayName": "Test User",
+            "exportDate": "2023-01-01T12:00:00Z",
             "conversations": [
                 {
                     "id": "conversation1",
                     "displayName": "Test Conversation",
-                    "messages": [
+                    "messageCount": 1,
+                    "firstMessageTime": "2023-01-01T12:00:00Z",
+                    "lastMessageTime": "2023-01-01T12:00:00Z",
+                    "MessageList": [
                         {
-                            "id": "message1",
-                            "content": "Hello, world!",
+                            "originalarrivaltime": "2023-01-01T12:00:00Z",
                             "from": "user1",
-                            "timestamp": "2023-01-01T12:00:00Z"
+                            "content": "Hello, world!",
+                            "messagetype": "RichText"
                         }
                     ]
-                }
-            ],
-            "users": [
-                {
-                    "id": "user1",
-                    "displayName": "Test User"
                 }
             ]
         }
 
-        # Create a temporary directory for test files
-        self.temp_dir = tempfile.TemporaryDirectory()
-
-        # Create a sample JSON file
-        self.sample_json_path = os.path.join(self.temp_dir.name, 'sample.json')
-        with open(self.sample_json_path, 'w') as f:
-            json.dump(self.sample_skype_data, f)
-
     def tearDown(self):
-        """Clean up test fixtures."""
-        self.temp_dir.cleanup()
+        """Tear down test fixtures."""
+        # Remove temporary directory and files
+        shutil.rmtree(self.temp_dir)
 
-    def test_core_parser_initialization(self):
-        """Test CoreParser initialization."""
-        parser = CoreParser(self.sample_json_path)
-        self.assertEqual(parser.file_path, self.sample_json_path)
-        self.assertIsNone(parser.data)
+    def test_timestamp_parser(self):
+        """Test timestamp_parser function."""
+        timestamp = "2023-01-01T12:00:00Z"
+        date_str, time_str, dt_obj = timestamp_parser(timestamp)
+        self.assertEqual(date_str, "2023-01-01")
+        self.assertEqual(time_str, "12:00:00")
+        self.assertIsNotNone(dt_obj)
 
     def test_parse_skype_data(self):
         """Test parse_skype_data function."""
-        data = parse_skype_data(self.sample_skype_data)
-        self.assertIn('userId', data)
-        self.assertIn('conversations', data)
-        self.assertIn('users', data)
+        result = parse_skype_data(self.sample_skype_data, "Test User")
+        self.assertIn("user_id", result)
+        self.assertIn("export_date", result)
+        self.assertIn("export_time", result)
+        self.assertIn("conversations", result)
+        self.assertEqual(result["user_id"], "test_user")
+        self.assertEqual(result["export_date"], "2023-01-01")
+        self.assertEqual(result["export_time"], "12:00:00")
+        self.assertEqual(len(result["conversations"]), 1)
 
-    def test_extract_messages(self):
-        """Test extract_messages function."""
-        conversation = self.sample_skype_data['conversations'][0]
-        messages = extract_messages(conversation)
-        self.assertEqual(len(messages), 1)
-        self.assertEqual(messages[0]['id'], 'message1')
+    def test_content_parser(self):
+        """Test content_parser function."""
+        content = "<div><p>Hello, world!</p></div>"
+        result = content_parser(content)
+        self.assertEqual(result, "Hello, world!")
 
-    def test_extract_users(self):
-        """Test extract_users function."""
-        users = extract_users(self.sample_skype_data)
-        self.assertEqual(len(users), 1)
-        self.assertEqual(users[0]['id'], 'user1')
+    def test_tag_stripper(self):
+        """Test tag_stripper function."""
+        content = "<div><p>Hello, world!</p></div>"
+        result = tag_stripper(content)
+        self.assertEqual(result, "Hello, world!")
 
-    def test_extract_conversations(self):
-        """Test extract_conversations function."""
-        conversations = extract_conversations(self.sample_skype_data)
-        self.assertEqual(len(conversations), 1)
-        self.assertEqual(conversations[0]['id'], 'conversation1')
+    def test_type_parser(self):
+        """Test type_parser function."""
+        message_type = "RichText"
+        result = type_parser(message_type)
+        self.assertEqual(result, "***Sent a RichText***")
 
-    def test_load_data(self):
-        """Test load_data method."""
-        parser = CoreParser(self.sample_json_path)
-        parser.load_data()
-        self.assertIsNotNone(parser.data)
-        self.assertEqual(parser.data['userId'], 'test_user')
+    def test_banner_constructor(self):
+        """Test banner_constructor function."""
+        display_name = "Test Conversation"
+        person = "test_user"
+        export_date = "2023-01-01"
+        export_time = "12:00:00"
+        timestamps = ["2023-01-01T12:00:00Z", "2023-01-01T12:30:00Z"]
 
-    def test_load_data_invalid_file(self):
-        """Test load_data method with invalid file."""
-        parser = CoreParser('nonexistent.json')
-        with self.assertRaises(ParserError):
-            parser.load_data()
+        result = banner_constructor(display_name, person, export_date, export_time, timestamps)
 
-    def test_parse(self):
-        """Test parse method."""
-        parser = CoreParser(self.sample_json_path)
-        result = parser.parse()
-        self.assertIn('userId', result)
-        self.assertIn('conversations', result)
-        self.assertIn('users', result)
+        self.assertIn("Test Conversation", result)
+        self.assertIn("test_user", result)
+        self.assertIn("2023-01-01", result)
+        self.assertIn("12:00:00", result)
+
+    def test_id_selector(self):
+        """Test id_selector function."""
+        ids = ["conversation1", "conversation2", "conversation3"]
+        result = id_selector(ids)
+        self.assertEqual(result, ids)  # Should return all IDs when no selection is provided
+
+        # Test with specific selection
+        selected_indices = [0, 2]  # Select first and third conversations
+        result = id_selector(ids, selected_indices)
+        self.assertEqual(result, ["conversation1", "conversation3"])
 
 
 if __name__ == '__main__':

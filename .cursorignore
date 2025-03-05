@@ -1,0 +1,34 @@
+# Large data files
+*.tar
+*.json
+*.csv
+*.db
+*.sqlite
+*.sqlite3
+
+# Large directories
+venv/
+.git/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+__pycache__/
+uploads/
+output/
+
+# Specific large files
+8_live_dave.leathers113_export.tar
+
+# Build directories
+build/
+dist/
+*.egg-info/
+
+# Temporary files
+*.pyc
+*.pyo
+*.pyd
+.Python
+.DS_Store

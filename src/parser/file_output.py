@@ -194,7 +194,7 @@ def export_conversations_to_text(structured_data: Dict[str, Any], output_dir: st
         raise FileOperationError(error_msg) from e
 
     # Get current time for export timestamp
-    export_time = datetime.now().strftime("%H:%M:%S")
+    export_time = datetime.datetime.now().strftime("%H:%M:%S")
 
     # Process each conversation
     for conv_id, conv_data in structured_data.items():

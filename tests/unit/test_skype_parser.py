@@ -9,116 +9,266 @@ import os
 import json
 import tempfile
 import unittest
+import argparse
 from pathlib import Path
-from unittest.mock import patch, mock_open
+from unittest.mock import patch, mock_open, MagicMock
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.parser.skype_parser import (
-    SkypeParser,
-    parse_skype_export,
-    extract_user_info,
-    extract_conversation_info,
-    format_message
+    main,
+    get_commandline_args
 )
-from src.parser.exceptions import ParserError
+from src.parser.exceptions import (
+    FileOperationError,
+    DataExtractionError,
+    ExportError,
+    InvalidInputError
+)
 
 
 class TestSkypeParser(unittest.TestCase):
-    """Test cases for the SkypeParser class and related functions."""
+    """Test cases for the skype_parser module."""
 
     def setUp(self):
         """Set up test fixtures."""
-        # Sample Skype data for testing
+        # Create a temporary directory for test files
+        self.temp_dir = tempfile.mkdtemp()
+
+        # Sample Skype export data for testing
         self.sample_skype_data = {
             "userId": "test_user",
-            "exportDate": "2023-01-01",
-            "conversations": [
-                {
+            "userDisplayName": "Test User",
+            "exportDate": "2023-01-01T12:00:00Z",
+            "conversations": {
+                "conversation1": {
                     "id": "conversation1",
                     "displayName": "Test Conversation",
+                    "messageCount": 1,
+                    "firstMessageTime": "2023-01-01T12:00:00Z",
+                    "lastMessageTime": "2023-01-01T12:00:00Z",
                     "messages": [
                         {
-                            "id": "message1",
-                            "content": "Hello, world!",
-                            "from": "user1",
                             "timestamp": "2023-01-01T12:00:00Z",
-                            "messageType": "RichText"
+                            "timestampFormatted": "2023-01-01 12:00:00",
+                            "date": "2023-01-01",
+                            "time": "12:00:00",
+                            "fromId": "user1",
+                            "fromName": "Test User",
+                            "type": "RichText",
+                            "rawContent": "Hello, world!",
+                            "isEdited": False
                         }
                     ]
                 }
-            ],
-            "users": [
-                {
-                    "id": "user1",
-                    "displayName": "Test User"
-                }
-            ]
+            }
         }
 
-        # Create a temporary directory for test files
-        self.temp_dir = tempfile.TemporaryDirectory()
-
         # Create a sample JSON file
-        self.sample_json_path = os.path.join(self.temp_dir.name, 'sample.json')
+        self.sample_json_path = os.path.join(self.temp_dir, 'sample.json')
         with open(self.sample_json_path, 'w') as f:
             json.dump(self.sample_skype_data, f)
 
+        # Create a sample TAR file path (we won't actually create the file)
+        self.sample_tar_path = os.path.join(self.temp_dir, 'sample.tar')
+
     def tearDown(self):
         """Clean up test fixtures."""
-        self.temp_dir.cleanup()
+        import shutil
+        shutil.rmtree(self.temp_dir)
 
-    def test_skype_parser_initialization(self):
-        """Test SkypeParser initialization."""
-        parser = SkypeParser(self.sample_json_path)
-        self.assertEqual(parser.file_path, self.sample_json_path)
-        self.assertIsNone(parser.data)
+    @patch('argparse.ArgumentParser.parse_args')
+    @patch('src.parser.skype_parser.read_file')
+    @patch('src.parser.skype_parser.parse_skype_data')
+    @patch('src.parser.skype_parser.export_conversations')
+    def test_main_with_json_file(self, mock_export, mock_parse, mock_read, mock_args):
+        """Test main function with a JSON file."""
+        # Mock the command line arguments
+        mock_args.return_value = argparse.Namespace(
+            input_file=self.sample_json_path,
+            output_dir=self.temp_dir,
+            format='json',
+            extract_tar=False,
+            store_db=False,
+            db_name=None,
+            db_user=None,
+            db_password=None,
+            db_host=None,
+            db_port=None,
+            username=None,
+            verbose=False
+        )
 
-    def test_parse_skype_export(self):
-        """Test parse_skype_export function."""
-        with patch('src.parser.skype_parser.open', mock_open(read_data=json.dumps(self.sample_skype_data))):
-            result = parse_skype_export(self.sample_json_path)
-            self.assertIn('user_info', result)
-            self.assertIn('conversations', result)
+        # Mock the read_file function to return our sample data
+        mock_read.return_value = self.sample_skype_data
 
-    def test_extract_user_info(self):
-        """Test extract_user_info function."""
-        user_info = extract_user_info(self.sample_skype_data)
-        self.assertEqual(user_info['user_id'], 'test_user')
-        self.assertIn('export_date', user_info)
+        # Mock the parse_skype_data function to return structured data
+        structured_data = {
+            "metadata": {
+                "userId": "test_user",
+                "userDisplayName": "Test User",
+                "exportDate": "2023-01-01T12:00:00Z"
+            },
+            "conversations": {
+                "conversation1": {
+                    "id": "conversation1",
+                    "displayName": "Test Conversation",
+                    "messages": []
+                }
+            }
+        }
+        mock_parse.return_value = structured_data
 
-    def test_extract_conversation_info(self):
-        """Test extract_conversation_info function."""
-        conversation = self.sample_skype_data['conversations'][0]
-        users = {user['id']: user for user in self.sample_skype_data['users']}
-        conversation_info = extract_conversation_info(conversation, users)
-        self.assertEqual(conversation_info['id'], 'conversation1')
-        self.assertEqual(conversation_info['display_name'], 'Test Conversation')
-        self.assertEqual(len(conversation_info['messages']), 1)
+        # Mock the export_conversations function to return True
+        mock_export.return_value = True
 
-    def test_format_message(self):
-        """Test format_message function."""
-        message = self.sample_skype_data['conversations'][0]['messages'][0]
-        users = {user['id']: user for user in self.sample_skype_data['users']}
-        formatted_message = format_message(message, users)
-        self.assertEqual(formatted_message['id'], 'message1')
-        self.assertEqual(formatted_message['content'], 'Hello, world!')
-        self.assertEqual(formatted_message['sender_name'], 'Test User')
-        self.assertEqual(formatted_message['message_type'], 'RichText')
+        # Call the main function
+        with patch('sys.argv', ['skype_parser.py', self.sample_json_path, '-o', self.temp_dir, '-f', 'json']):
+            main()
 
-    def test_parse(self):
-        """Test parse method."""
-        parser = SkypeParser(self.sample_json_path)
-        result = parser.parse()
-        self.assertIn('user_info', result)
-        self.assertIn('conversations', result)
+        # Verify that the functions were called with the correct arguments
+        mock_read.assert_called_once_with(self.sample_json_path)
+        mock_parse.assert_called_once_with(self.sample_skype_data, None)
+        mock_export.assert_called_once_with(structured_data, 'json', self.temp_dir)
 
-    def test_parse_invalid_file(self):
-        """Test parse method with invalid file."""
-        parser = SkypeParser('nonexistent.json')
-        with self.assertRaises(ParserError):
-            parser.parse()
+    @patch('argparse.ArgumentParser.parse_args')
+    @patch('src.parser.skype_parser.read_tarfile')
+    @patch('src.parser.skype_parser.parse_skype_data')
+    @patch('src.parser.skype_parser.export_conversations')
+    def test_main_with_tar_file(self, mock_export, mock_parse, mock_read_tar, mock_args):
+        """Test main function with a TAR file."""
+        # Mock the command line arguments
+        mock_args.return_value = argparse.Namespace(
+            input_file=self.sample_tar_path,
+            output_dir=self.temp_dir,
+            format='json',
+            extract_tar=True,
+            store_db=False,
+            db_name=None,
+            db_user=None,
+            db_password=None,
+            db_host=None,
+            db_port=None,
+            username=None,
+            verbose=False
+        )
+
+        # Mock the read_tarfile function to return our sample data
+        mock_read_tar.return_value = self.sample_skype_data
+
+        # Mock the parse_skype_data function to return structured data
+        structured_data = {
+            "metadata": {
+                "userId": "test_user",
+                "userDisplayName": "Test User",
+                "exportDate": "2023-01-01T12:00:00Z"
+            },
+            "conversations": {
+                "conversation1": {
+                    "id": "conversation1",
+                    "displayName": "Test Conversation",
+                    "messages": []
+                }
+            }
+        }
+        mock_parse.return_value = structured_data
+
+        # Mock the export_conversations function to return True
+        mock_export.return_value = True
+
+        # Call the main function
+        with patch('sys.argv', ['skype_parser.py', self.sample_tar_path, '-t', '-o', self.temp_dir, '-f', 'json']):
+            main()
+
+        # Verify that the functions were called with the correct arguments
+        mock_read_tar.assert_called_once_with(self.sample_tar_path)
+        mock_parse.assert_called_once_with(self.sample_skype_data, None)
+        mock_export.assert_called_once_with(structured_data, 'json', self.temp_dir)
+
+    @patch('argparse.ArgumentParser.parse_args')
+    @patch('src.parser.skype_parser.SkypeETLPipeline')
+    @patch('src.parser.skype_parser.read_file')
+    @patch('src.parser.skype_parser.parse_skype_data')
+    def test_main_with_db_storage(self, mock_parse, mock_read, mock_etl, mock_args):
+        """Test main function with database storage."""
+        # Mock the command line arguments
+        mock_args.return_value = argparse.Namespace(
+            input_file=self.sample_json_path,
+            output_dir=None,
+            format=None,
+            extract_tar=False,
+            store_db=True,
+            db_name='test_db',
+            db_user='test_user',
+            db_password='test_password',
+            db_host='localhost',
+            db_port=5432,
+            username=None,
+            verbose=False
+        )
+
+        # Mock the read_file function to return our sample data
+        mock_read.return_value = self.sample_skype_data
+
+        # Mock the parse_skype_data function to return structured data
+        structured_data = {
+            "metadata": {
+                "userId": "test_user",
+                "userDisplayName": "Test User",
+                "exportDate": "2023-01-01T12:00:00Z"
+            },
+            "conversations": {
+                "conversation1": {
+                    "id": "conversation1",
+                    "displayName": "Test Conversation",
+                    "messages": []
+                }
+            }
+        }
+        mock_parse.return_value = structured_data
+
+        # Mock the ETL pipeline
+        mock_etl_instance = MagicMock()
+        mock_etl.return_value = mock_etl_instance
+
+        # Set ETL_AVAILABLE to True for this test
+        with patch('src.parser.skype_parser.ETL_AVAILABLE', True):
+            # Call the main function
+            with patch('sys.argv', ['skype_parser.py', self.sample_json_path, '--store-db', '--db-name', 'test_db', '--db-user', 'test_user']):
+                main()
+
+        # Verify that the functions were called with the correct arguments
+        mock_read.assert_called_once_with(self.sample_json_path)
+        mock_parse.assert_called_once_with(self.sample_skype_data, None)
+        mock_etl.assert_called_once()
+        mock_etl_instance.process.assert_called_once_with(structured_data)
+
+    def test_get_commandline_args(self):
+        """Test get_commandline_args function."""
+        # Test with minimal arguments
+        with patch('sys.argv', ['skype_parser.py', 'input.json']):
+            args = get_commandline_args()
+            self.assertEqual(args.input_file, 'input.json')
+            self.assertFalse(args.extract_tar)
+            self.assertIsNone(args.output_dir)
+            self.assertEqual(args.format, 'all')
+
+        # Test with more arguments
+        with patch('sys.argv', ['skype_parser.py', 'input.tar', '-t', '-o', 'output_dir', '-f', 'json']):
+            args = get_commandline_args()
+            self.assertEqual(args.input_file, 'input.tar')
+            self.assertTrue(args.extract_tar)
+            self.assertEqual(args.output_dir, 'output_dir')
+            self.assertEqual(args.format, 'json')
+
+        # Test with database arguments
+        with patch('sys.argv', ['skype_parser.py', 'input.json', '--store-db', '--db-name', 'test_db', '--db-user', 'test_user']):
+            args = get_commandline_args()
+            self.assertEqual(args.input_file, 'input.json')
+            self.assertTrue(args.store_db)
+            self.assertEqual(args.db_name, 'test_db')
+            self.assertEqual(args.db_user, 'test_user')
 
 
 if __name__ == '__main__':
