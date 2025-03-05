@@ -23,6 +23,8 @@ class TestExtractor(unittest.TestCase):
 
         # Sample data for testing
         self.sample_data = {
+            'userId': 'test-user-id',
+            'exportDate': '2023-01-01T00:00:00Z',
             'conversations': [
                 {
                     'id': 'conv1',
@@ -60,7 +62,7 @@ class TestExtractor(unittest.TestCase):
         # Verify the mocks were called
         mock_validate_file_exists.assert_called_once_with('test.tar')
         mock_validate_tar_file.assert_called_once_with('test.tar')
-        mock_read_tarfile.assert_called_once_with('test.tar')
+        mock_read_tarfile.assert_called_once_with('test.tar', auto_select=True)
         mock_validate_skype_data.assert_called_once_with(self.sample_data)
 
     @patch('src.db.etl.extractor.validate_file_exists')
@@ -104,7 +106,7 @@ class TestExtractor(unittest.TestCase):
         self.assertEqual(result, self.sample_data)
 
         # Verify the mocks were called
-        mock_validate_file_object.assert_called_once_with(file_obj)
+        mock_validate_file_object.assert_called_once_with(file_obj, allowed_extensions=['.json', '.tar'])
         mock_read_file_object.assert_called_once_with(file_obj)
         mock_validate_skype_data.assert_called_once_with(self.sample_data)
 

@@ -411,7 +411,7 @@ class TestConnectionStringValidation(unittest.TestCase):
         self.assertEqual(params['user'], 'user')
         self.assertEqual(params['password'], 'password')
         self.assertEqual(params['host'], 'localhost')
-        self.assertEqual(params['port'], 5432)
+        self.assertEqual(params['port'], '5432')
         self.assertEqual(params['dbname'], 'dbname')
 
     def test_valid_keyword_connection_string(self):

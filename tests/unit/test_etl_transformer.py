@@ -27,6 +27,8 @@ class TestTransformer(unittest.TestCase):
 
         # Sample raw data for testing
         self.raw_data = {
+            'userId': 'test-user-id',
+            'exportDate': '2023-01-01T00:00:00Z',
             'conversations': [
                 {
                     'id': 'conv1',

@@ -1,149 +1,180 @@
-# Development Context: ETLContext Implementation and Modular ETL Pipeline
+# Skype Parser ETL Validation Framework - Development Context
 
 ## Task Overview & Current Status
 
 ### Core Problem/Feature
-We've implemented a shared context object (`ETLContext`) to manage state across the modular ETL pipeline components. This addresses the need for better coordination, state management, error handling, and telemetry across the Extract-Transform-Load process.
+We've implemented a comprehensive validation framework for the Skype Parser ETL pipeline to catch configuration and data issues early in the process. The validation framework addresses several critical issues:
+- Inconsistent validation across ETL components
+- Lack of proper error handling for invalid inputs
+- Missing data sanitization for problematic content
+- Insufficient validation of database connections and configurations
+- Absence of centralized validation utilities
 
 ### Current Implementation Status
-- ✅ Created `ETLContext` class with comprehensive state management capabilities
-- ✅ Updated all ETL components (Extractor, Transformer, Loader, Pipeline Manager) to use the context
-- ✅ Created unit tests for the ETLContext class
-- ✅ Fixed import path issues in the modular components
-- ✅ Created an example script demonstrating ETLContext usage
-- ✅ Updated documentation to reflect the new implementation
+✅ Complete. The validation framework has been fully implemented with:
+- Centralized validation utilities in `src/utils/etl_validation.py`
+- Enhanced validation in all ETL components (Context, Extractor, Transformer, Loader, Pipeline)
+- Comprehensive unit and integration tests
+- Documentation in `docs/ETL_VALIDATION.md`
+- Test runner script `run_validation_tests.py`
 
 ### Key Architectural Decisions
-1. **Shared Context Pattern**: Implemented a shared context object that's passed between components rather than using global state or complex parameter passing.
-2. **Phase-Based Processing**: Structured the ETL process into distinct phases (extract, transform, load) with clear start/end boundaries.
-3. **Centralized Telemetry**: Consolidated progress tracking, memory monitoring, and error recording in the context.
-4. **Checkpointing Capability**: Added support for creating checkpoints after phases to enable resumable operations.
-5. **Backward Compatibility**: Maintained compatibility with the legacy ETL pipeline through a compatibility layer.
+1. **Centralized Validation Module**: Created a dedicated module for validation functions to ensure consistency and reusability across the ETL pipeline.
+   - Rationale: Prevents duplication of validation logic and ensures consistent validation behavior.
+
+2. **Component-Specific Validation**: Each ETL component has its own validation methods tailored to its specific needs.
+   - Rationale: Different components have different validation requirements, and component-specific validation allows for more targeted checks.
+
+3. **Data Sanitization**: Implemented automatic sanitization of problematic data where possible.
+   - Rationale: Improves robustness by handling common data issues automatically rather than failing.
+
+4. **Custom Exception Class**: Created an `ETLValidationError` exception class for clear error reporting.
+   - Rationale: Distinguishes validation errors from other types of errors for better error handling.
+
+5. **Comprehensive Testing**: Developed both unit and integration tests for the validation framework.
+   - Rationale: Ensures the validation framework works correctly in isolation and in the context of the ETL pipeline.
 
 ### Critical Constraints/Requirements
-- Must maintain backward compatibility with existing code
-- Must support both synchronous and asynchronous processing
-- Must handle large datasets efficiently with memory monitoring
-- Must provide detailed telemetry for monitoring and debugging
+1. **Backward Compatibility**: The validation enhancements must not break existing ETL pipeline functionality.
+2. **Performance Impact**: Validation checks should have minimal impact on ETL pipeline performance.
+3. **Clear Error Messages**: Validation errors must provide clear, actionable information for troubleshooting.
+4. **Graceful Degradation**: Non-critical validation issues should result in warnings rather than errors.
+5. **Supabase Integration**: Special validation for Supabase database configurations and connections.
 
 ## Codebase Navigation
 
 ### Key Files (Ranked by Importance)
 
-1. **`src/db/etl/context.py`**
-   - **Role**: Defines the `ETLContext` class that manages shared state across ETL components
-   - **Modifications**: Created from scratch with methods for phase management, progress tracking, error recording, and checkpointing
+1. **`src/utils/etl_validation.py`**
+   - **Role**: Centralized validation utilities for the ETL pipeline
+   - **Modifications**: Created new file with validation functions for Supabase configs, database schemas, checkpoint data, transformed data, and connection strings
+   - **Dependencies**: Requires `psycopg2`, `logging`, `re`, and `os` modules
 
-2. **`src/db/etl/pipeline_manager.py`**
-   - **Role**: Orchestrates the ETL process by coordinating the Extractor, Transformer, and Loader
-   - **Modifications**: Updated to use ETLContext for state management instead of managing state internally
+2. **`src/db/etl/context.py`**
+   - **Role**: Manages state across ETL pipeline components
+   - **Modifications**: Added `_validate_configuration` method to validate all configuration parameters during initialization
+   - **Dependencies**: Uses `ETLContext` for state management
 
 3. **`src/db/etl/extractor.py`**
-   - **Role**: Handles extraction of data from Skype export files
-   - **Modifications**: Updated to use ETLContext for state management and fixed import paths
+   - **Role**: Extracts data from Skype export files
+   - **Modifications**: Added `_validate_input_parameters` and `_validate_extracted_data` methods
+   - **Dependencies**: Uses validation utilities from `src/utils/validation.py`
 
 4. **`src/db/etl/transformer.py`**
-   - **Role**: Transforms raw data into a structured format
-   - **Modifications**: Updated to use ETLContext for state management and fixed import paths
+   - **Role**: Transforms raw Skype data into a structured format
+   - **Modifications**: Enhanced `_validate_raw_data`, added `_validate_user_display_name` and `_validate_transformed_data` methods
+   - **Dependencies**: Uses `ETLContext` for state management
 
 5. **`src/db/etl/loader.py`**
    - **Role**: Loads transformed data into the database
-   - **Modifications**: Updated to use ETLContext for state management and fixed import paths
+   - **Modifications**: Added `_validate_input_data` and `_validate_database_connection` methods
+   - **Dependencies**: Uses `psycopg2` for database connections
 
-6. **`src/db/etl/utils.py`**
-   - **Role**: Provides utility classes for progress tracking and memory monitoring
-   - **Modifications**: No changes needed as it's used by the ETLContext
+6. **`src/db/etl/pipeline_manager.py`**
+   - **Role**: Manages the ETL pipeline execution
+   - **Modifications**: Added `_validate_pipeline_input` method to validate pipeline input parameters
+   - **Dependencies**: Orchestrates `Extractor`, `Transformer`, and `Loader` components
 
-7. **`src/db/etl/__init__.py`**
-   - **Role**: Exports the ETL module components
-   - **Modifications**: Updated to export the ETLContext class
+7. **`examples/supabase_env_connection.py`**
+   - **Role**: Example script for connecting to Supabase using environment variables
+   - **Modifications**: Enhanced with validation utilities, added command-line options for skipping validation
+   - **Dependencies**: Uses `ETLPipeline` and validation utilities
 
-8. **`src/db/etl_pipeline_compat.py`**
-   - **Role**: Provides backward compatibility with the legacy ETL pipeline
-   - **Modifications**: Updated to use ETLContext internally
+8. **`tests/unit/test_etl_validation.py`**
+   - **Role**: Unit tests for validation utilities
+   - **Modifications**: Created comprehensive test cases for all validation functions
+   - **Dependencies**: Uses `unittest` and `mock` for testing
 
-9. **`tests/unit/test_etl_context.py`**
-   - **Role**: Unit tests for the ETLContext class
-   - **Modifications**: Created from scratch to test all ETLContext functionality
+9. **`tests/integration/test_etl_validation_integration.py`**
+   - **Role**: Integration tests for validation utilities
+   - **Modifications**: Created tests for validation functions in the context of the ETL pipeline
+   - **Dependencies**: Uses `unittest`, `mock`, and sample Skype data
 
-10. **`examples/etl_context_example.py`**
-    - **Role**: Demonstrates how to use the ETLContext with the modular ETL pipeline
-    - **Modifications**: Created from scratch as an example
+10. **`run_validation_tests.py`**
+    - **Role**: Script to run validation tests
+    - **Modifications**: Created script to run unit and integration tests with various options
+    - **Dependencies**: Uses `unittest` for test discovery and execution
 
-### Dependencies and Configurations
-- **psutil**: Required for memory monitoring in the ETLContext
-- **PostgreSQL**: Required for the database operations in the Loader
-- **Python 3.6+**: Required for type hints and other language features
+11. **`docs/ETL_VALIDATION.md`**
+    - **Role**: Documentation for the validation framework
+    - **Modifications**: Created comprehensive documentation with code examples and usage instructions
+    - **Dependencies**: None
+
+### Configuration Files
+- **`.env`**: Contains Supabase connection details (not committed to version control)
+- **`supabase.json`**: Contains Supabase configuration (template)
 
 ## Technical Context
 
 ### Technical Assumptions
-1. The ETL pipeline processes one file at a time
-2. The ETL process is divided into three distinct phases: extract, transform, load
-3. The database schema is already created and matches the expected structure
-4. The ETL process may be memory-intensive for large datasets
+1. **Database Schema**: The validation assumes a specific database schema with tables `skype_raw_exports`, `skype_conversations`, and `skype_messages`.
+2. **File Formats**: The validation assumes Skype export files are in TAR or JSON format.
+3. **Checkpoint Structure**: The validation assumes a specific structure for checkpoint data with version, context, and available checkpoints.
+4. **Transformed Data Structure**: The validation assumes a specific structure for transformed data with metadata and conversations.
 
 ### External Services/APIs
-- **PostgreSQL Database**: Used for storing the processed data
-- **File System**: Used for reading input files and optionally saving intermediate results
+1. **Supabase PostgreSQL**: The ETL pipeline connects to Supabase PostgreSQL for data storage.
+   - Special validation for Supabase host patterns, port numbers, and SSL mode.
+   - Connection validation to ensure the database is accessible before ETL operations.
 
 ### Performance Considerations
-1. **Memory Management**: The ETLContext includes memory monitoring to prevent out-of-memory errors
-2. **Parallel Processing**: The Transformer supports parallel processing for large datasets
-3. **Chunked Processing**: Messages are processed in chunks to reduce memory usage
-4. **Batch Database Operations**: The Loader uses batch inserts for better database performance
+1. **Validation Overhead**: Validation checks add some overhead to the ETL pipeline, but the impact is minimal compared to the data processing operations.
+2. **Memory Usage**: The validation framework creates copies of data structures for sanitization, which increases memory usage slightly.
+3. **Early Validation**: Validating inputs early in the pipeline prevents wasted processing on invalid data, improving overall efficiency.
 
 ### Security Considerations
-1. **Database Credentials**: Stored in the ETLContext and passed to the Loader
-2. **Input Validation**: The Extractor validates input files before processing
-3. **Error Handling**: Errors are recorded in the ETLContext for later analysis
+1. **Connection String Parsing**: The validation framework parses connection strings, which may contain sensitive information like passwords.
+2. **Database Access**: The validation framework checks database schema, which requires database access permissions.
+3. **File System Access**: The validation framework checks file existence and permissions, which requires file system access.
 
 ## Development Progress
 
 ### Last Completed Milestone
-- Implemented the ETLContext class and updated all ETL components to use it
-- Fixed import path issues in the modular components
-- Created unit tests for the ETLContext class
-- Created an example script demonstrating ETLContext usage
-- Updated documentation to reflect the new implementation
+✅ Implemented comprehensive validation throughout the ETL pipeline, including:
+- Centralized validation utilities
+- Component-specific validation methods
+- Data sanitization
+- Comprehensive tests
+- Documentation
 
 ### Immediate Next Steps
-1. Implement integration tests for the modular ETL pipeline with ETLContext
-2. Add support for resuming from checkpoints in the ETLPipeline class
-3. Enhance error recovery mechanisms in the ETL components
-4. Optimize memory usage further for very large datasets
-5. Add more detailed telemetry for monitoring and debugging
+1. **Performance Testing**: Measure the performance impact of the validation framework on the ETL pipeline.
+2. **Schema Validation**: Add JSON schema validation for raw and transformed data.
+3. **Data Quality Metrics**: Track and report data quality metrics during validation.
+4. **Custom Validation Rules**: Allow users to define custom validation rules.
+5. **Validation Reporting**: Generate detailed validation reports for analysis.
 
 ### Known Issues/Technical Debt
-1. The compatibility layer (`etl_pipeline_compat.py`) needs more comprehensive testing
-2. Some error handling scenarios may not be fully covered
-3. The memory monitoring could be more sophisticated (e.g., predicting memory usage)
-4. Documentation for advanced usage scenarios could be improved
+1. **Test Coverage**: While comprehensive, the tests may not cover all edge cases, particularly for complex data structures.
+2. **Error Handling**: Some validation errors could be handled more gracefully with automatic recovery mechanisms.
+3. **Documentation**: The documentation could be enhanced with more examples and troubleshooting guides.
+4. **Validation Configuration**: The validation rules are currently hardcoded and not configurable.
 
 ### Attempted Approaches That Didn't Work
-1. **Global State Management**: Initially considered using global variables or a singleton for state management, but this created tight coupling and made testing difficult
-2. **Parameter Passing**: Tried passing state through method parameters, but this became unwieldy with many parameters
-3. **Event-Based Communication**: Considered an event system for component communication, but this added complexity without clear benefits
+1. **Schema-Based Validation**: Initially attempted to use JSON Schema for validation, but it was too rigid for the variable structure of Skype data.
+2. **Validation Decorators**: Tried using decorators for validation, but it made the code harder to understand and debug.
+3. **Validation Chain**: Attempted to implement a validation chain pattern, but it added unnecessary complexity.
 
 ## Developer Notes
 
 ### Codebase Structure Insights
-1. The modular ETL pipeline follows a clear separation of concerns with distinct components for each phase
-2. The ETLContext serves as a central hub for state management, reducing coupling between components
-3. The compatibility layer allows for a gradual transition from the legacy pipeline to the modular approach
+1. **ETL Pipeline Architecture**: The ETL pipeline follows a modular architecture with separate components for extraction, transformation, and loading.
+2. **Context Object**: The `ETLContext` object is central to the ETL pipeline, managing state across components.
+3. **Checkpoint Mechanism**: The ETL pipeline has a sophisticated checkpoint mechanism for resuming failed operations.
+4. **Parallel Processing**: The transformer supports parallel processing for improved performance.
 
 ### Workarounds/Temporary Solutions
-1. The import path issues were fixed by changing relative imports to absolute imports, but a more consistent import strategy could be implemented
-2. The memory monitoring currently uses a simple threshold approach, but could be enhanced with more sophisticated algorithms
+1. **Attribute Name Mismatch**: Fixed an issue where the transformer was trying to access `output_directory` instead of `output_dir` in the `ETLContext`.
+2. **Type Conversion**: The validation framework automatically converts non-string content to strings, which is a workaround for inconsistent data types.
+3. **Missing Tables Warning**: The database schema validation warns about missing tables rather than failing, allowing the ETL pipeline to attempt to create them.
 
 ### Areas Needing Attention
-1. **Error Recovery**: The error handling and recovery mechanisms need further development
-2. **Checkpoint Resumption**: The ability to resume from checkpoints needs to be fully implemented
-3. **Performance Testing**: More comprehensive performance testing with large datasets is needed
-4. **Documentation**: The documentation should be expanded to cover more advanced usage scenarios
-5. **API Integration**: The integration with the API layer needs to be updated to use the new ETLContext
+1. **Database Connection Pooling**: The database connection validation could be enhanced with connection pooling for better performance.
+2. **Error Recovery**: The validation framework could be enhanced with automatic error recovery mechanisms.
+3. **Validation Metrics**: The validation framework could track and report validation metrics for monitoring.
+4. **Configuration Validation**: The validation of configuration files could be enhanced with schema validation.
+5. **Cross-Component Validation**: Some validation checks span multiple components and could be centralized.
 
-### Testing Considerations
-1. Unit tests for the ETLContext are in place, but integration tests are needed
-2. Performance tests should be updated to use the ETLContext
-3. Edge cases like memory limits and error scenarios need more thorough testing
+---
+
+This development context summary provides a comprehensive overview of the ETL validation framework implementation, including the core problem, current status, key architectural decisions, codebase navigation, technical context, development progress, and developer notes. It should provide sufficient context for continuing development without needing to rediscover key information.

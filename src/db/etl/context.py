@@ -19,6 +19,13 @@ from .utils import ProgressTracker, MemoryMonitor
 
 logger = logging.getLogger(__name__)
 
+# Custom JSON encoder for datetime objects
+class DateTimeEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, datetime.datetime):
+            return obj.isoformat()
+        return super().default(obj)
+
 class ETLContext:
     """
     Shared context object for the ETL pipeline.
@@ -526,9 +533,9 @@ class ETLContext:
         # Serialize context to JSON
         checkpoint_data = self.serialize_checkpoint()
 
-        # Save to file
+        # Save to file using custom encoder for datetime objects
         with open(checkpoint_file, 'w') as f:
-            json.dump(checkpoint_data, f, indent=2)
+            json.dump(checkpoint_data, f, indent=2, cls=DateTimeEncoder)
 
         logger.info(f"Saved checkpoint to {checkpoint_file}")
         return checkpoint_file

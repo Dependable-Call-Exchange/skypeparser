@@ -98,13 +98,10 @@ def validate_database_schema(conn: psycopg2.extensions.connection) -> Tuple[bool
         with conn.cursor() as cursor:
             # Check if tables exist
             for table in required_tables:
-                cursor.execute(f"""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables
-                        WHERE table_schema = 'public'
-                        AND table_name = %s
-                    )
-                """, (table,))
+                cursor.execute(
+                    "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = %s)",
+                    (table,)
+                )
                 exists = cursor.fetchone()[0]
                 if not exists:
                     missing_tables.append(table)
@@ -240,9 +237,11 @@ def validate_transformed_data_structure(transformed_data: Dict[str, Any]) -> Dic
 
                 # Sanitize content fields
                 for content_field in ['raw_content', 'cleaned_content']:
-                    if content_field in sanitized_msg and sanitized_msg[content_field] is not None:
-                        # Ensure content is a string
-                        if not isinstance(sanitized_msg[content_field], str):
+                    if content_field in sanitized_msg:
+                        # Ensure content is a string, including None values
+                        if sanitized_msg[content_field] is None:
+                            sanitized_msg[content_field] = 'None'
+                        elif not isinstance(sanitized_msg[content_field], str):
                             sanitized_msg[content_field] = str(sanitized_msg[content_field])
 
                 sanitized_data['conversations'][sanitized_conv_id]['messages'].append(sanitized_msg)
@@ -284,7 +283,7 @@ def validate_connection_string(connection_string: str) -> Dict[str, Any]:
                     params['password'] = password
                 params['host'] = host
                 if port:
-                    params['port'] = int(port)
+                    params['port'] = port  # Keep as string instead of converting to int
                 params['dbname'] = dbname
 
                 # Extract additional parameters from query string
@@ -314,13 +313,6 @@ def validate_connection_string(connection_string: str) -> Dict[str, Any]:
         missing_params = [p for p in required_params if p not in params]
         if missing_params:
             raise ETLValidationError(f"Missing required connection parameters: {missing_params}")
-
-        # Convert port to integer if present
-        if 'port' in params and not isinstance(params['port'], int):
-            try:
-                params['port'] = int(params['port'])
-            except ValueError:
-                raise ETLValidationError(f"Invalid port value: {params['port']}")
 
         return params
 

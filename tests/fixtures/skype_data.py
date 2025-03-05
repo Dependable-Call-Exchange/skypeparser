@@ -167,3 +167,53 @@ CONVERSATION_SKIP_TEST_DATA = {
         }
     ]
 }
+
+def get_sample_skype_data():
+    """
+    Get sample Skype data for testing.
+
+    Returns:
+        dict: Sample Skype data
+    """
+    return {
+        "userId": "test-user",
+        "exportDate": "2023-01-01",
+        "conversations": [
+            {
+                "id": "conv1",
+                "displayName": "Conversation 1",
+                "MessageList": [
+                    {
+                        "id": "msg1",
+                        "originalarrivaltime": "2023-01-01T00:00:00",
+                        "content": "Hello",
+                        "from": "test-user"
+                    },
+                    {
+                        "id": "msg2",
+                        "originalarrivaltime": "2023-01-01T00:01:00",
+                        "content": "Hi there",
+                        "from": "other-user"
+                    }
+                ]
+            },
+            {
+                "id": "conv2",
+                "displayName": "Conversation 2",
+                "MessageList": [
+                    {
+                        "id": "msg3",
+                        "originalarrivaltime": "2023-01-02T00:00:00",
+                        "content": "How are you?",
+                        "from": "test-user"
+                    },
+                    {
+                        "id": "msg4",
+                        "originalarrivaltime": "2023-01-02T00:01:00",
+                        "content": "I'm good, thanks!",
+                        "from": "other-user"
+                    }
+                ]
+            }
+        ]
+    }

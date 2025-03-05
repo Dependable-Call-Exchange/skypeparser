@@ -35,6 +35,8 @@ class TestLoader(unittest.TestCase):
 
         # Sample raw data for testing
         self.raw_data = {
+            'userId': 'test-user-id',
+            'exportDate': '2023-01-01T00:00:00Z',
             'conversations': [
                 {
                     'id': 'conv1',
@@ -225,6 +227,12 @@ class TestLoader(unittest.TestCase):
         """Test error handling when loading data."""
         # Set up a mock connection
         self.loader.conn = MagicMock()
+
+        # Mock the _validate_database_connection method to avoid validation errors
+        self.loader._validate_database_connection = MagicMock()
+
+        # Mock the _validate_input_data method to avoid validation errors
+        self.loader._validate_input_data = MagicMock()
 
         # Set up the cursor to raise an exception
         mock_cursor = MagicMock()

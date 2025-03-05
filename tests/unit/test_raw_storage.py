@@ -103,29 +103,27 @@ class TestSkypeDataStorage(unittest.TestCase):
     @patch('src.db.raw_storage.storage.SimpleConnectionPool')
     def test_ensure_tables_exist(self, mock_pool):
         """Test ensure_tables_exist method."""
-        # Mock the connection pool and connection
+        # Mock the connection pool
+        mock_pool_instance = MagicMock()
+        mock_pool.return_value = mock_pool_instance
+
+        # Mock the connection and cursor
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
-
-        mock_pool_instance = MagicMock()
         mock_pool_instance.getconn.return_value = mock_conn
-        mock_pool.return_value = mock_pool_instance
 
         # Create a storage instance with mocked connection pool
         storage = SkypeDataStorage(self.connection_params)
-
-        # Reset the mock to clear the call from initialization
-        mock_cursor.reset_mock()
 
         # Call ensure_tables_exist directly
         storage.ensure_tables_exist()
 
         # Verify that the cursor executed the CREATE_RAW_TABLES_SQL
-        mock_cursor.execute.assert_called_once_with(CREATE_RAW_TABLES_SQL)
+        mock_cursor.execute.assert_called_with(CREATE_RAW_TABLES_SQL)
 
-        # Verify that the connection was committed
-        mock_conn.commit.assert_called_once()
+        # Verify that the connection was committed (now called twice due to validation)
+        self.assertEqual(mock_conn.commit.call_count, 2)
 
         # Verify that the connection was returned to the pool
         mock_pool_instance.putconn.assert_called_once_with(mock_conn)
@@ -262,6 +260,8 @@ class TestSkypeDataStorage(unittest.TestCase):
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        # Set up the cursor to return None for fetchone (indicating no duplicate)
+        mock_cursor.fetchone.return_value = None
 
         mock_pool_instance = MagicMock()
         mock_pool_instance.getconn.return_value = mock_conn
@@ -269,6 +269,7 @@ class TestSkypeDataStorage(unittest.TestCase):
 
         # Create a storage instance with mocked connection pool
         with patch.object(SkypeDataStorage, 'ensure_tables_exist'), \
+             patch.object(SkypeDataStorage, 'calculate_file_hash', return_value='test_hash'), \
              patch.object(SkypeDataStorage, 'store_raw_data', return_value=1), \
              patch.object(SkypeDataStorage, 'store_cleaned_data', return_value=2):
 
