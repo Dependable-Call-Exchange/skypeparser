@@ -159,3 +159,112 @@ The ETL pipeline implementation provides a comprehensive solution for processing
 4. **Documentation**: Continue to improve documentation as needed
 5. **Monitoring**: Add monitoring and alerting for production deployments
 6. **Unit Tests**: Add unit tests for the refactored parser modules
+
+## Enhanced Message Type Handling
+
+### Overview
+
+We've implemented enhanced message type handling to extract structured data from various Skype message types. This allows for more detailed analysis and presentation of different message types beyond just displaying a generic message.
+
+### Implementation Details
+
+1. **Message Type Handlers Module**
+   - Created a new module `src/utils/message_type_handlers.py` with specialized handlers for different message types
+   - Implemented a base `MessageTypeHandler` class and specific handlers for polls, calls, locations, contacts, media, and scheduled calls
+   - Each handler extracts structured data from the message content using BeautifulSoup for HTML parsing
+
+2. **Configuration Updates**
+   - Updated `config/message_types.json` to include an `extractable_types` section that specifies which message types support enhanced data extraction
+   - Maintained backward compatibility with existing message type descriptions
+
+3. **Core Parser Integration**
+   - Enhanced the `_process_message_content` function in `src/parser/core_parser.py` to use the message type handlers
+   - Added support for passing the full message object to enable structured data extraction
+   - Updated the `_process_single_message` function to pass the full message to `_process_message_content`
+
+4. **Documentation**
+   - Updated `docs/message_types.md` with comprehensive documentation on the enhanced message type handling
+   - Added information to the README.md about the new feature
+   - Created unit tests for all message type handlers
+
+### Benefits
+
+1. **Richer Data Extraction**: The parser now extracts structured data from various message types, enabling more detailed analysis and presentation.
+2. **Improved User Experience**: Applications using the parser can now display more meaningful information about different message types.
+3. **Extensibility**: The modular design makes it easy to add support for new message types in the future.
+4. **Robust Error Handling**: Each handler includes proper error handling to ensure the parser continues to function even if a message cannot be parsed correctly.
+
+### Supported Message Types
+
+The following message types now have enhanced data extraction:
+
+1. **Poll**: Extracts poll question and options
+2. **Event/Call**: Extracts call duration and participants
+3. **RichText/Location**: Extracts location coordinates and address
+4. **RichText/Contacts**: Extracts contact information (name, phone, email)
+5. **RichText/Media_AudioMsg**: Extracts audio file metadata (filename, size, duration, etc.)
+6. **RichText/Media_Video**: Extracts video file metadata (filename, size, dimensions, duration, etc.)
+7. **RichText/Media_GenericFile**: Extracts file metadata (filename, size, type, etc.)
+8. **RichText/UriObject**: Extracts file and URL metadata
+9. **RichText/ScheduledCallInvite**: Extracts scheduled call details (title, time, duration)
+10. **RichText/Media_Album**: Extracts album metadata (item count, individual image details)
+11. **RichText/Media_Card**: Extracts media card details (title, description, URL, thumbnail)
+12. **PopCard**: Extracts pop card information (title, content, action, type)
+13. **Translation**: Extracts translation details (text, languages, original text)
+14. **ThreadActivity/***: Extracts thread activity details (members, values, initiators)
+
+### Enhanced Media Metadata Extraction
+
+The MediaHandler has been significantly enhanced to extract more detailed metadata from media messages:
+
+1. **Improved File Information**:
+   - Added formatted file size (e.g., "10.5 MB" instead of raw bytes)
+   - Added support for extracting file descriptions
+   - Enhanced filename and filetype detection
+
+2. **Media Dimensions**:
+   - Added support for extracting image/video width and height
+   - Useful for displaying media with proper aspect ratios
+
+3. **Media Duration**:
+   - Added support for extracting audio/video duration
+   - Helps with media playback UI
+
+4. **Thumbnails and Previews**:
+   - Added support for extracting thumbnail URLs
+   - Enables efficient media previews in applications
+
+5. **Album Support**:
+   - Added special handling for photo albums
+   - Extracts information about each item in the album
+   - Includes count of items in the album
+
+### Thread Activity Handling
+
+A new ThreadActivityHandler has been implemented to extract structured data from system messages:
+
+1. **Member Management**:
+   - Extracts details about members being added or removed
+   - Includes member IDs and names
+
+2. **Conversation Updates**:
+   - Extracts new values for topic updates, picture updates, etc.
+   - Identifies the initiator of the change
+
+3. **Security Settings**:
+   - Extracts information about encryption handshakes
+   - Tracks changes to conversation joining settings
+
+4. **History Settings**:
+   - Tracks changes to history disclosure settings
+   - Provides context for conversation privacy changes
+
+### Future Enhancements
+
+1. **Additional Message Types**: Continue to add support for new message types as they are identified
+2. **Enhanced Media Handling**: Further improve extraction of media metadata and content
+3. **Integration with Export Formats**: Ensure structured data is properly included in all export formats (text, JSON, CSV)
+4. **Database Schema Updates**: Update the database schema to store the extracted structured data
+5. **Machine Learning Integration**: Add capabilities to analyze message content and extract insights
+6. **Sentiment Analysis**: Implement sentiment analysis for text messages
+7. **Entity Recognition**: Extract named entities (people, places, organizations) from messages

@@ -13,6 +13,10 @@ A comprehensive toolkit for extracting, transforming, and loading Skype export d
 - **Comprehensive Logging** for tracking the ETL process
 - **Modular Design** with clear separation of concerns
 - **Extensive Test Suite** for ensuring code quality and reliability
+- **Clean and format message content**
+- **Handle various message types** (text, media, system messages, etc.)
+- **Generate reports and statistics**
+- **Enhanced message type handling** (extracting structured data from polls, calls, locations, etc.)
 
 ## Project Structure
 
@@ -177,6 +181,19 @@ Provides a user-friendly command-line interface for:
 - Exporting conversations in various formats
 - Storing data in PostgreSQL using the ETL pipeline
 - Selecting specific conversations to process
+
+### Message Type Handling (`message_type_handlers.py`)
+
+Provides specialized handlers for different Skype message types:
+
+- `MessageTypeHandler`: Base class for all message type handlers
+- `PollHandler`: Extracts poll questions and options
+- `CallHandler`: Extracts call duration and participants
+- `LocationHandler`: Extracts location coordinates and address
+- `ContactsHandler`: Extracts contact information
+- `MediaHandler`: Extracts media file metadata
+- `ScheduledCallHandler`: Extracts scheduled call details
+- `extract_structured_data`: Main function that extracts structured data from messages
 
 ## ETL Pipeline Stages
 
@@ -354,3 +371,11 @@ For more details on the refactoring approach, benefits, and future recommendatio
 
 - Thanks to all contributors who have helped with the development of this project.
 - Special thanks to the Skype team for providing the export functionality that makes this project possible.
+
+## Documentation
+
+- [Installation Guide](docs/installation.md)
+- [Usage Guide](docs/usage.md)
+- [API Reference](docs/api.md)
+- [Message Type Handling](docs/message_types.md)
+- [Contributing Guidelines](docs/contributing.md)

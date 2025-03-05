@@ -10,6 +10,8 @@ import re
 import logging
 import datetime
 import html
+import json
+import os
 from typing import Dict, List, Tuple, Optional, Any
 
 # Import custom exceptions
@@ -29,6 +31,9 @@ from ..utils.dependencies import (
 
 # Import configuration utility
 from ..utils.config import load_config, get_message_type_description
+
+# Import message type handlers
+from ..utils.message_type_handlers import extract_structured_data, get_handler_for_message_type
 
 # Load configuration
 config = load_config(message_types_file='config/message_types.json')
@@ -236,7 +241,13 @@ def type_parser(msg_type: str) -> str:
         raise InvalidInputError(error_msg)
 
     # Use the configuration utility to get the message type description
-    return get_message_type_description(config, msg_type)
+    description = get_message_type_description(config, msg_type)
+
+    # Log unknown message types to help identify gaps in our configuration
+    if description == config.get('default_message_format', '***Sent a {message_type}***').format(message_type=msg_type):
+        logger.info(f"Encountered unconfigured message type: {msg_type}")
+
+    return description
 
 
 def banner_constructor(display_name: str, person: str, export_date: str,
@@ -610,7 +621,7 @@ def _process_single_message(msg: Dict[str, Any], id_to_display_name: Dict[str, s
     }
 
     # Handle message type and content
-    msg_data.update(_process_message_content(msg_type, msg_content_raw))
+    msg_data.update(_process_message_content(msg_type, msg_content_raw, full_message=msg))
 
     return msg_data
 
@@ -631,38 +642,44 @@ def _parse_message_timestamp(timestamp: str) -> Tuple[str, str, Optional[datetim
         return "Unknown date", "Unknown time", None
 
 
-def _process_message_content(msg_type: str, msg_content_raw: str) -> Dict[str, str]:
+def _process_message_content(msg_type: str, msg_content_raw: str, full_message: Dict[str, Any] = None) -> Dict[str, str]:
     """
     Process message content based on message type.
 
     Args:
         msg_type (str): Message type
         msg_content_raw (str): Raw message content
+        full_message (Dict[str, Any], optional): The full message object for additional context
 
     Returns:
         dict: Processed content data
     """
+    result = {
+        'content_raw': msg_content_raw,
+        'content': msg_content_raw
+    }
+
     # Handle message type
     if msg_type != 'RichText':
         try:
             processed_content = type_parser(msg_type)
+            result['content'] = processed_content
         except InvalidInputError:
-            processed_content = f"***Unknown message type: {msg_type}***"
+            result['content'] = f"***Unknown message type: {msg_type}***"
 
-        return {
-            'content_raw': processed_content,
-            'content': processed_content
-        }
+    else:
+        # Parse content for RichText messages
+        try:
+            cleaned_content = content_parser(msg_content_raw)
+            result['content'] = cleaned_content
+        except ContentParsingError:
+            # Keep the raw content if parsing fails
+            pass
 
-    # Parse content for RichText messages
-    try:
-        cleaned_content = content_parser(msg_content_raw)
-        return {
-            'content_raw': msg_content_raw,
-            'content': cleaned_content
-        }
-    except ContentParsingError:
-        return {
-            'content_raw': msg_content_raw,
-            'content': msg_content_raw
-        }
+    # Extract structured data for specific message types if full message is provided
+    if full_message and get_handler_for_message_type(msg_type):
+        structured_data = extract_structured_data(full_message)
+        if structured_data:
+            result.update(structured_data)
+
+    return result
