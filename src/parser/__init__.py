@@ -5,8 +5,9 @@ This module provides functionality for parsing Skype export files and extracting
 meaningful data from them. It includes tools for cleaning and formatting message
 content, handling different message types, and exporting conversations in various formats.
 
-The module is organized into three main components:
+The module is organized into four main components:
 - core_parser: Core functions for parsing Skype export data
+- content_extractor: Functions for extracting structured data from message content
 - file_output: Functions for outputting data to various file formats
 - skype_parser: Command-line interface for parsing Skype export files
 - exceptions: Custom exceptions for consistent error handling
@@ -29,12 +30,19 @@ warnings.warn(
 from .core_parser import (
     timestamp_parser,
     content_parser,
-    tag_stripper,
     pretty_quotes,
     type_parser,
     banner_constructor,
     parse_skype_data,
     id_selector
+)
+
+# Import content extraction functions
+from .content_extractor import (
+    extract_content_data,
+    format_content_with_markup,
+    format_content_with_regex,
+    ContentExtractor
 )
 
 # Import file output functions
@@ -62,12 +70,17 @@ __all__ = [
     # Core parsing functions
     'timestamp_parser',
     'content_parser',
-    'tag_stripper',
     'pretty_quotes',
     'type_parser',
     'banner_constructor',
     'parse_skype_data',
     'id_selector',
+
+    # Content extraction functions
+    'extract_content_data',
+    'format_content_with_markup',
+    'format_content_with_regex',
+    'ContentExtractor',
 
     # File output functions
     'write_to_file',
