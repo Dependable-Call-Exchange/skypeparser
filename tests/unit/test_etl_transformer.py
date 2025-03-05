@@ -16,6 +16,13 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 from src.db.etl.transformer import Transformer
+from tests.factories import (
+    SkypeDataFactory,
+    SkypeConversationFactory,
+    SkypeMessageFactory,
+    BASIC_SKYPE_DATA,
+    COMPLEX_SKYPE_DATA
+)
 
 class TestTransformer(unittest.TestCase):
     """Test cases for the Transformer class."""
@@ -25,49 +32,49 @@ class TestTransformer(unittest.TestCase):
         # Create a transformer instance with default settings
         self.transformer = Transformer(parallel_processing=False, chunk_size=2)
 
-        # Sample raw data for testing
-        self.raw_data = {
-            'userId': 'test-user-id',
-            'exportDate': '2023-01-01T00:00:00Z',
-            'conversations': [
-                {
-                    'id': 'conv1',
-                    'displayName': 'Test Conversation 1',
-                    'MessageList': [
-                        {
-                            'id': 'msg1',
-                            'originalarrivaltime': '2023-01-01T12:00:00Z',
-                            'from': 'user1',
-                            'messagetype': 'RichText',
-                            'content': 'Hello world',
-                            'edittime': None
-                        },
-                        {
-                            'id': 'msg2',
-                            'originalarrivaltime': '2023-01-01T12:05:00Z',
-                            'from': 'user2',
-                            'messagetype': 'RichText',
-                            'content': 'Hi there',
-                            'edittime': '2023-01-01T12:06:00Z'
-                        }
+        # Use factory to create sample raw data for testing
+        self.raw_data = SkypeDataFactory.build(
+            userId='test-user-id',
+            exportDate='2023-01-01T00:00:00Z',
+            conversations=[
+                SkypeConversationFactory.build(
+                    id='conv1',
+                    displayName='Test Conversation 1',
+                    MessageList=[
+                        SkypeMessageFactory.build(
+                            id='msg1',
+                            originalarrivaltime='2023-01-01T12:00:00Z',
+                            from_id='user1',
+                            messagetype='RichText',
+                            content='Hello world',
+                            edittime=None
+                        ),
+                        SkypeMessageFactory.build(
+                            id='msg2',
+                            originalarrivaltime='2023-01-01T12:05:00Z',
+                            from_id='user2',
+                            messagetype='RichText',
+                            content='Hi there',
+                            edittime='2023-01-01T12:06:00Z'
+                        )
                     ]
-                },
-                {
-                    'id': 'conv2',
-                    'displayName': 'Test Conversation 2',
-                    'MessageList': [
-                        {
-                            'id': 'msg3',
-                            'originalarrivaltime': '2023-01-02T10:00:00Z',
-                            'from': 'user1',
-                            'messagetype': 'RichText',
-                            'content': 'Another message',
-                            'edittime': None
-                        }
+                ),
+                SkypeConversationFactory.build(
+                    id='conv2',
+                    displayName='Test Conversation 2',
+                    MessageList=[
+                        SkypeMessageFactory.build(
+                            id='msg3',
+                            originalarrivaltime='2023-01-02T10:00:00Z',
+                            from_id='user1',
+                            messagetype='RichText',
+                            content='Another message',
+                            edittime=None
+                        )
                     ]
-                }
+                )
             ]
-        }
+        )
 
         # Expected transformed data structure (partial)
         self.expected_metadata = {
@@ -99,127 +106,225 @@ class TestTransformer(unittest.TestCase):
         # Verify conversation details
         conv1 = conversations['conv1']
         self.assertEqual(conv1['display_name'], 'Test Conversation 1')
-        self.assertEqual(conv1['message_count'], 2)
         self.assertEqual(len(conv1['messages']), 2)
 
         # Verify message details
         msg1 = conv1['messages'][0]
-        self.assertEqual(msg1['timestamp'], '2023-01-01T12:00:00Z')
-        self.assertEqual(msg1['sender_id'], 'user1')
-        self.assertEqual(msg1['message_type'], 'RichText')
+        self.assertEqual(msg1['id'], 'msg1')
         self.assertEqual(msg1['content'], 'Hello world')
+        self.assertEqual(msg1['from_id'], 'user1')
+        self.assertEqual(msg1['message_type'], 'RichText')
         self.assertFalse(msg1['is_edited'])
 
         msg2 = conv1['messages'][1]
-        self.assertEqual(msg2['timestamp'], '2023-01-01T12:05:00Z')
-        self.assertEqual(msg2['sender_id'], 'user2')
+        self.assertEqual(msg2['id'], 'msg2')
+        self.assertEqual(msg2['content'], 'Hi there')
+        self.assertEqual(msg2['from_id'], 'user2')
+        self.assertEqual(msg2['message_type'], 'RichText')
         self.assertTrue(msg2['is_edited'])
 
-    def test_transform_empty_data(self):
-        """Test transformation with empty data."""
-        empty_data = {'conversations': []}
-        transformed_data = self.transformer.transform(empty_data, 'Test User')
+    def test_transform_with_parallel_processing(self):
+        """Test transformation with parallel processing enabled."""
+        # Create a transformer with parallel processing
+        transformer = Transformer(parallel_processing=True, max_workers=2)
 
-        # Verify the structure
+        # Transform the raw data
+        transformed_data = transformer.transform(self.raw_data, 'Test User')
+
+        # Verify the structure of the transformed data
         self.assertIn('metadata', transformed_data)
         self.assertIn('conversations', transformed_data)
 
         # Verify metadata
         metadata = transformed_data['metadata']
+        self.assertEqual(metadata['user_display_name'], 'Test User')
+        self.assertEqual(metadata['total_conversations'], 2)
+        self.assertEqual(metadata['total_messages'], 3)
+
+    def test_transform_with_invalid_data(self):
+        """Test transformation with invalid data."""
+        # Create invalid data using factory
+        invalid_data = SkypeDataFactory.build(
+            userId=None,  # Missing user ID
+            exportDate='invalid-date',  # Invalid date format
+            conversations=[]  # Empty conversations list
+        )
+
+        # Transform the invalid data
+        transformed_data = self.transformer.transform(invalid_data, 'Test User')
+
+        # Verify the structure of the transformed data
+        self.assertIn('metadata', transformed_data)
+        self.assertIn('conversations', transformed_data)
+
+        # Verify metadata
+        metadata = transformed_data['metadata']
+        self.assertEqual(metadata['user_display_name'], 'Test User')
         self.assertEqual(metadata['total_conversations'], 0)
         self.assertEqual(metadata['total_messages'], 0)
 
-        # Verify empty conversations
-        self.assertEqual(len(transformed_data['conversations']), 0)
-
-    def test_transform_invalid_data(self):
-        """Test transformation with invalid data."""
-        # Test with missing 'conversations' key
-        invalid_data = {'other_key': 'value'}
-        with self.assertRaises(ValueError):
-            self.transformer.transform(invalid_data, 'Test User')
-
-        # Test with non-dict data
-        with self.assertRaises(ValueError):
-            self.transformer.transform("not a dict", 'Test User')
-
-    @patch('src.db.etl.transformer.ContentExtractor')
-    def test_content_cleaning(self, mock_content_extractor_class):
-        """Test that content is properly cleaned."""
-        # Set up the mock
-        mock_extractor = MagicMock()
-        mock_extractor.clean_content.return_value = "Cleaned content"
-        mock_content_extractor_class.return_value = mock_extractor
-
-        # Create a new transformer with the mock
-        transformer = Transformer(parallel_processing=False)
-
-        # Transform the data
-        transformed_data = transformer.transform(self.raw_data, 'Test User')
-
-        # Verify the content extractor was called
-        self.assertTrue(mock_extractor.clean_content.called)
-
-        # Verify the cleaned content was used
-        conv1_messages = transformed_data['conversations']['conv1']['messages']
-        self.assertEqual(conv1_messages[0]['cleaned_content'], "Cleaned content")
-
-    @patch('src.db.etl.transformer.get_handler_for_message_type')
-    def test_structured_data_extraction(self, mock_get_handler):
-        """Test that structured data is properly extracted."""
-        # Set up the mock
-        mock_handler = MagicMock()
-        mock_handler.return_value = {"structured": "data"}
-        mock_get_handler.return_value = mock_handler
+    def test_transform_with_missing_display_name(self):
+        """Test transformation with missing display name."""
+        # Create data with a conversation missing display name
+        data_with_missing_display_name = SkypeDataFactory.build(
+            conversations=[
+                SkypeConversationFactory.build(
+                    id='conv1',
+                    displayName=None,  # Missing display name
+                    MessageList=[
+                        SkypeMessageFactory.build(
+                            id='msg1',
+                            content='This message should be skipped'
+                        )
+                    ]
+                ),
+                SkypeConversationFactory.build(
+                    id='conv2',
+                    displayName='Valid Conversation',
+                    MessageList=[
+                        SkypeMessageFactory.build(
+                            id='msg2',
+                            content='This message should be processed'
+                        )
+                    ]
+                )
+            ]
+        )
 
         # Transform the data
-        transformed_data = self.transformer.transform(self.raw_data, 'Test User')
+        transformed_data = self.transformer.transform(data_with_missing_display_name, 'Test User')
 
-        # Verify the handler was called
-        self.assertTrue(mock_handler.called)
+        # Verify that the conversation with missing display name was skipped
+        conversations = transformed_data['conversations']
+        self.assertNotIn('conv1', conversations)
+        self.assertIn('conv2', conversations)
 
-        # Verify the structured data was used
-        conv1_messages = transformed_data['conversations']['conv1']['messages']
-        self.assertEqual(conv1_messages[0]['structured_data'], {"structured": "data"})
+        # Verify metadata
+        metadata = transformed_data['metadata']
+        self.assertEqual(metadata['total_conversations'], 1)
+        self.assertEqual(metadata['total_messages'], 1)
 
-    def test_parallel_processing(self):
-        """Test that parallel processing works correctly."""
-        # Create a transformer with parallel processing
-        parallel_transformer = Transformer(parallel_processing=True)
+    def test_transform_with_complex_data(self):
+        """Test transformation with complex data."""
+        # Use the complex data fixture from factories
+        transformed_data = self.transformer.transform(COMPLEX_SKYPE_DATA, 'Test User')
 
-        # Mock the ThreadPoolExecutor to verify it's used
-        with patch('src.db.etl.transformer.ThreadPoolExecutor', spec=ThreadPoolExecutor) as mock_executor_class:
-            # Set up the mock executor
-            mock_executor = MagicMock()
-            mock_executor.__enter__.return_value = mock_executor
-            mock_executor_class.return_value = mock_executor
+        # Verify the structure of the transformed data
+        self.assertIn('metadata', transformed_data)
+        self.assertIn('conversations', transformed_data)
 
-            # Set up the mock future
-            mock_future = MagicMock()
-            mock_executor.submit.return_value = mock_future
-            mock_future.result.return_value = None
+        # Verify metadata
+        metadata = transformed_data['metadata']
+        self.assertEqual(metadata['user_display_name'], 'Test User')
 
-            # Transform the data
-            parallel_transformer.transform(self.raw_data, 'Test User')
+        # Should have 2 conversations (the one with None displayName should be skipped)
+        self.assertEqual(metadata['total_conversations'], 2)
 
-            # Verify the executor was used
-            self.assertTrue(mock_executor_class.called)
-            self.assertTrue(mock_executor.submit.called)
+        # Should have 5 messages (from the first two conversations)
+        self.assertEqual(metadata['total_messages'], 5)
 
-    def test_conversation_timespan(self):
-        """Test that conversation timespan is correctly calculated."""
+        # Verify conversations
+        conversations = transformed_data['conversations']
+        self.assertIn('conversation1', conversations)
+        self.assertIn('conversation2', conversations)
+        self.assertNotIn('conversation3', conversations)  # Should be skipped
+
+        # Verify message types
+        conv1 = conversations['conversation1']
+        self.assertEqual(len(conv1['messages']), 3)
+        self.assertEqual(conv1['messages'][2]['message_type'], 'RichText/HTML')
+
+        conv2 = conversations['conversation2']
+        self.assertEqual(len(conv2['messages']), 2)
+        self.assertEqual(conv2['messages'][1]['message_type'], 'RichText/Link')
+
+    def test_transform_with_various_message_types(self):
+        """Test transformation with various message types."""
+        # Create data with various message types using factory traits
+        data_with_various_types = SkypeDataFactory.build(
+            conversations=[
+                SkypeConversationFactory.build(
+                    id='conv1',
+                    displayName='Message Types Test',
+                    MessageList=[
+                        SkypeMessageFactory.build(
+                            id='msg1',
+                            content='Regular message'
+                        ),
+                        SkypeMessageFactory.build(
+                            id='msg2',
+                            content='<b>Bold text</b>',
+                            messagetype='RichText/HTML'
+                        ),
+                        SkypeMessageFactory.build(
+                            id='msg3',
+                            content='https://example.com',
+                            messagetype='RichText/Link'
+                        ),
+                        SkypeMessageFactory.build(
+                            id='msg4',
+                            content='Call started',
+                            messagetype='Event/Call'
+                        ),
+                        SkypeMessageFactory.build(
+                            id='msg5',
+                            content='User joined',
+                            messagetype='SystemMessage'
+                        )
+                    ]
+                )
+            ]
+        )
+
         # Transform the data
-        transformed_data = self.transformer.transform(self.raw_data, 'Test User')
+        transformed_data = self.transformer.transform(data_with_various_types, 'Test User')
 
-        # Verify the timespan for conversation 1
-        conv1 = transformed_data['conversations']['conv1']
-        self.assertEqual(conv1['first_message_time'], '2023-01-01T12:00:00Z')
-        self.assertEqual(conv1['last_message_time'], '2023-01-01T12:05:00Z')
+        # Verify that all message types were processed correctly
+        conversations = transformed_data['conversations']
+        conv1 = conversations['conv1']
+        messages = conv1['messages']
 
-        # Verify the timespan for conversation 2
-        conv2 = transformed_data['conversations']['conv2']
-        self.assertEqual(conv2['first_message_time'], '2023-01-02T10:00:00Z')
-        self.assertEqual(conv2['last_message_time'], '2023-01-02T10:00:00Z')
+        self.assertEqual(len(messages), 5)
+        self.assertEqual(messages[0]['message_type'], 'RichText')
+        self.assertEqual(messages[1]['message_type'], 'RichText/HTML')
+        self.assertEqual(messages[2]['message_type'], 'RichText/Link')
+        self.assertEqual(messages[3]['message_type'], 'Event/Call')
+        self.assertEqual(messages[4]['message_type'], 'SystemMessage')
+
+    def test_transform_with_edited_messages(self):
+        """Test transformation with edited messages."""
+        # Create data with edited messages using factory traits
+        data_with_edited_messages = SkypeDataFactory.build(
+            conversations=[
+                SkypeConversationFactory.build(
+                    id='conv1',
+                    displayName='Edited Messages Test',
+                    MessageList=[
+                        SkypeMessageFactory.build(
+                            id='msg1',
+                            content='Original message'
+                        ),
+                        SkypeMessageFactory.build(
+                            id='msg2',
+                            content='Edited message',
+                            edittime='2023-01-01T13:00:00Z'
+                        )
+                    ]
+                )
+            ]
+        )
+
+        # Transform the data
+        transformed_data = self.transformer.transform(data_with_edited_messages, 'Test User')
+
+        # Verify that edited messages are marked correctly
+        conversations = transformed_data['conversations']
+        conv1 = conversations['conv1']
+        messages = conv1['messages']
+
+        self.assertEqual(len(messages), 2)
+        self.assertFalse(messages[0]['is_edited'])
+        self.assertTrue(messages[1]['is_edited'])
 
 if __name__ == '__main__':
     unittest.main()

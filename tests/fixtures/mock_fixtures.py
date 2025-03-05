@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch, mock_open
 from typing import Dict, Any, Optional, Callable
 
 from .skype_data import BASIC_SKYPE_DATA, COMPLEX_SKYPE_DATA, INVALID_SKYPE_DATA
+from tests.factories import SkypeDataFactory, SkypeConversationFactory, SkypeMessageFactory
 
 
 class MockFileReader:
@@ -28,7 +29,7 @@ class MockFileReader:
             default_data: Default data to return if path is not found
         """
         self.path_data_map = {}
-        self.default_data = default_data or BASIC_SKYPE_DATA
+        self.default_data = default_data or SkypeDataFactory.build()
 
     def add_file(self, path: str, data: Dict[str, Any]) -> None:
         """
@@ -156,12 +157,23 @@ def create_mock_file_environment(file_data: Dict[str, Dict[str, Any]] = None) ->
     Returns:
         Dict[str, Callable]: Dictionary of mock functions
     """
-    file_data = file_data or {
-        "test.json": BASIC_SKYPE_DATA,
-        "complex.json": COMPLEX_SKYPE_DATA,
-        "invalid.json": INVALID_SKYPE_DATA,
-        "test.tar": BASIC_SKYPE_DATA
-    }
+    # Use factories to create default test data if not provided
+    if file_data is None:
+        file_data = {
+            "test.json": SkypeDataFactory.build(),
+            "complex.json": SkypeDataFactory.build(
+                conversations=[
+                    SkypeConversationFactory.build(with_message_count=5),
+                    SkypeConversationFactory.build(with_message_count=3)
+                ]
+            ),
+            "invalid.json": SkypeDataFactory.build(
+                userId=None,
+                exportDate='invalid-date',
+                conversations=[]
+            ),
+            "test.tar": SkypeDataFactory.build()
+        }
 
     file_reader = MockFileReader()
     for path, data in file_data.items():
@@ -180,7 +192,7 @@ def create_mock_file_environment(file_data: Dict[str, Dict[str, Any]] = None) ->
         "path_exists": patch("os.path.exists", return_value=True),
         "path_isfile": patch("os.path.isfile", return_value=True),
         "access": patch("os.access", return_value=True),
-        "open": patch("builtins.open", new_callable=lambda: mock_open(read_data=json.dumps(BASIC_SKYPE_DATA)))
+        "open": patch("builtins.open", new_callable=lambda: mock_open(read_data=json.dumps(SkypeDataFactory.build())))
     }
 
     return mock_functions

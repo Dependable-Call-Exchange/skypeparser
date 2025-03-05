@@ -20,7 +20,8 @@ from flask_socketio import SocketIO
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
 
-from src.db.etl_pipeline import SkypeETLPipeline
+# Import the new ETL pipeline
+from src.db import ETLPipeline, ETLContext
 from src.db.progress_tracker import get_tracker
 from src.parser.exceptions import ValidationError
 from src.api.tasks import submit_task
@@ -369,10 +370,15 @@ class SkypeParserAPI:
                     # Process the file synchronously
                     logger.info(f"Processing file synchronously (size: {file_size} bytes)")
 
-                    # Process the file through the ETL pipeline
-                    pipeline = SkypeETLPipeline(
+                    # Create an ETL context
+                    context = ETLContext(
                         db_config=self.db_config,
                         output_dir=self.output_folder
+                    )
+
+                    # Process the file through the ETL pipeline
+                    pipeline = ETLPipeline(
+                        context=context
                     )
 
                     # Run the pipeline with the uploaded file
@@ -380,6 +386,22 @@ class SkypeParserAPI:
                         file_path=file_path,
                         user_display_name=user_display_name
                     )
+
+                    # Convert results to the format expected by the API
+                    # This maintains backward compatibility with code that expects the old format
+                    if results.get('success', False):
+                        # Extract conversation and message counts
+                        conversation_count = 0
+                        message_count = 0
+
+                        for phase, stats in results.get('phases', {}).items():
+                            if phase == 'transform' and stats:
+                                conversation_count = stats.get('processed_conversations', 0)
+                                message_count = stats.get('processed_messages', 0)
+
+                        # Add backward compatibility fields
+                        results['conversations'] = conversation_count
+                        results['message_count'] = message_count
 
                     # Clean up the temporary file
                     try:

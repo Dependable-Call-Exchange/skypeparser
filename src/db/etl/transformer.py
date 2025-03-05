@@ -9,7 +9,7 @@ import logging
 import datetime
 import os
 import json
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 
@@ -27,7 +27,10 @@ class Transformer:
         context: ETLContext = None,
         parallel_processing: bool = True,
         chunk_size: int = 1000,
-        max_workers: Optional[int] = None
+        max_workers: Optional[int] = None,
+        content_extractor = None,
+        message_handler_factory = None,
+        structured_data_extractor = None
     ):
         """Initialize the Transformer.
 
@@ -36,6 +39,9 @@ class Transformer:
             parallel_processing: Whether to use parallel processing for conversations (used if context not provided)
             chunk_size: Size of message chunks for batch processing (used if context not provided)
             max_workers: Maximum number of worker threads (used if context not provided)
+            content_extractor: Custom content extractor (for testing)
+            message_handler_factory: Custom message handler factory (for testing)
+            structured_data_extractor: Custom structured data extractor (for testing)
         """
         self.context = context
 
@@ -49,10 +55,13 @@ class Transformer:
             self.chunk_size = chunk_size
             self.max_workers = max_workers
 
-        self.content_extractor = ContentExtractor()
+        # Initialize dependencies with dependency injection
+        self.content_extractor = content_extractor or ContentExtractor()
+        self.message_handler_factory = message_handler_factory or get_handler_for_message_type
+        self.structured_data_extractor = structured_data_extractor or extract_structured_data
 
-        # Thread-safe storage for parallel processing
-        self.results_lock = Lock()
+        # Initialize state
+        self.lock = Lock()  # For thread safety
 
     def transform(self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None) -> Dict[str, Any]:
         """Transform raw Skype data into structured format.
@@ -431,6 +440,7 @@ class Transformer:
         """
         try:
             msg_data = {
+                'id': message.get('id', ''),
                 'timestamp': message.get('originalarrivaltime', ''),
                 'sender_id': message.get('from', ''),
                 'sender_name': id_to_display_name.get(message.get('from', ''), ''),
@@ -441,17 +451,25 @@ class Transformer:
 
             # Extract structured data based on message type
             msg_type = msg_data['message_type']
-            handler = get_handler_for_message_type(msg_type)
+            handler = self.message_handler_factory(msg_type)
             if handler:
-                structured_data = handler(message)
+                structured_data = self.structured_data_extractor(message)
                 if structured_data:
                     msg_data['structured_data'] = structured_data
 
             # Clean content if present
             if msg_data['content']:
-                msg_data['cleaned_content'] = self.content_extractor.clean_content(
-                    msg_data['content']
-                )
+                # Try to use clean_content if available, otherwise use extract_all
+                if hasattr(self.content_extractor, 'clean_content'):
+                    msg_data['cleaned_content'] = self.content_extractor.clean_content(
+                        msg_data['content']
+                    )
+                else:
+                    # Fall back to using extract_all if clean_content is not available
+                    content_data = self.content_extractor.extract_all(msg_data['content'])
+                    msg_data['content_data'] = content_data
+                    # Use the original content as cleaned content
+                    msg_data['cleaned_content'] = msg_data['content']
 
             return msg_data
         except Exception as e:

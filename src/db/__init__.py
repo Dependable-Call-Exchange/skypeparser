@@ -3,8 +3,11 @@ Skype Parser Database Module
 
 This module provides functionality for importing Skype data into PostgreSQL.
 
-The recommended approach is to use the SkypeETLPipeline class, which implements
-a complete Extract-Transform-Load pipeline for Skype export data.
+The recommended approach is to use the ETLPipeline class from the modular ETL pipeline,
+which provides a more maintainable and extensible architecture for ETL operations.
+
+For backward compatibility, the SkypeETLPipeline class is still available but will be
+removed in version 2.0.0.
 """
 
 import warnings
@@ -12,6 +15,15 @@ import warnings
 # Import the ETL pipeline (now using the compatibility layer)
 from .etl_pipeline_compat import (
     SkypeETLPipeline,
+)
+
+# Import the modular ETL pipeline components
+from .etl import (
+    ETLPipeline,
+    ETLContext,
+    Extractor,
+    Transformer,
+    Loader
 )
 
 # Import the database schema definitions from the modular ETL pipeline
@@ -40,22 +52,37 @@ from .store_skype_export import (
     main as store_skype_export
 )
 
-# Issue deprecation warnings for legacy modules
+# Issue deprecation warnings for legacy modules and classes
 warnings.warn(
-    "The skype_to_postgres module is deprecated. "
-    "Please use the SkypeETLPipeline class instead.",
+    "The SkypeETLPipeline class is deprecated and will be removed in version 2.0.0. "
+    "Please use the ETLPipeline class from the modular ETL pipeline instead.",
     DeprecationWarning, stacklevel=2
 )
 
 warnings.warn(
-    "The store_skype_export module is deprecated. "
-    "Please use the SkypeETLPipeline class instead.",
+    "The skype_to_postgres module is deprecated and will be removed in version 2.0.0. "
+    "Please use the ETLPipeline class instead.",
+    DeprecationWarning, stacklevel=2
+)
+
+warnings.warn(
+    "The store_skype_export module is deprecated and will be removed in version 2.0.0. "
+    "Please use the ETLPipeline class instead.",
     DeprecationWarning, stacklevel=2
 )
 
 __all__ = [
-    # New ETL pipeline
+    # New modular ETL pipeline
+    'ETLPipeline',
+    'ETLContext',
+    'Extractor',
+    'Transformer',
+    'Loader',
+
+    # Compatibility layer (deprecated)
     'SkypeETLPipeline',
+
+    # Database schema
     'RAW_EXPORTS_TABLE',
     'CONVERSATIONS_TABLE',
     'MESSAGES_TABLE',

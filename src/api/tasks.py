@@ -14,7 +14,8 @@ from typing import Dict, Any, Optional
 from celery import Celery
 from celery.signals import task_success, task_failure
 
-from src.db.etl_pipeline import SkypeETLPipeline
+# Import the new ETL pipeline
+from src.db import ETLPipeline, ETLContext
 from src.db.progress_tracker import get_tracker, create_tracker, remove_tracker
 
 # Configure logging
@@ -29,15 +30,12 @@ celery_app = Celery('skype_parser')
 
 # Configure Celery
 celery_app.conf.update(
-    broker_url=os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0'),
-    result_backend=os.environ.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0'),
     task_serializer='json',
     accept_content=['json'],
     result_serializer='json',
     timezone='UTC',
     enable_utc=True,
 )
-
 
 @celery_app.task(bind=True, name='process_skype_export')
 def process_skype_export(
@@ -56,7 +54,7 @@ def process_skype_export(
         file_path: Path to the Skype export file
         user_display_name: Display name of the user
         db_config: Database configuration
-        output_dir: Directory for output files
+        output_dir: Output directory for transformed data
         task_id: Task ID for progress tracking
         cleanup: Whether to clean up the file after processing
 
@@ -71,10 +69,16 @@ def process_skype_export(
         tracker = get_tracker(task_id) or create_tracker(task_id)
         tracker.update(status="starting", message="Starting asynchronous processing...")
 
-        # Initialize the ETL pipeline
-        pipeline = SkypeETLPipeline(
+        # Create an ETL context with the task ID
+        context = ETLContext(
             db_config=db_config,
-            output_dir=output_dir
+            output_dir=output_dir,
+            task_id=task_id
+        )
+
+        # Initialize the ETL pipeline with the context
+        pipeline = ETLPipeline(
+            context=context
         )
 
         # Run the pipeline
@@ -97,38 +101,63 @@ def process_skype_export(
             except Exception as e:
                 logger.warning(f"Failed to clean up temporary file {file_path}: {e}")
 
+        # Convert results to the format expected by the API
+        # This maintains backward compatibility with code that expects the old format
+        if results.get('success', False):
+            # Extract conversation and message counts
+            conversation_count = 0
+            message_count = 0
+
+            for phase, stats in results.get('phases', {}).items():
+                if phase == 'transform' and stats:
+                    conversation_count = stats.get('processed_conversations', 0)
+                    message_count = stats.get('processed_messages', 0)
+
+            # Add backward compatibility fields
+            results['conversations'] = conversation_count
+            results['message_count'] = message_count
+
         return results
 
     except Exception as e:
         logger.error(f"Error processing Skype export: {e}", exc_info=True)
 
-        # Mark task as failed
-        if tracker := get_tracker(task_id):
-            tracker.fail(message=f"Processing failed: {str(e)}")
+        # Update the tracker with the error
+        tracker = get_tracker(task_id)
+        if tracker:
+            tracker.error(str(e))
 
-        # Re-raise the exception to mark the task as failed
-        raise
-
+        # Return error results
+        return {
+            'success': False,
+            'error': str(e),
+            'task_id': task_id
+        }
 
 @task_success.connect(sender='process_skype_export')
 def on_task_success(sender=None, result=None, **kwargs):
-    """Handle successful task completion."""
-    if result and isinstance(result, dict) and 'task_id' in result:
+    """
+    Handle successful task completion.
+    """
+    if result and 'task_id' in result:
         task_id = result['task_id']
         logger.info(f"Task {task_id} completed successfully")
 
-        # Keep the tracker around for a while to allow clients to fetch the final status
-        # In a production system, you might want to use a scheduled task to clean up old trackers
-
+        # Clean up the tracker
+        remove_tracker(task_id)
 
 @task_failure.connect(sender='process_skype_export')
 def on_task_failure(sender=None, task_id=None, exception=None, **kwargs):
-    """Handle task failure."""
+    """
+    Handle task failure.
+    """
     logger.error(f"Task {task_id} failed: {exception}")
 
-    # Keep the tracker around for a while to allow clients to fetch the final status
-    # In a production system, you might want to use a scheduled task to clean up old trackers
-
+    # Update the tracker with the error
+    tracker = get_tracker(task_id)
+    if tracker:
+        tracker.error(str(exception))
+        remove_tracker(task_id)
 
 def submit_task(
     file_path: str,
@@ -138,19 +167,19 @@ def submit_task(
     cleanup: bool = True
 ) -> str:
     """
-    Submit a task to process a Skype export file.
+    Submit a task to process a Skype export file asynchronously.
 
     Args:
         file_path: Path to the Skype export file
         user_display_name: Display name of the user
         db_config: Database configuration
-        output_dir: Directory for output files
+        output_dir: Output directory for transformed data
         cleanup: Whether to clean up the file after processing
 
     Returns:
         str: Task ID
     """
-    # Submit the task to Celery
+    # Submit the task
     task = process_skype_export.delay(
         file_path=file_path,
         user_display_name=user_display_name,
@@ -159,5 +188,9 @@ def submit_task(
         cleanup=cleanup
     )
 
-    # Return the task ID
+    # Create a progress tracker for this task
+    create_tracker(task.id)
+
+    logger.info(f"Submitted task {task.id} to process Skype export file: {file_path}")
+
     return task.id
