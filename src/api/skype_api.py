@@ -9,12 +9,12 @@ import os
 import logging
 import tempfile
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, Union
 
-from flask import Flask, request, jsonify, g, Response
+from flask import Flask, request, jsonify, g, Response, session
 from flask_cors import CORS
 from flask_socketio import SocketIO
 from werkzeug.utils import secure_filename
@@ -23,6 +23,8 @@ from werkzeug.exceptions import RequestEntityTooLarge
 from src.db.etl_pipeline import SkypeETLPipeline
 from src.db.progress_tracker import get_tracker
 from src.parser.exceptions import ValidationError
+from src.api.tasks import submit_task
+from src.api.user_management import get_user_manager
 
 # Configure logging
 logging.basicConfig(
@@ -34,6 +36,7 @@ logger = logging.getLogger(__name__)
 # Constants
 ALLOWED_EXTENSIONS = {'tar', 'json'}
 MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500 MB
+ASYNC_THRESHOLD = 50 * 1024 * 1024  # 50 MB - Files larger than this will be processed asynchronously
 
 
 class SkypeParserAPI:
@@ -50,7 +53,10 @@ class SkypeParserAPI:
         output_folder: Optional[str] = None,
         db_config: Optional[Dict[str, Any]] = None,
         api_key: Optional[str] = None,
-        enable_cors: bool = True
+        enable_cors: bool = True,
+        async_threshold: int = ASYNC_THRESHOLD,
+        user_file: Optional[str] = None,
+        secret_key: Optional[str] = None
     ):
         """
         Initialize the Skype Parser API.
@@ -61,6 +67,9 @@ class SkypeParserAPI:
             db_config: Database configuration for the ETL pipeline
             api_key: API key for authentication
             enable_cors: Whether to enable CORS for the API
+            async_threshold: File size threshold for asynchronous processing (in bytes)
+            user_file: Path to the user data file
+            secret_key: Secret key for session encryption
         """
         self.app = Flask(__name__)
 
@@ -74,6 +83,10 @@ class SkypeParserAPI:
         # Set up file size limit
         self.app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
 
+        # Set up session
+        self.app.config['SECRET_KEY'] = secret_key or os.environ.get('SECRET_KEY', os.urandom(24).hex())
+        self.app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
+
         # Set up folders
         self.upload_folder = upload_folder or tempfile.mkdtemp()
         self.output_folder = output_folder or tempfile.mkdtemp()
@@ -85,6 +98,10 @@ class SkypeParserAPI:
         # Store configuration
         self.db_config = db_config
         self.api_key = api_key or os.environ.get('API_KEY')
+        self.async_threshold = async_threshold
+
+        # Initialize user manager
+        self.user_manager = get_user_manager(user_file)
 
         # Set up routes
         self._setup_routes()
@@ -102,10 +119,29 @@ class SkypeParserAPI:
         def require_api_key(f):
             @wraps(f)
             def decorated_function(*args, **kwargs):
+                # Check for API key in header
                 api_key = request.headers.get('X-API-Key')
-                if not api_key or api_key != self.api_key:
-                    return jsonify({'error': 'Invalid API key'}), 401
-                return f(*args, **kwargs)
+
+                # If API key is provided, check if it's valid
+                if api_key:
+                    # Check if API key is valid
+                    user = self.user_manager.get_user_by_api_key(api_key)
+                    if user:
+                        # Store user in g for later use
+                        g.user = user
+                        return f(*args, **kwargs)
+
+                # If no API key is provided or it's invalid, check for session authentication
+                if 'username' in session:
+                    # Get user from session
+                    user = self.user_manager.get_user(session['username'])
+                    if user:
+                        # Store user in g for later use
+                        g.user = user
+                        return f(*args, **kwargs)
+
+                # If no valid authentication is found, return 401
+                return jsonify({'error': 'Unauthorized'}), 401
             return decorated_function
 
         # Health check endpoint
@@ -116,6 +152,155 @@ class SkypeParserAPI:
                 'status': 'ok',
                 'timestamp': datetime.now().isoformat()
             })
+
+        # User registration endpoint
+        @self.app.route('/api/register', methods=['POST'])
+        def register():
+            """
+            API endpoint for user registration.
+            """
+            try:
+                # Get registration data
+                data = request.get_json()
+
+                # Check if required fields are present
+                required_fields = ['username', 'password', 'email', 'display_name']
+                for field in required_fields:
+                    if field not in data:
+                        return jsonify({'error': f'Missing required field: {field}'}), 400
+
+                # Register user
+                success = self.user_manager.register_user(
+                    username=data['username'],
+                    password=data['password'],
+                    email=data['email'],
+                    display_name=data['display_name']
+                )
+
+                if not success:
+                    return jsonify({'error': 'Registration failed'}), 400
+
+                # Get user
+                user = self.user_manager.get_user(data['username'])
+
+                # Return user data
+                return jsonify({
+                    'username': user['username'],
+                    'email': user['email'],
+                    'display_name': user['display_name'],
+                    'api_key': user['api_key']
+                })
+
+            except Exception as e:
+                logger.error(f"Error registering user: {e}", exc_info=True)
+                return jsonify({'error': str(e)}), 500
+
+        # User login endpoint
+        @self.app.route('/api/login', methods=['POST'])
+        def login():
+            """
+            API endpoint for user login.
+            """
+            try:
+                # Get login data
+                data = request.get_json()
+
+                # Check if required fields are present
+                required_fields = ['username', 'password']
+                for field in required_fields:
+                    if field not in data:
+                        return jsonify({'error': f'Missing required field: {field}'}), 400
+
+                # Authenticate user
+                success = self.user_manager.authenticate_user(
+                    username=data['username'],
+                    password=data['password']
+                )
+
+                if not success:
+                    return jsonify({'error': 'Invalid username or password'}), 401
+
+                # Get user
+                user = self.user_manager.get_user(data['username'])
+
+                # Set session
+                session.permanent = True
+                session['username'] = user['username']
+
+                # Return user data
+                return jsonify({
+                    'username': user['username'],
+                    'email': user['email'],
+                    'display_name': user['display_name'],
+                    'api_key': user['api_key']
+                })
+
+            except Exception as e:
+                logger.error(f"Error logging in user: {e}", exc_info=True)
+                return jsonify({'error': str(e)}), 500
+
+        # User logout endpoint
+        @self.app.route('/api/logout', methods=['POST'])
+        def logout():
+            """
+            API endpoint for user logout.
+            """
+            try:
+                # Clear session
+                session.clear()
+
+                return jsonify({'message': 'Logged out successfully'})
+
+            except Exception as e:
+                logger.error(f"Error logging out user: {e}", exc_info=True)
+                return jsonify({'error': str(e)}), 500
+
+        # User profile endpoint
+        @self.app.route('/api/profile', methods=['GET'])
+        @require_api_key
+        def profile():
+            """
+            API endpoint for getting user profile.
+            """
+            try:
+                # Get user from g
+                user = g.user
+
+                # Return user data
+                return jsonify({
+                    'username': user['username'],
+                    'email': user['email'],
+                    'display_name': user['display_name'],
+                    'api_key': user['api_key']
+                })
+
+            except Exception as e:
+                logger.error(f"Error getting user profile: {e}", exc_info=True)
+                return jsonify({'error': str(e)}), 500
+
+        # API key regeneration endpoint
+        @self.app.route('/api/regenerate-api-key', methods=['POST'])
+        @require_api_key
+        def regenerate_api_key():
+            """
+            API endpoint for regenerating API key.
+            """
+            try:
+                # Get user from g
+                user = g.user
+
+                # Regenerate API key
+                api_key = self.user_manager.regenerate_api_key(user['username'])
+
+                if not api_key:
+                    return jsonify({'error': 'Failed to regenerate API key'}), 400
+
+                # Return new API key
+                return jsonify({'api_key': api_key})
+
+            except Exception as e:
+                logger.error(f"Error regenerating API key: {e}", exc_info=True)
+                return jsonify({'error': str(e)}), 500
 
         # Upload endpoint
         @self.app.route('/api/upload', methods=['POST'])
@@ -150,26 +335,60 @@ class SkypeParserAPI:
                 # Get user display name
                 user_display_name = request.form.get('user_display_name', '')
 
-                # Process the file through the ETL pipeline
-                pipeline = SkypeETLPipeline(
-                    db_config=self.db_config,
-                    output_dir=self.output_folder
-                )
+                # If no user display name is provided, use the user's display name
+                if not user_display_name and hasattr(g, 'user'):
+                    user_display_name = g.user.get('display_name', '')
 
-                # Run the pipeline with the uploaded file
-                results = pipeline.run_pipeline(
-                    file_path=file_path,
-                    user_display_name=user_display_name
-                )
+                # Get file size
+                file_size = os.path.getsize(file_path)
 
-                # Clean up the temporary file
-                try:
-                    os.remove(file_path)
-                except Exception as e:
-                    logger.warning(f"Failed to remove temporary file {file_path}: {e}")
+                # Determine if the file should be processed asynchronously
+                process_async = file_size > self.async_threshold
 
-                # Return the results
-                return jsonify(results)
+                if process_async:
+                    # Process the file asynchronously
+                    logger.info(f"Processing file asynchronously (size: {file_size} bytes)")
+
+                    # Submit the task to the task queue
+                    task_id = submit_task(
+                        file_path=file_path,
+                        user_display_name=user_display_name,
+                        db_config=self.db_config,
+                        output_dir=self.output_folder,
+                        cleanup=True
+                    )
+
+                    # Return the task ID
+                    return jsonify({
+                        'task_id': task_id,
+                        'status': 'processing',
+                        'message': 'File is being processed asynchronously',
+                        'async': True
+                    })
+                else:
+                    # Process the file synchronously
+                    logger.info(f"Processing file synchronously (size: {file_size} bytes)")
+
+                    # Process the file through the ETL pipeline
+                    pipeline = SkypeETLPipeline(
+                        db_config=self.db_config,
+                        output_dir=self.output_folder
+                    )
+
+                    # Run the pipeline with the uploaded file
+                    results = pipeline.run_pipeline(
+                        file_path=file_path,
+                        user_display_name=user_display_name
+                    )
+
+                    # Clean up the temporary file
+                    try:
+                        os.remove(file_path)
+                    except Exception as e:
+                        logger.warning(f"Failed to remove temporary file {file_path}: {e}")
+
+                    # Return the results
+                    return jsonify(results)
 
             except ValidationError as e:
                 logger.error(f"Validation error: {e}", exc_info=True)

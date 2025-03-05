@@ -142,15 +142,37 @@ export API_KEY=your_secure_api_key
 export DB_NAME=skype
 export DB_USER=postgres
 export DB_PASSWORD=your_password
+export CELERY_BROKER_URL=redis://localhost:6379/0
+export CELERY_RESULT_BACKEND=redis://localhost:6379/0
 
+# Run the API server and Celery worker using the provided script
+./scripts/run_api_server.sh
+```
+
+Alternatively, you can run the API server and Celery worker separately:
+
+```bash
 # Run the API server
 python -m src.api.run_api --host 0.0.0.0 --port 5000 --debug
+
+# Run a Celery worker for asynchronous processing
+python -m src.api.run_api --worker --worker-concurrency 2
 ```
 
 #### API Endpoints
 
 - `GET /api/health` - Health check endpoint
 - `POST /api/upload` - Upload and process a Skype export file
+- `GET /api/task/<task_id>` - Check the status of a task
+
+#### API Features
+
+The API includes several advanced features:
+
+1. **Real-time Progress Tracking**: WebSocket support for real-time progress updates during file processing.
+2. **Asynchronous Processing**: Large files are processed asynchronously using a task queue (Celery).
+3. **Detailed Progress Information**: Provides detailed progress information, including current status, percent complete, and elapsed time.
+4. **Automatic File Cleanup**: Temporary files are automatically cleaned up after processing.
 
 #### Using the API from JavaScript
 

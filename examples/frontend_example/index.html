@@ -451,6 +451,16 @@
                     if (data.task_id) {
                         // Subscribe to task updates
                         subscribeToTask(data.task_id);
+
+                        // Update UI to show async processing
+                        if (data.async) {
+                            updateProgress(20, data.message || 'Processing asynchronously...');
+                            addLogEntry({
+                                status: 'starting',
+                                message: data.message || 'Processing asynchronously...',
+                                percent_complete: 20
+                            });
+                        }
                     } else {
                         // No task_id, show results directly
                         updateProgress(100, 'Complete!');

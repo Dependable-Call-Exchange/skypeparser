@@ -23,12 +23,34 @@ export API_KEY=your_secure_api_key
 export DB_NAME=skype
 export DB_USER=postgres
 export DB_PASSWORD=your_password
+export CELERY_BROKER_URL=redis://localhost:6379/0
+export CELERY_RESULT_BACKEND=redis://localhost:6379/0
 ```
 
-3. Run the API server:
+3. Start Redis (required for asynchronous processing):
+
+```bash
+# Install Redis if not already installed
+# On Ubuntu/Debian:
+# sudo apt-get install redis-server
+
+# On macOS with Homebrew:
+# brew install redis
+
+# Start Redis server
+redis-server
+```
+
+4. Run the API server:
 
 ```bash
 python -m src.api.run_api --host 0.0.0.0 --port 5000
+```
+
+5. Run a Celery worker for asynchronous processing:
+
+```bash
+python -m src.api.run_api --worker --worker-concurrency 2
 ```
 
 ### Command-line Options
@@ -46,6 +68,11 @@ The API server supports the following command-line options:
 - `--db-name`: Database name (default: from DB_NAME environment variable)
 - `--db-user`: Database user (default: from DB_USER environment variable)
 - `--db-password`: Database password (default: from DB_PASSWORD environment variable)
+- `--log-level`: Logging level (default: INFO)
+- `--async-threshold`: File size threshold for asynchronous processing in bytes (default: 50MB)
+- `--redis-url`: Redis URL for Celery (default: redis://localhost:6379/0)
+- `--worker`: Run a Celery worker instead of the API server
+- `--worker-concurrency`: Number of worker processes (default: 2)
 
 ## API Endpoints
 
@@ -102,16 +129,128 @@ The response is a JSON object containing the results of the ETL pipeline:
   },
   "loading": {
     "export_id": 123
-  }
+  },
+  "task_id": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
 
-#### Error Responses
+For large files (by default, files larger than 50MB), the API will process the file asynchronously. In this case, the response will be:
 
-- `400 Bad Request`: Invalid request or file
-- `401 Unauthorized`: Invalid API key
-- `413 Request Entity Too Large`: File too large
-- `500 Internal Server Error`: Server error
+```json
+{
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "processing",
+  "message": "File is being processed asynchronously",
+  "async": true
+}
+```
+
+The `task_id` field is included in the response and can be used to subscribe to progress updates via WebSocket or to check the task status via the Task Status endpoint.
+
+### Task Status
+
+```
+GET /api/task/<task_id>
+```
+
+Returns the current status of a task.
+
+#### Request Headers
+
+- `X-API-Key`: API key for authentication
+
+#### Response
+
+```json
+{
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "completed",
+  "message": "ETL pipeline completed successfully",
+  "current_step": 100,
+  "total_steps": 100,
+  "percent_complete": 100.0,
+  "elapsed_time": 42.5,
+  "timestamp": 1646476800.0
+}
+```
+
+## WebSocket API
+
+The API also provides a WebSocket interface for real-time progress updates. This is implemented using Socket.IO.
+
+### Connecting to the WebSocket Server
+
+```javascript
+// Connect to the Socket.IO server
+const socket = io();
+
+// Handle connection events
+socket.on('connect', () => {
+  console.log('Connected to server');
+});
+
+socket.on('disconnect', () => {
+  console.log('Disconnected from server');
+});
+
+socket.on('connect_error', (error) => {
+  console.error('Connection error:', error);
+});
+```
+
+### Subscribing to Task Updates
+
+```javascript
+// Subscribe to task updates
+socket.emit('subscribe', { task_id: taskId }, (response) => {
+  if (response && response.error) {
+    console.error('Error subscribing to task:', response.error);
+    return;
+  }
+
+  // Handle initial progress data
+  updateProgressUI(response);
+});
+
+// Listen for task progress updates
+socket.on(`task_progress_${taskId}`, (data) => {
+  // Update UI with progress data
+  updateProgressUI(data);
+
+  // If task is completed or failed, handle accordingly
+  if (data.status === 'completed') {
+    showResults();
+  } else if (data.status === 'failed') {
+    showError(data.message);
+  }
+});
+```
+
+### Progress Data Format
+
+The progress data sent via WebSocket has the following format:
+
+```json
+{
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "transforming",
+  "message": "Transformed 42 conversations",
+  "current_step": 75,
+  "total_steps": 100,
+  "percent_complete": 75.0,
+  "elapsed_time": 30.2,
+  "timestamp": 1646476800.0
+}
+```
+
+The `status` field can have the following values:
+- `initializing`: The task is being initialized
+- `starting`: The task is starting
+- `extracting`: Data is being extracted from the Skype export file
+- `transforming`: Data is being transformed
+- `loading`: Data is being loaded into the database
+- `completed`: The task has completed successfully
+- `failed`: The task has failed
 
 ## Client Integration
 

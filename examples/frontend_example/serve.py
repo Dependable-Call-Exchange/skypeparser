@@ -11,7 +11,9 @@ import argparse
 import logging
 from pathlib import Path
 import requests
+import socketio
 from flask import Flask, request, send_from_directory, Response
+from flask_socketio import SocketIO
 
 # Configure logging
 logging.basicConfig(
@@ -22,6 +24,12 @@ logger = logging.getLogger(__name__)
 
 # Create Flask app
 app = Flask(__name__)
+
+# Create SocketIO server
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+# Create SocketIO client for connecting to the API server
+sio_client = socketio.Client()
 
 # API endpoint
 API_URL = None
@@ -75,6 +83,116 @@ def proxy_api(path):
         return {'error': 'Error connecting to API'}, 500
 
 
+# Socket.IO event handlers
+@socketio.on('connect')
+def handle_connect():
+    """Handle client connection."""
+    logger.info(f"Client connected: {request.sid}")
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle client disconnection."""
+    logger.info(f"Client disconnected: {request.sid}")
+
+
+@socketio.on('subscribe')
+def handle_subscribe(data):
+    """
+    Handle client subscription to task updates.
+
+    Args:
+        data: Dictionary containing task_id
+    """
+    task_id = data.get('task_id')
+    if not task_id:
+        return {'error': 'No task_id provided'}
+
+    logger.info(f"Client {request.sid} subscribed to task {task_id}")
+
+    # Create a mapping from client SID to task ID
+    client_to_task[request.sid] = task_id
+
+    # Create a mapping from task ID to client SIDs
+    if task_id not in task_to_clients:
+        task_to_clients[task_id] = set()
+    task_to_clients[task_id].add(request.sid)
+
+    # Forward the subscription to the API server
+    if sio_client.connected:
+        try:
+            response = sio_client.call('subscribe', {'task_id': task_id})
+            return response
+        except Exception as e:
+            logger.error(f"Error subscribing to task {task_id}: {e}")
+            return {'error': f'Error subscribing to task: {str(e)}'}
+    else:
+        return {'error': 'Not connected to API server'}
+
+
+# Socket.IO client event handlers
+@sio_client.event
+def connect():
+    """Handle connection to API server."""
+    logger.info("Connected to API server")
+
+
+@sio_client.event
+def disconnect():
+    """Handle disconnection from API server."""
+    logger.error("Disconnected from API server")
+    # Try to reconnect
+    connect_to_api_server()
+
+
+@sio_client.event
+def connect_error(data):
+    """Handle connection error to API server."""
+    logger.error(f"Connection error to API server: {data}")
+
+
+# Dynamically register event handlers for task progress events
+def register_task_progress_handler(task_id):
+    """
+    Register a handler for task progress events.
+
+    Args:
+        task_id: Task ID to register handler for
+    """
+    @sio_client.on(f'task_progress_{task_id}')
+    def handle_task_progress(data):
+        """
+        Handle task progress event.
+
+        Args:
+            data: Progress data
+        """
+        logger.debug(f"Received progress for task {task_id}: {data}")
+
+        # Forward the progress to all clients subscribed to this task
+        if task_id in task_to_clients:
+            for client_sid in task_to_clients[task_id]:
+                socketio.emit(f'task_progress_{task_id}', data, room=client_sid)
+
+
+# Connect to API server
+def connect_to_api_server():
+    """Connect to the API server."""
+    if not API_URL:
+        logger.error("API URL not configured")
+        return
+
+    # Extract the base URL from the API URL
+    api_base_url = API_URL
+
+    # Connect to the API server
+    try:
+        sio_client.connect(api_base_url)
+        logger.info(f"Connected to API server at {api_base_url}")
+    except Exception as e:
+        logger.error(f"Error connecting to API server: {e}")
+
+
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description='Serve the front-end example.')
@@ -117,10 +235,18 @@ def main():
     global API_URL
     API_URL = args.api_url
 
+    # Initialize client-to-task and task-to-clients mappings
+    global client_to_task, task_to_clients
+    client_to_task = {}
+    task_to_clients = {}
+
+    # Connect to API server
+    connect_to_api_server()
+
     # Run the server
     logger.info(f'Starting server on {args.host}:{args.port}')
     logger.info(f'Proxying API requests to {API_URL}')
-    app.run(host=args.host, port=args.port, debug=args.debug)
+    socketio.run(app, host=args.host, port=args.port, debug=args.debug)
 
 
 if __name__ == '__main__':
