@@ -119,45 +119,17 @@ def read_tarfile(filename: str, select_json: Optional[int] = None,
     """
     try:
         # Validate file exists and is a tar file
-        validate_file_exists(filename)
-        validate_file_type(filename, ['.tar'])
+        _validate_tar_file_input(filename)
 
-        with tarfile.open(filename) as tar:
-            # Find files inside the tar
-            tar_contents = tar.getnames()
+        # Get JSON files from tar
+        tar_files = _get_json_files_from_tar(filename)
 
-            # Only get the files with .json extension
-            pattern = re.compile(r'.*\.json')
-            tar_files = list(filter(pattern.match, tar_contents))
+        # Select JSON file to use
+        selected_file = _select_json_file(tar_files, select_json, auto_select)
 
-            if not tar_files:
-                error_msg = "No JSON files found in the tar archive"
-                logger.error(error_msg)
-                raise IndexError(error_msg)
+        # Extract and parse the selected file
+        return _extract_and_parse_json_from_tar(filename, selected_file)
 
-            # If multiple JSON files are found, handle selection
-            if len(tar_files) > 1:
-                if select_json is not None and 0 <= select_json < len(tar_files):
-                    selected_index = select_json
-                elif auto_select:
-                    selected_index = 0
-                    logger.info(f"Multiple JSON files found. Auto-selecting: {tar_files[selected_index]}")
-                else:
-                    # Instead of interactive prompt, raise an exception with available options
-                    available_files = "\n".join([f"{i+1}: {file}" for i, file in enumerate(tar_files)])
-                    error_msg = f"Multiple JSON files found in the tar archive. Please specify which one to use with select_json parameter:\n{available_files}"
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
-            else:
-                selected_index = 0
-
-            # Read that file and parse it
-            file_obj = tar.extractfile(tar.getmember(tar_files[selected_index]))
-            if file_obj is None:
-                raise KeyError(f"File {tar_files[selected_index]} could not be extracted")
-
-            data = json.loads(file_obj.read().decode('utf-8'))
-            return data
     except ValidationError as e:
         logger.error(f"Validation error: {e}")
         raise
@@ -170,6 +142,109 @@ def read_tarfile(filename: str, select_json: Optional[int] = None,
     except Exception as e:
         logger.error(f"Error reading tar file {filename}: {e}")
         raise
+
+
+def _validate_tar_file_input(filename: str) -> None:
+    """
+    Validate that the input file exists and is a tar file.
+
+    Args:
+        filename (str): Path to the tar file
+
+    Raises:
+        ValidationError: If the file is invalid
+    """
+    validate_file_exists(filename)
+    validate_file_type(filename, ['.tar'])
+
+
+def _get_json_files_from_tar(filename: str) -> List[str]:
+    """
+    Get a list of JSON files from a tar archive.
+
+    Args:
+        filename (str): Path to the tar file
+
+    Returns:
+        list: List of JSON files in the tar
+
+    Raises:
+        IndexError: If no JSON files are found
+    """
+    with tarfile.open(filename) as tar:
+        # Find files inside the tar
+        tar_contents = tar.getnames()
+
+        # Only get the files with .json extension
+        pattern = re.compile(r'.*\.json')
+        tar_files = list(filter(pattern.match, tar_contents))
+
+        if not tar_files:
+            error_msg = "No JSON files found in the tar archive"
+            logger.error(error_msg)
+            raise IndexError(error_msg)
+
+        return tar_files
+
+
+def _select_json_file(tar_files: List[str], select_json: Optional[int] = None,
+                     auto_select: bool = True) -> str:
+    """
+    Select a JSON file from a list of files.
+
+    Args:
+        tar_files (list): List of JSON files
+        select_json (int, optional): Index of the JSON file to use
+        auto_select (bool): Whether to automatically select the first file
+
+    Returns:
+        str: Selected JSON file
+
+    Raises:
+        ValueError: If multiple JSON files are found and neither select_json nor auto_select is provided
+    """
+    # If multiple JSON files are found, handle selection
+    if len(tar_files) > 1:
+        if select_json is not None and 0 <= select_json < len(tar_files):
+            selected_index = select_json
+        elif auto_select:
+            selected_index = 0
+            logger.info(f"Multiple JSON files found. Auto-selecting: {tar_files[selected_index]}")
+        else:
+            # Instead of interactive prompt, raise an exception with available options
+            available_files = "\n".join([f"{i+1}: {file}" for i, file in enumerate(tar_files)])
+            error_msg = f"Multiple JSON files found in the tar archive. Please specify which one to use with select_json parameter:\n{available_files}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+    else:
+        selected_index = 0
+
+    return tar_files[selected_index]
+
+
+def _extract_and_parse_json_from_tar(filename: str, selected_file: str) -> Dict[str, Any]:
+    """
+    Extract and parse a JSON file from a tar archive.
+
+    Args:
+        filename (str): Path to the tar file
+        selected_file (str): Name of the JSON file to extract
+
+    Returns:
+        dict: Parsed JSON data
+
+    Raises:
+        KeyError: If the file cannot be extracted
+        json.JSONDecodeError: If the file is not valid JSON
+    """
+    with tarfile.open(filename) as tar:
+        # Read that file and parse it
+        file_obj = tar.extractfile(tar.getmember(selected_file))
+        if file_obj is None:
+            raise KeyError(f"File {selected_file} could not be extracted")
+
+        data = json.loads(file_obj.read().decode('utf-8'))
+        return data
 
 def read_tarfile_object(file_obj: BinaryIO, select_json: Optional[int] = None,
                        auto_select: bool = True) -> Dict[str, Any]:

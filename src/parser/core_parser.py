@@ -386,112 +386,21 @@ def parse_skype_data(raw_data: Dict[str, Any], user_display_name: str) -> Dict[s
 
     try:
         # Extract basic metadata
-        try:
-            user_id = raw_data['userId']
-            export_date_time = raw_data['exportDate']
-            export_date_str, export_time_str, export_datetime = timestamp_parser(export_date_time)
-            no_of_conversations = len(raw_data['conversations'])
-        except KeyError as e:
-            error_msg = f"Missing required field in JSON: {e}"
-            logger.error(error_msg)
-            raise InvalidInputError(error_msg) from e
-        except TimestampParsingError as e:
-            # Handle timestamp parsing errors
-            logger.warning(f"Error parsing export timestamp: {e}")
-            export_date_str, export_time_str = "Unknown date", "Unknown time"
-            export_datetime = None
+        metadata = _extract_metadata(raw_data)
 
         # Initialize data structures
         structured_data = {}
-        id_to_display_name = {user_id: str(user_display_name)}
+        id_to_display_name = {metadata['user_id']: str(user_display_name)}
 
-        # Process each conversation
-        for i in range(no_of_conversations):
-            try:
-                # Extract conversation metadata
-                conversation = raw_data['conversations'][i]
-                conv_id = conversation['id']
-                d_name = conversation.get('displayName')
+        # Process conversations
+        structured_data = _process_conversations(raw_data, id_to_display_name)
 
-                # Process display name
-                if d_name is None:
-                    display_name = conv_id
-                else:
-                    display_name = d_name
-
-                # Store display name mapping
-                id_to_display_name[conv_id] = display_name
-
-                # Process messages
-                messages = conversation.get('MessageList', [])
-                structured_messages = []
-
-                # Process each message
-                for msg in messages:
-                    try:
-                        # Extract message data
-                        msg_timestamp = msg.get('originalarrivaltime', '')
-                        msg_from = msg.get('from', '')
-                        msg_content_raw = msg.get('content', '')
-                        msg_type = msg.get('messagetype', '')
-
-                        # Parse timestamp
-                        try:
-                            msg_date_str, msg_time_str, msg_datetime = timestamp_parser(msg_timestamp)
-                        except TimestampParsingError:
-                            msg_date_str, msg_time_str = "Unknown date", "Unknown time"
-                            msg_datetime = None
-
-                        # Create message data structure
-                        msg_data = {
-                            'timestamp': msg_timestamp,
-                            'date': msg_date_str,
-                            'time': msg_time_str,
-                            'from_id': msg_from,
-                            'from_name': id_to_display_name.get(msg_from, msg_from),
-                            'type': msg_type,
-                            'is_edited': False
-                        }
-
-                        # Handle message type
-                        if msg_type != 'RichText':
-                            try:
-                                msg_content_raw = type_parser(msg_type)
-                            except InvalidInputError:
-                                msg_content_raw = f"***Unknown message type: {msg_type}***"
-
-                        msg_data['content_raw'] = msg_content_raw
-
-                        # Parse content
-                        try:
-                            cleaned_content = content_parser(msg_content_raw)
-                            msg_data['content'] = cleaned_content
-                        except ContentParsingError:
-                            msg_data['content'] = msg_content_raw
-
-                        structured_messages.append(msg_data)
-                    except Exception as e:
-                        logger.warning(f"Error processing message: {e}")
-                        continue
-
-                # Store conversation data
-                structured_data[conv_id] = {
-                    'display_name': display_name,
-                    'id': conv_id,
-                    'export_date': export_date_str,
-                    'export_time': export_time_str,
-                    'messages': structured_messages
-                }
-
-            except (KeyError, IndexError) as e:
-                logger.warning(f"Error processing conversation {i}: {e}")
-                continue
-
+        # Combine all data
         return {
-            'user_id': user_id,
-            'export_date': export_date_str,
-            'export_time': export_time_str,
-            'export_datetime': export_datetime,
+            'user_id': metadata['user_id'],
+            'export_date': metadata['export_date_str'],
+            'export_time': metadata['export_time_str'],
+            'export_datetime': metadata['export_datetime'],
             'conversations': structured_data,
             'id_to_display_name': id_to_display_name
         }
@@ -500,3 +409,260 @@ def parse_skype_data(raw_data: Dict[str, Any], user_display_name: str) -> Dict[s
         error_msg = f"Error parsing Skype data: {e}"
         logger.error(error_msg)
         raise DataExtractionError(error_msg) from e
+
+
+def _extract_metadata(raw_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extract basic metadata from raw Skype data.
+
+    Args:
+        raw_data (dict): Raw Skype export data
+
+    Returns:
+        dict: Extracted metadata
+
+    Raises:
+        InvalidInputError: If required fields are missing
+    """
+    try:
+        user_id = raw_data['userId']
+        export_date_time = raw_data['exportDate']
+        export_date_str, export_time_str, export_datetime = timestamp_parser(export_date_time)
+        no_of_conversations = len(raw_data['conversations'])
+
+        return {
+            'user_id': user_id,
+            'export_date_time': export_date_time,
+            'export_date_str': export_date_str,
+            'export_time_str': export_time_str,
+            'export_datetime': export_datetime,
+            'no_of_conversations': no_of_conversations
+        }
+    except KeyError as e:
+        error_msg = f"Missing required field in JSON: {e}"
+        logger.error(error_msg)
+        raise InvalidInputError(error_msg) from e
+    except TimestampParsingError as e:
+        # Handle timestamp parsing errors
+        logger.warning(f"Error parsing export timestamp: {e}")
+        return {
+            'user_id': raw_data['userId'],
+            'export_date_time': raw_data['exportDate'],
+            'export_date_str': "Unknown date",
+            'export_time_str': "Unknown time",
+            'export_datetime': None,
+            'no_of_conversations': len(raw_data['conversations'])
+        }
+
+
+def _process_conversations(raw_data: Dict[str, Any], id_to_display_name: Dict[str, str]) -> Dict[str, Dict[str, Any]]:
+    """
+    Process all conversations from raw data.
+
+    Args:
+        raw_data (dict): Raw Skype export data
+        id_to_display_name (dict): Mapping of user IDs to display names
+
+    Returns:
+        dict: Structured conversation data
+    """
+    structured_data = {}
+
+    # Process each conversation
+    for i in range(len(raw_data['conversations'])):
+        try:
+            # Extract conversation metadata
+            conversation = raw_data['conversations'][i]
+            conv_id = conversation['id']
+
+            # Process display name
+            display_name = _get_conversation_display_name(conversation)
+
+            # Store display name mapping
+            id_to_display_name[conv_id] = display_name
+
+            # Process messages
+            structured_messages = _process_messages(conversation, id_to_display_name)
+
+            # Store conversation data
+            structured_data[conv_id] = {
+                'display_name': display_name,
+                'id': conv_id,
+                'export_date': _get_export_date_from_raw(raw_data),
+                'export_time': _get_export_time_from_raw(raw_data),
+                'messages': structured_messages
+            }
+
+        except (KeyError, IndexError) as e:
+            logger.warning(f"Error processing conversation {i}: {e}")
+            continue
+
+    return structured_data
+
+
+def _get_conversation_display_name(conversation: Dict[str, Any]) -> str:
+    """
+    Get the display name for a conversation.
+
+    Args:
+        conversation (dict): Conversation data
+
+    Returns:
+        str: Display name for the conversation
+    """
+    d_name = conversation.get('displayName')
+
+    if d_name is None:
+        return conversation['id']
+    else:
+        return d_name
+
+
+def _get_export_date_from_raw(raw_data: Dict[str, Any]) -> str:
+    """
+    Get the export date from raw data.
+
+    Args:
+        raw_data (dict): Raw Skype export data
+
+    Returns:
+        str: Export date string
+    """
+    try:
+        export_date_str, _, _ = timestamp_parser(raw_data['exportDate'])
+        return export_date_str
+    except (KeyError, TimestampParsingError):
+        return "Unknown date"
+
+
+def _get_export_time_from_raw(raw_data: Dict[str, Any]) -> str:
+    """
+    Get the export time from raw data.
+
+    Args:
+        raw_data (dict): Raw Skype export data
+
+    Returns:
+        str: Export time string
+    """
+    try:
+        _, export_time_str, _ = timestamp_parser(raw_data['exportDate'])
+        return export_time_str
+    except (KeyError, TimestampParsingError):
+        return "Unknown time"
+
+
+def _process_messages(conversation: Dict[str, Any], id_to_display_name: Dict[str, str]) -> List[Dict[str, Any]]:
+    """
+    Process all messages in a conversation.
+
+    Args:
+        conversation (dict): Conversation data
+        id_to_display_name (dict): Mapping of user IDs to display names
+
+    Returns:
+        list: List of structured message data
+    """
+    messages = conversation.get('MessageList', [])
+    structured_messages = []
+
+    # Process each message
+    for msg in messages:
+        try:
+            structured_message = _process_single_message(msg, id_to_display_name)
+            structured_messages.append(structured_message)
+        except Exception as e:
+            logger.warning(f"Error processing message: {e}")
+            continue
+
+    return structured_messages
+
+
+def _process_single_message(msg: Dict[str, Any], id_to_display_name: Dict[str, str]) -> Dict[str, Any]:
+    """
+    Process a single message.
+
+    Args:
+        msg (dict): Message data
+        id_to_display_name (dict): Mapping of user IDs to display names
+
+    Returns:
+        dict: Structured message data
+    """
+    # Extract message data
+    msg_timestamp = msg.get('originalarrivaltime', '')
+    msg_from = msg.get('from', '')
+    msg_content_raw = msg.get('content', '')
+    msg_type = msg.get('messagetype', '')
+
+    # Parse timestamp
+    msg_date_str, msg_time_str, msg_datetime = _parse_message_timestamp(msg_timestamp)
+
+    # Create message data structure
+    msg_data = {
+        'timestamp': msg_timestamp,
+        'date': msg_date_str,
+        'time': msg_time_str,
+        'from_id': msg_from,
+        'from_name': id_to_display_name.get(msg_from, msg_from),
+        'type': msg_type,
+        'is_edited': 'skypeeditedid' in msg
+    }
+
+    # Handle message type and content
+    msg_data.update(_process_message_content(msg_type, msg_content_raw))
+
+    return msg_data
+
+
+def _parse_message_timestamp(timestamp: str) -> Tuple[str, str, Optional[datetime.datetime]]:
+    """
+    Parse a message timestamp.
+
+    Args:
+        timestamp (str): Timestamp string
+
+    Returns:
+        tuple: (date_str, time_str, datetime_obj)
+    """
+    try:
+        return timestamp_parser(timestamp)
+    except TimestampParsingError:
+        return "Unknown date", "Unknown time", None
+
+
+def _process_message_content(msg_type: str, msg_content_raw: str) -> Dict[str, str]:
+    """
+    Process message content based on message type.
+
+    Args:
+        msg_type (str): Message type
+        msg_content_raw (str): Raw message content
+
+    Returns:
+        dict: Processed content data
+    """
+    # Handle message type
+    if msg_type != 'RichText':
+        try:
+            processed_content = type_parser(msg_type)
+        except InvalidInputError:
+            processed_content = f"***Unknown message type: {msg_type}***"
+
+        return {
+            'content_raw': processed_content,
+            'content': processed_content
+        }
+
+    # Parse content for RichText messages
+    try:
+        cleaned_content = content_parser(msg_content_raw)
+        return {
+            'content_raw': msg_content_raw,
+            'content': cleaned_content
+        }
+    except ContentParsingError:
+        return {
+            'content_raw': msg_content_raw,
+            'content': msg_content_raw
+        }

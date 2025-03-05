@@ -209,67 +209,169 @@ class SkypeETLPipeline:
             raise ValueError(error_msg)
 
         try:
-            # Determine if we're dealing with a file path or file object
-            if file_path:
-                # Validate file exists and is readable
-                try:
-                    validate_file_exists(file_path)
-                except ValidationError as e:
-                    logger.error(f"File validation error: {e}")
-                    raise
-
-                # Process based on file type
-                if file_path.endswith('.tar'):
-                    try:
-                        validate_tar_file(file_path)
-                        raw_data = read_tarfile(file_path, auto_select=True)
-                        logger.info(f"Extracted data from tar file: {file_path}")
-                    except ValidationError as e:
-                        logger.error(f"TAR file validation error: {e}")
-                        raise
-                else:
-                    try:
-                        raw_data = validate_json_file(file_path)
-                        logger.info(f"Read data from JSON file: {file_path}")
-                    except ValidationError as e:
-                        logger.error(f"JSON file validation error: {e}")
-                        raise
-            elif file_obj:
-                # Validate file object
-                try:
-                    validate_file_object(file_obj, allowed_extensions=['.json', '.tar'])
-                except ValidationError as e:
-                    logger.error(f"File object validation error: {e}")
-                    raise
-
-                # Try to determine file type from name if available
-                if hasattr(file_obj, 'name') and file_obj.name.endswith('.tar'):
-                    raw_data = read_tarfile_object(file_obj, auto_select=True)
-                    logger.info("Extracted data from uploaded tar file")
-                else:
-                    # Assume JSON if not a tar file
-                    raw_data = read_file_object(file_obj)
-                    logger.info("Read data from uploaded JSON file")
+            # Extract data based on input type
+            raw_data = self._extract_data_from_source(file_path, file_obj)
 
             # Validate the extracted data structure
-            try:
-                validate_skype_data(raw_data)
-            except ValidationError as e:
-                logger.error(f"Skype data validation error: {e}")
-                raise
+            self._validate_extracted_data(raw_data)
 
             # Store raw data if output directory is specified
-            if self.output_dir and file_path:
-                raw_output_path = os.path.join(self.output_dir, 'raw_data.json')
-                with open(raw_output_path, 'w', encoding='utf-8') as f:
-                    json.dump(raw_data, f, indent=2)
-                logger.info(f"Raw data saved to {raw_output_path}")
+            self._save_raw_data(raw_data, file_path)
 
             return raw_data
 
         except Exception as e:
             logger.error(f"Error during extraction phase: {e}")
             raise
+
+    def _extract_data_from_source(self, file_path: str = None, file_obj: BinaryIO = None) -> Dict[str, Any]:
+        """
+        Extract data from either a file path or a file object.
+
+        Args:
+            file_path (str, optional): Path to the Skype export file
+            file_obj (BinaryIO, optional): File-like object containing the Skype export
+
+        Returns:
+            dict: The raw data extracted from the source
+
+        Raises:
+            ValidationError: If the input is invalid
+        """
+        if file_path:
+            return self._extract_from_file_path(file_path)
+        elif file_obj:
+            return self._extract_from_file_object(file_obj)
+
+    def _extract_from_file_path(self, file_path: str) -> Dict[str, Any]:
+        """
+        Extract data from a file path.
+
+        Args:
+            file_path (str): Path to the Skype export file
+
+        Returns:
+            dict: The raw data extracted from the file
+
+        Raises:
+            ValidationError: If the file is invalid
+        """
+        # Validate file exists and is readable
+        try:
+            validate_file_exists(file_path)
+        except ValidationError as e:
+            logger.error(f"File validation error: {e}")
+            raise
+
+        # Process based on file type
+        if file_path.endswith('.tar'):
+            return self._extract_from_tar_file(file_path)
+        else:
+            return self._extract_from_json_file(file_path)
+
+    def _extract_from_tar_file(self, file_path: str) -> Dict[str, Any]:
+        """
+        Extract data from a tar file.
+
+        Args:
+            file_path (str): Path to the tar file
+
+        Returns:
+            dict: The raw data extracted from the file
+
+        Raises:
+            ValidationError: If the file is invalid
+        """
+        try:
+            validate_tar_file(file_path)
+            raw_data = read_tarfile(file_path, auto_select=True)
+            logger.info(f"Extracted data from tar file: {file_path}")
+            return raw_data
+        except ValidationError as e:
+            logger.error(f"TAR file validation error: {e}")
+            raise
+
+    def _extract_from_json_file(self, file_path: str) -> Dict[str, Any]:
+        """
+        Extract data from a JSON file.
+
+        Args:
+            file_path (str): Path to the JSON file
+
+        Returns:
+            dict: The raw data extracted from the file
+
+        Raises:
+            ValidationError: If the file is invalid
+        """
+        try:
+            raw_data = validate_json_file(file_path)
+            logger.info(f"Read data from JSON file: {file_path}")
+            return raw_data
+        except ValidationError as e:
+            logger.error(f"JSON file validation error: {e}")
+            raise
+
+    def _extract_from_file_object(self, file_obj: BinaryIO) -> Dict[str, Any]:
+        """
+        Extract data from a file object.
+
+        Args:
+            file_obj (BinaryIO): File-like object containing the Skype export
+
+        Returns:
+            dict: The raw data extracted from the file object
+
+        Raises:
+            ValidationError: If the file object is invalid
+        """
+        # Validate file object
+        try:
+            validate_file_object(file_obj, allowed_extensions=['.json', '.tar'])
+        except ValidationError as e:
+            logger.error(f"File object validation error: {e}")
+            raise
+
+        # Try to determine file type from name if available
+        if hasattr(file_obj, 'name') and file_obj.name.endswith('.tar'):
+            raw_data = read_tarfile_object(file_obj, auto_select=True)
+            logger.info("Extracted data from uploaded tar file")
+        else:
+            # Assume JSON if not a tar file
+            raw_data = read_file_object(file_obj)
+            logger.info("Read data from uploaded JSON file")
+
+        return raw_data
+
+    def _validate_extracted_data(self, raw_data: Dict[str, Any]) -> None:
+        """
+        Validate the extracted data structure.
+
+        Args:
+            raw_data (dict): The raw data extracted from the file
+
+        Raises:
+            ValidationError: If the data is invalid
+        """
+        try:
+            validate_skype_data(raw_data)
+        except ValidationError as e:
+            logger.error(f"Skype data validation error: {e}")
+            raise
+
+    def _save_raw_data(self, raw_data: Dict[str, Any], file_path: str = None) -> None:
+        """
+        Save the raw data to a file if output directory is specified.
+
+        Args:
+            raw_data (dict): The raw data to save
+            file_path (str, optional): The original file path, used for logging
+        """
+        if self.output_dir and file_path:
+            raw_output_path = os.path.join(self.output_dir, 'raw_data.json')
+            with open(raw_output_path, 'w', encoding='utf-8') as f:
+                json.dump(raw_data, f, indent=2)
+            logger.info(f"Raw data saved to {raw_output_path}")
 
     def transform(self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -288,23 +390,46 @@ class SkypeETLPipeline:
         logger.info("Starting transformation phase")
 
         try:
-            # Validate and prepare data
-            self._validate_raw_data(raw_data)
-
-            # Extract and process metadata
-            transformed_data = self._process_metadata(raw_data, user_display_name)
-
-            # Process conversations
-            self._process_conversations(raw_data, transformed_data)
-
-            # Store transformed data if output directory is specified
-            self._save_transformed_data(transformed_data)
-
+            # Execute the transformation pipeline
+            transformed_data = self._execute_transformation_pipeline(raw_data, user_display_name)
             return transformed_data
-
-        except Exception as e:
-            logger.error(f"Error during transformation phase: {e}")
+        except ValidationError as e:
+            logger.error(f"Validation error during transformation phase: {e}")
             raise
+        except Exception as e:
+            logger.error(f"Unexpected error during transformation phase: {e}")
+            raise
+
+    def _execute_transformation_pipeline(self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Execute the complete transformation pipeline.
+
+        This method orchestrates the entire transformation process, including validation,
+        metadata processing, conversation processing, and data storage.
+
+        Args:
+            raw_data (dict): The raw data extracted from the Skype export
+            user_display_name (str, optional): The display name to use for the user
+
+        Returns:
+            dict: The transformed data
+
+        Raises:
+            ValidationError: If the input data is invalid
+        """
+        # Step 1: Validate the raw data
+        self._validate_raw_data(raw_data)
+
+        # Step 2: Process metadata and initialize transformed data structure
+        transformed_data = self._process_metadata(raw_data, user_display_name)
+
+        # Step 3: Process conversations and messages
+        self._process_conversations(raw_data, transformed_data)
+
+        # Step 4: Save the transformed data if output directory is specified
+        self._save_transformed_data(transformed_data)
+
+        return transformed_data
 
     def _validate_raw_data(self, raw_data: Dict[str, Any]) -> None:
         """
@@ -371,13 +496,40 @@ class SkypeETLPipeline:
             raw_data (dict): The raw data extracted from the Skype export
             transformed_data (dict): The transformed data structure to populate
         """
-        # Map user ID to display name
-        user_id = raw_data['userId']
-        user_display_name = transformed_data['metadata']['userDisplayName']
-        id_to_display_name = {user_id: str(user_display_name)}
+        # Create ID to display name mapping
+        id_to_display_name = self._create_id_display_name_mapping(raw_data, transformed_data)
 
         # Process each conversation
-        for conversation in raw_data['conversations']:
+        self._process_all_conversations(raw_data['conversations'], transformed_data, id_to_display_name)
+
+    def _create_id_display_name_mapping(self, raw_data: Dict[str, Any],
+                                       transformed_data: Dict[str, Any]) -> Dict[str, str]:
+        """
+        Create a mapping of user IDs to display names.
+
+        Args:
+            raw_data (dict): The raw data extracted from the Skype export
+            transformed_data (dict): The transformed data structure
+
+        Returns:
+            dict: Mapping of user IDs to display names
+        """
+        user_id = raw_data['userId']
+        user_display_name = transformed_data['metadata']['userDisplayName']
+        return {user_id: str(user_display_name)}
+
+    def _process_all_conversations(self, conversations: List[Dict[str, Any]],
+                                  transformed_data: Dict[str, Any],
+                                  id_to_display_name: Dict[str, str]) -> None:
+        """
+        Process all conversations from the raw data.
+
+        Args:
+            conversations (list): List of conversation data
+            transformed_data (dict): The transformed data structure to populate
+            id_to_display_name (dict): Mapping of user IDs to display names
+        """
+        for conversation in conversations:
             try:
                 self._process_single_conversation(conversation, transformed_data, id_to_display_name)
             except Exception as e:
@@ -396,7 +548,32 @@ class SkypeETLPipeline:
             transformed_data (dict): The transformed data structure to populate
             id_to_display_name (dict): Mapping of user IDs to display names
         """
-        # Extract conversation metadata
+        # Extract and process conversation metadata
+        conv_id, display_name = self._extract_conversation_metadata(conversation)
+
+        # Update ID to display name mapping
+        id_to_display_name[conv_id] = display_name
+
+        # Initialize conversation data structure
+        self._initialize_conversation_structure(conv_id, display_name, transformed_data)
+
+        # Process messages
+        messages = conversation.get('MessageList', [])
+        self._update_message_count(conv_id, messages, transformed_data)
+
+        # Process and sort messages
+        self._process_messages(conv_id, messages, transformed_data, id_to_display_name)
+
+    def _extract_conversation_metadata(self, conversation: Dict[str, Any]) -> Tuple[str, str]:
+        """
+        Extract and process conversation metadata.
+
+        Args:
+            conversation (dict): The conversation data
+
+        Returns:
+            tuple: (conv_id, display_name)
+        """
         conv_id = conversation['id']
         display_name = conversation.get('displayName')
 
@@ -408,25 +585,36 @@ class SkypeETLPipeline:
             safe_display_name = safe_filename(display_name)
             display_name = safe_display_name
 
-        # Map conversation ID to display name
-        id_to_display_name[conv_id] = display_name
+        return conv_id, display_name
 
-        # Initialize conversation data structure
+    def _initialize_conversation_structure(self, conv_id: str, display_name: str,
+                                          transformed_data: Dict[str, Any]) -> None:
+        """
+        Initialize the conversation data structure.
+
+        Args:
+            conv_id (str): The conversation ID
+            display_name (str): The display name for the conversation
+            transformed_data (dict): The transformed data structure to populate
+        """
         transformed_data['conversations'][conv_id] = {
             'id': conv_id,
             'displayName': display_name,
             'messages': []
         }
 
-        # Process messages
-        messages = conversation.get('MessageList', [])
+    def _update_message_count(self, conv_id: str, messages: List[Dict[str, Any]],
+                             transformed_data: Dict[str, Any]) -> None:
+        """
+        Update the message count for a conversation.
+
+        Args:
+            conv_id (str): The conversation ID
+            messages (list): List of message data
+            transformed_data (dict): The transformed data structure to update
+        """
         message_count = len(messages)
-
-        # Store message count
         transformed_data['conversations'][conv_id]['messageCount'] = message_count
-
-        # Process and sort messages
-        self._process_messages(conv_id, messages, transformed_data, id_to_display_name)
 
     def _process_messages(self, conv_id: str, messages: List[Dict[str, Any]],
                          transformed_data: Dict[str, Any],
@@ -440,6 +628,30 @@ class SkypeETLPipeline:
             transformed_data (dict): The transformed data structure to populate
             id_to_display_name (dict): Mapping of user IDs to display names
         """
+        # Process each message and collect datetime objects for sorting
+        datetime_objects = self._process_message_batch(conv_id, messages, transformed_data, id_to_display_name)
+
+        # Sort messages by timestamp if datetime objects are available
+        self._sort_messages(conv_id, transformed_data, datetime_objects)
+
+        # Store first and last message timestamps
+        self._store_conversation_timespan(conv_id, transformed_data)
+
+    def _process_message_batch(self, conv_id: str, messages: List[Dict[str, Any]],
+                              transformed_data: Dict[str, Any],
+                              id_to_display_name: Dict[str, str]) -> List[Tuple[int, datetime]]:
+        """
+        Process a batch of messages and collect datetime objects for sorting.
+
+        Args:
+            conv_id (str): The conversation ID
+            messages (list): List of message data
+            transformed_data (dict): The transformed data structure to populate
+            id_to_display_name (dict): Mapping of user IDs to display names
+
+        Returns:
+            list: List of tuples (index, datetime) for sorting
+        """
         # Track datetime objects for sorting
         datetime_objects = []
 
@@ -452,11 +664,7 @@ class SkypeETLPipeline:
                 logger.warning(f"Error processing message in conversation {conv_id}: {e}")
                 continue
 
-        # Sort messages by timestamp if datetime objects are available
-        self._sort_messages(conv_id, transformed_data, datetime_objects)
-
-        # Store first and last message timestamps
-        self._store_conversation_timespan(conv_id, transformed_data)
+        return datetime_objects
 
     def _process_single_message(self, index: int, message: Dict[str, Any],
                                conv_id: str, transformed_data: Dict[str, Any],
@@ -474,6 +682,34 @@ class SkypeETLPipeline:
             datetime_objects (list): List to store datetime objects for sorting
         """
         # Extract message metadata
+        message_metadata = self._extract_message_metadata(message)
+
+        # Create message data structure
+        msg_data = self._create_message_data_structure(message_metadata, id_to_display_name)
+
+        # Store datetime object for sorting if available
+        if message_metadata['datetime']:
+            datetime_objects.append((index, message_metadata['datetime']))
+
+        # Handle special message types
+        self._handle_special_message_types(msg_data, message_metadata['type'])
+
+        # Check for edited messages
+        self._check_for_edited_message(msg_data, message)
+
+        # Add message to conversation
+        transformed_data['conversations'][conv_id]['messages'].append(msg_data)
+
+    def _extract_message_metadata(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Extract metadata from a message.
+
+        Args:
+            message (dict): The message data
+
+        Returns:
+            dict: Extracted message metadata
+        """
         msg_timestamp = message.get('originalarrivaltime')
         msg_from = message.get('from')
         msg_content_raw = message.get('content', '')
@@ -482,34 +718,62 @@ class SkypeETLPipeline:
         # Parse timestamp
         msg_date_str, msg_time_str, msg_datetime = timestamp_parser(msg_timestamp)
 
-        # Initialize message data structure
-        msg_data = {
+        return {
             'timestamp': msg_timestamp,
-            'timestampFormatted': f"{msg_date_str} {msg_time_str}",
-            'date': msg_date_str,
-            'time': msg_time_str,
-            'fromId': msg_from,
-            'fromName': id_to_display_name.get(msg_from, msg_from),
-            'type': msg_type,
-            'rawContent': msg_content_raw,
+            'date_str': msg_date_str,
+            'time_str': msg_time_str,
+            'datetime': msg_datetime,
+            'from': msg_from,
+            'content_raw': msg_content_raw,
+            'type': msg_type
+        }
+
+    def _create_message_data_structure(self, metadata: Dict[str, Any],
+                                      id_to_display_name: Dict[str, str]) -> Dict[str, Any]:
+        """
+        Create a message data structure.
+
+        Args:
+            metadata (dict): Message metadata
+            id_to_display_name (dict): Mapping of user IDs to display names
+
+        Returns:
+            dict: Message data structure
+        """
+        return {
+            'timestamp': metadata['timestamp'],
+            'timestampFormatted': f"{metadata['date_str']} {metadata['time_str']}",
+            'date': metadata['date_str'],
+            'time': metadata['time_str'],
+            'fromId': metadata['from'],
+            'fromName': id_to_display_name.get(metadata['from'], metadata['from']),
+            'type': metadata['type'],
+            'rawContent': metadata['content_raw'],
             'isEdited': False
         }
 
-        # Store datetime object for sorting
-        if msg_datetime:
-            datetime_objects.append((index, msg_datetime))
+    def _handle_special_message_types(self, msg_data: Dict[str, Any], msg_type: str) -> None:
+        """
+        Handle special message types.
 
-        # Handle special message types
+        Args:
+            msg_data (dict): Message data structure to update
+            msg_type (str): Message type
+        """
         if msg_type != 'RichText':
             msg_content_raw = self._type_parser(msg_type)
             msg_data['rawContent'] = msg_content_raw
 
-        # Check for edited messages
+    def _check_for_edited_message(self, msg_data: Dict[str, Any], message: Dict[str, Any]) -> None:
+        """
+        Check if a message has been edited.
+
+        Args:
+            msg_data (dict): Message data structure to update
+            message (dict): Original message data
+        """
         if 'skypeeditedid' in message:
             msg_data['isEdited'] = True
-
-        # Add message to conversation
-        transformed_data['conversations'][conv_id]['messages'].append(msg_data)
 
     def _sort_messages(self, conv_id: str, transformed_data: Dict[str, Any],
                       datetime_objects: List[Tuple[int, datetime]]) -> None:
@@ -521,13 +785,33 @@ class SkypeETLPipeline:
             transformed_data (dict): The transformed data structure
             datetime_objects (list): List of datetime objects for sorting
         """
-        messages_list = transformed_data['conversations'][conv_id]['messages']
-        if datetime_objects:
-            # Sort by datetime
-            datetime_objects.sort(key=lambda x: x[1])
-            sorted_indices = [x[0] for x in datetime_objects]
-            messages_list = [messages_list[i] for i in sorted_indices]
-            transformed_data['conversations'][conv_id]['messages'] = messages_list
+        if not datetime_objects:
+            logger.debug(f"No datetime objects available for sorting messages in conversation {conv_id}")
+            return
+
+        try:
+            messages_list = transformed_data['conversations'][conv_id]['messages']
+            sorted_messages = self._sort_messages_by_datetime(messages_list, datetime_objects)
+            transformed_data['conversations'][conv_id]['messages'] = sorted_messages
+        except Exception as e:
+            logger.warning(f"Error sorting messages in conversation {conv_id}: {e}")
+
+    def _sort_messages_by_datetime(self, messages_list: List[Dict[str, Any]],
+                                  datetime_objects: List[Tuple[int, datetime]]) -> List[Dict[str, Any]]:
+        """
+        Sort messages by datetime objects.
+
+        Args:
+            messages_list (list): List of message data
+            datetime_objects (list): List of datetime objects for sorting
+
+        Returns:
+            list: Sorted list of message data
+        """
+        # Sort by datetime
+        datetime_objects.sort(key=lambda x: x[1])
+        sorted_indices = [x[0] for x in datetime_objects]
+        return [messages_list[i] for i in sorted_indices]
 
     def _store_conversation_timespan(self, conv_id: str, transformed_data: Dict[str, Any]) -> None:
         """
@@ -537,13 +821,31 @@ class SkypeETLPipeline:
             conv_id (str): The conversation ID
             transformed_data (dict): The transformed data structure
         """
-        messages_list = transformed_data['conversations'][conv_id]['messages']
-        if messages_list:
-            first_msg = messages_list[0]
-            last_msg = messages_list[-1]
+        try:
+            messages_list = transformed_data['conversations'][conv_id]['messages']
+            if not messages_list:
+                logger.debug(f"No messages to determine timespan for conversation {conv_id}")
+                return
 
-            transformed_data['conversations'][conv_id]['firstMessageTime'] = first_msg['timestamp']
-            transformed_data['conversations'][conv_id]['lastMessageTime'] = last_msg['timestamp']
+            self._update_conversation_timespan(conv_id, messages_list, transformed_data)
+        except Exception as e:
+            logger.warning(f"Error storing conversation timespan for {conv_id}: {e}")
+
+    def _update_conversation_timespan(self, conv_id: str, messages_list: List[Dict[str, Any]],
+                                     transformed_data: Dict[str, Any]) -> None:
+        """
+        Update the conversation timespan with first and last message timestamps.
+
+        Args:
+            conv_id (str): The conversation ID
+            messages_list (list): List of message data
+            transformed_data (dict): The transformed data structure to update
+        """
+        first_msg = messages_list[0]
+        last_msg = messages_list[-1]
+
+        transformed_data['conversations'][conv_id]['firstMessageTime'] = first_msg['timestamp']
+        transformed_data['conversations'][conv_id]['lastMessageTime'] = last_msg['timestamp']
 
     def _save_transformed_data(self, transformed_data: Dict[str, Any]) -> None:
         """
@@ -552,11 +854,35 @@ class SkypeETLPipeline:
         Args:
             transformed_data (dict): The transformed data to save
         """
-        if self.output_dir:
-            transformed_output_path = os.path.join(self.output_dir, 'transformed_data.json')
-            with open(transformed_output_path, 'w', encoding='utf-8') as f:
-                json.dump(transformed_data, f, indent=2)
-            logger.info(f"Transformed data saved to {transformed_output_path}")
+        if not self.output_dir:
+            return
+
+        try:
+            self._write_transformed_data_to_file(transformed_data)
+        except Exception as e:
+            logger.error(f"Error saving transformed data: {e}")
+
+    def _write_transformed_data_to_file(self, transformed_data: Dict[str, Any]) -> None:
+        """
+        Write transformed data to a JSON file.
+
+        Args:
+            transformed_data (dict): The transformed data to save
+
+        Raises:
+            IOError: If there is an error writing to the file
+        """
+        # Ensure output directory exists
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        # Create output file path
+        transformed_output_path = os.path.join(self.output_dir, 'transformed_data.json')
+
+        # Write data to file
+        with open(transformed_output_path, 'w', encoding='utf-8') as f:
+            json.dump(transformed_data, f, indent=2)
+
+        logger.info(f"Transformed data saved to {transformed_output_path}")
 
     def load(self, raw_data: Dict[str, Any], transformed_data: Dict[str, Any], file_source: Optional[str] = None) -> int:
         """
