@@ -112,7 +112,64 @@
             border-radius: 4px;
             overflow-x: auto;
         }
+
+        .log-container {
+            margin-top: 20px;
+            max-height: 200px;
+            overflow-y: auto;
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            display: none;
+        }
+
+        .log-entry {
+            margin-bottom: 5px;
+            border-bottom: 1px solid #e0e0e0;
+            padding-bottom: 5px;
+        }
+
+        .log-time {
+            color: #666;
+            margin-right: 10px;
+        }
+
+        .log-message {
+            color: #333;
+        }
+
+        .log-status {
+            font-weight: bold;
+            margin-right: 10px;
+        }
+
+        .log-status-starting {
+            color: #0078d7;
+        }
+
+        .log-status-extracting {
+            color: #107c10;
+        }
+
+        .log-status-transforming {
+            color: #5c2d91;
+        }
+
+        .log-status-loading {
+            color: #d83b01;
+        }
+
+        .log-status-completed {
+            color: #107c10;
+        }
+
+        .log-status-failed {
+            color: #d83b01;
+        }
     </style>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
 </head>
 <body>
     <h1>Skype Parser - Upload</h1>
@@ -143,6 +200,11 @@
             <div class="status" id="statusText">Uploading file...</div>
         </div>
 
+        <div class="log-container" id="logContainer">
+            <h3>Processing Log</h3>
+            <div id="logEntries"></div>
+        </div>
+
         <div class="error" id="errorContainer">
             <h3>Error</h3>
             <div id="errorText"></div>
@@ -163,76 +225,139 @@
             const progressContainer = document.getElementById('progressContainer');
             const progressBarFill = document.getElementById('progressBarFill');
             const statusText = document.getElementById('statusText');
+            const logContainer = document.getElementById('logContainer');
+            const logEntries = document.getElementById('logEntries');
             const resultsContainer = document.getElementById('resultsContainer');
             const resultsText = document.getElementById('resultsText');
             const errorContainer = document.getElementById('errorContainer');
             const errorText = document.getElementById('errorText');
 
-            uploadButton.addEventListener('click', function() {
-                // Validate inputs
-                if (!fileUpload.files.length) {
-                    showError('Please select a file to upload.');
+            // Socket.IO connection
+            let socket = null;
+            let currentTaskId = null;
+
+            // Connect to Socket.IO server
+            function connectSocket() {
+                if (socket) {
+                    socket.disconnect();
+                }
+
+                // Connect to the server
+                socket = io();
+
+                // Handle connection events
+                socket.on('connect', () => {
+                    console.log('Connected to server');
+                });
+
+                socket.on('disconnect', () => {
+                    console.log('Disconnected from server');
+                });
+
+                socket.on('connect_error', (error) => {
+                    console.error('Connection error:', error);
+                    showError('Error connecting to server: ' + error.message);
+                });
+            }
+
+            // Subscribe to task updates
+            function subscribeToTask(taskId) {
+                if (!socket || !socket.connected) {
+                    showError('Not connected to server');
                     return;
                 }
 
-                if (!apiKey.value) {
-                    showError('Please enter your API key.');
-                    return;
-                }
+                currentTaskId = taskId;
 
-                const file = fileUpload.files[0];
-                const formData = new FormData();
-                formData.append('file', file);
+                // Subscribe to task updates
+                socket.emit('subscribe', { task_id: taskId }, (response) => {
+                    if (response && response.error) {
+                        showError(response.error);
+                        return;
+                    }
 
-                if (userDisplayName.value) {
-                    formData.append('user_display_name', userDisplayName.value);
-                }
+                    // Handle initial progress data
+                    updateProgressFromData(response);
+                    addLogEntry(response);
+                });
 
-                // Reset UI
-                hideError();
-                hideResults();
-                showProgress();
+                // Listen for task progress updates
+                socket.on(`task_progress_${taskId}`, (data) => {
+                    updateProgressFromData(data);
+                    addLogEntry(data);
 
-                // Update progress bar to show upload starting
-                updateProgress(10, 'Uploading file...');
+                    // If task is completed or failed, get the results
+                    if (data.status === 'completed') {
+                        fetchTaskResults(taskId);
+                    } else if (data.status === 'failed') {
+                        showError(data.message);
+                    }
+                });
+            }
 
-                // Send the request
-                fetch('/api/upload', {
-                    method: 'POST',
+            // Update progress bar and status text from progress data
+            function updateProgressFromData(data) {
+                if (!data) return;
+
+                // Update progress bar
+                progressBarFill.style.width = `${data.percent_complete}%`;
+
+                // Update status text
+                statusText.textContent = data.message;
+
+                // Show progress container
+                progressContainer.style.display = 'block';
+
+                // Show log container
+                logContainer.style.display = 'block';
+            }
+
+            // Add a log entry
+            function addLogEntry(data) {
+                if (!data) return;
+
+                const entry = document.createElement('div');
+                entry.className = 'log-entry';
+
+                const time = new Date().toLocaleTimeString();
+
+                entry.innerHTML = `
+                    <span class="log-time">${time}</span>
+                    <span class="log-status log-status-${data.status}">[${data.status.toUpperCase()}]</span>
+                    <span class="log-message">${data.message}</span>
+                `;
+
+                logEntries.appendChild(entry);
+
+                // Scroll to bottom
+                logEntries.scrollTop = logEntries.scrollHeight;
+            }
+
+            // Fetch task results
+            function fetchTaskResults(taskId) {
+                fetch(`/api/task/${taskId}`, {
+                    method: 'GET',
                     headers: {
                         'X-API-Key': apiKey.value
-                    },
-                    body: formData
+                    }
                 })
                 .then(response => {
-                    // Update progress
-                    updateProgress(90, 'Processing complete, getting results...');
-
                     if (!response.ok) {
                         return response.json().then(data => {
-                            throw new Error(data.error || 'Upload failed');
+                            throw new Error(data.error || 'Failed to fetch task results');
                         });
                     }
 
                     return response.json();
                 })
                 .then(data => {
-                    // Update progress
-                    updateProgress(100, 'Complete!');
-
-                    // Show results
+                    // Task is complete, show results
                     showResults(data);
-
-                    // Hide progress after a delay
-                    setTimeout(() => {
-                        hideProgress();
-                    }, 1000);
                 })
                 .catch(error => {
-                    hideProgress();
                     showError(error.message);
                 });
-            });
+            }
 
             function updateProgress(percent, message) {
                 progressBarFill.style.width = `${percent}%`;
@@ -266,6 +391,77 @@
             function hideError() {
                 errorContainer.style.display = 'none';
             }
+
+            // Connect to Socket.IO server on page load
+            connectSocket();
+
+            uploadButton.addEventListener('click', function() {
+                // Validate inputs
+                if (!fileUpload.files.length) {
+                    showError('Please select a file to upload.');
+                    return;
+                }
+
+                if (!apiKey.value) {
+                    showError('Please enter your API key.');
+                    return;
+                }
+
+                const file = fileUpload.files[0];
+                const formData = new FormData();
+                formData.append('file', file);
+
+                if (userDisplayName.value) {
+                    formData.append('user_display_name', userDisplayName.value);
+                }
+
+                // Reset UI
+                hideError();
+                hideResults();
+                showProgress();
+                clearLog();
+
+                // Update progress bar to show upload starting
+                updateProgress(10, 'Uploading file...');
+                addLogEntry({
+                    status: 'starting',
+                    message: 'Uploading file...',
+                    percent_complete: 10
+                });
+
+                // Send the request
+                fetch('/api/upload', {
+                    method: 'POST',
+                    headers: {
+                        'X-API-Key': apiKey.value
+                    },
+                    body: formData
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(data => {
+                            throw new Error(data.error || 'Upload failed');
+                        });
+                    }
+
+                    return response.json();
+                })
+                .then(data => {
+                    // Check if task_id is present
+                    if (data.task_id) {
+                        // Subscribe to task updates
+                        subscribeToTask(data.task_id);
+                    } else {
+                        // No task_id, show results directly
+                        updateProgress(100, 'Complete!');
+                        showResults(data);
+                    }
+                })
+                .catch(error => {
+                    hideProgress();
+                    showError(error.message);
+                });
+            });
         });
     </script>
 </body>
