@@ -1,507 +1,364 @@
 """
 Transformer module for the ETL pipeline.
 
-This module handles the transformation of raw Skype data into a structured format,
-including conversation and message processing.
+This module provides the Transformer class that transforms raw Skype export data
+into a structured format suitable for database loading.
 """
 
 import logging
-import datetime
-import os
 import json
-from typing import Dict, List, Any, Optional, Tuple, Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock
+from typing import Dict, Any, Optional, List, Callable, Union
+import concurrent.futures
+from datetime import datetime
 
-from src.utils.message_type_handlers import extract_structured_data, get_handler_for_message_type
-from src.parser.content_extractor import ContentExtractor
+from src.utils.interfaces import (
+    TransformerProtocol,
+    ContentExtractorProtocol,
+    MessageHandlerFactoryProtocol,
+    StructuredDataExtractorProtocol
+)
+from src.utils.di import get_service
 from .context import ETLContext
 
 logger = logging.getLogger(__name__)
 
-class Transformer:
-    """Handles transformation of raw Skype data into structured format."""
+class Transformer(TransformerProtocol):
+    """Transforms raw Skype export data into a structured format."""
 
     def __init__(
         self,
-        context: ETLContext = None,
+        context: Optional[ETLContext] = None,
         parallel_processing: bool = True,
         chunk_size: int = 1000,
         max_workers: Optional[int] = None,
-        content_extractor = None,
-        message_handler_factory = None,
-        structured_data_extractor = None
+        content_extractor: Optional[ContentExtractorProtocol] = None,
+        message_handler_factory: Optional[MessageHandlerFactoryProtocol] = None,
+        structured_data_extractor: Optional[StructuredDataExtractorProtocol] = None
     ):
-        """Initialize the Transformer.
+        """Initialize the transformer.
 
         Args:
-            context: Shared ETL context object
-            parallel_processing: Whether to use parallel processing for conversations (used if context not provided)
-            chunk_size: Size of message chunks for batch processing (used if context not provided)
-            max_workers: Maximum number of worker threads (used if context not provided)
-            content_extractor: Custom content extractor (for testing)
-            message_handler_factory: Custom message handler factory (for testing)
-            structured_data_extractor: Custom structured data extractor (for testing)
+            context: ETL context for sharing state between components
+            parallel_processing: Whether to use parallel processing for transformations
+            chunk_size: Size of message chunks for batch processing
+            max_workers: Maximum number of worker threads/processes
+            content_extractor: Optional custom content extractor
+            message_handler_factory: Optional custom message handler factory
+            structured_data_extractor: Optional custom structured data extractor
         """
         self.context = context
+        self.parallel_processing = parallel_processing
+        self.chunk_size = chunk_size
+        self.max_workers = max_workers
 
-        # Use context settings if available, otherwise use parameters
-        if context:
-            self.parallel_processing = context.parallel_processing
-            self.chunk_size = context.chunk_size
-            self.max_workers = context.max_workers
-        else:
-            self.parallel_processing = parallel_processing
-            self.chunk_size = chunk_size
-            self.max_workers = max_workers
+        # Use provided dependencies or get from service container
+        self.content_extractor = content_extractor or get_service(ContentExtractorProtocol)
+        self.message_handler_factory = message_handler_factory or get_service(MessageHandlerFactoryProtocol)
+        self.structured_data_extractor = structured_data_extractor or get_service(StructuredDataExtractorProtocol)
 
-        # Initialize dependencies with dependency injection
-        self.content_extractor = content_extractor or ContentExtractor()
-        self.message_handler_factory = message_handler_factory or get_handler_for_message_type
-        self.structured_data_extractor = structured_data_extractor or extract_structured_data
-
-        # Initialize state
-        self.lock = Lock()  # For thread safety
+        logger.info("Transformer initialized")
 
     def transform(self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None) -> Dict[str, Any]:
-        """Transform raw Skype data into structured format.
+        """Transform raw Skype export data into a structured format.
 
         Args:
-            raw_data: Raw data from the extractor
+            raw_data: Raw data from the extraction phase
             user_display_name: Display name of the user
 
         Returns:
-            Dict containing the transformed data
+            Transformed data in a structured format
+
+        Raises:
+            ValueError: If raw_data is invalid
+            Exception: If an error occurs during transformation
         """
-        logger.info("Starting data transformation")
-
-        # Validate the raw data
-        self._validate_raw_data(raw_data)
-
-        # Validate user display name
-        user_display_name = self._validate_user_display_name(user_display_name, raw_data)
-
-        # Count total conversations and messages for progress tracking
-        total_conversations = len(raw_data.get('conversations', []))
-        total_messages = sum(len(conv.get('MessageList', [])) for conv in raw_data.get('conversations', []))
+        # Validate input data
+        self._validate_input_data(raw_data)
 
         # Update context if available
         if self.context:
-            # Context phase is managed by the pipeline manager, but we can update counts
-            self.context.progress_tracker.total_conversations = total_conversations
-            self.context.progress_tracker.total_messages = total_messages
+            self.context.set_phase('transform')
+            self.context.update_progress(0, "Starting transformation")
 
-        logger.info(f"Transforming {total_conversations} conversations with {total_messages} messages")
+        # Extract user information
+        user_id = raw_data.get('userId', '')
+        if not user_display_name and self.context:
+            user_display_name = self.context.user_display_name
 
-        # Initialize transformed data structure with metadata
-        transformed_data = self._process_metadata(raw_data, user_display_name)
+        # Initialize result structure
+        result = {
+            'user': {
+                'id': user_id,
+                'display_name': user_display_name or ''
+            },
+            'conversations': {},
+            'metadata': {
+                'transformed_at': datetime.now().isoformat(),
+                'conversation_count': 0,
+                'message_count': 0
+            }
+        }
 
-        # Create mapping of IDs to display names
-        id_to_display_name = self._create_id_display_name_mapping(raw_data, transformed_data)
+        # Get conversations from raw data
+        conversations = raw_data.get('conversations', {})
+        total_conversations = len(conversations)
+
+        if total_conversations == 0:
+            logger.warning("No conversations found in raw data")
+            return result
 
         # Process conversations
-        self._process_conversations(raw_data, transformed_data, id_to_display_name)
+        logger.info(f"Transforming {total_conversations} conversations")
 
-        # Validate the transformed data
-        self._validate_transformed_data(transformed_data)
+        # Track progress
+        processed_conversations = 0
+        total_messages = 0
 
-        # Save transformed data if output directory is specified
-        self._save_transformed_data(transformed_data)
+        # Process each conversation
+        for conversation_id, conversation_data in conversations.items():
+            try:
+                # Transform conversation
+                transformed_conversation = self._transform_conversation(
+                    conversation_id,
+                    conversation_data,
+                    user_id,
+                    user_display_name
+                )
 
-        # Update context if available
+                # Add to result
+                result['conversations'][conversation_id] = transformed_conversation
+
+                # Update counts
+                processed_conversations += 1
+                conversation_message_count = len(transformed_conversation.get('messages', []))
+                total_messages += conversation_message_count
+
+                # Update progress
+                if self.context:
+                    progress = (processed_conversations / total_conversations) * 100
+                    self.context.update_progress(
+                        progress,
+                        f"Processed {processed_conversations}/{total_conversations} conversations"
+                    )
+
+                logger.debug(f"Transformed conversation {conversation_id} with {conversation_message_count} messages")
+
+            except Exception as e:
+                logger.error(f"Error transforming conversation {conversation_id}: {e}")
+                if self.context:
+                    self.context.record_error('transform', f"Error transforming conversation {conversation_id}: {e}")
+
+        # Update metadata
+        result['metadata']['conversation_count'] = processed_conversations
+        result['metadata']['message_count'] = total_messages
+
+        # Update context
         if self.context:
-            self.context.transformed_data = transformed_data
-            self.context.check_memory()
+            self.context.update_progress(100, f"Transformation complete: {processed_conversations} conversations, {total_messages} messages")
+            self.context.set_transformed_data(result)
 
-        logger.info(f"Transformation complete: {len(transformed_data['conversations'])} conversations processed")
+        logger.info(f"Transformation complete: {processed_conversations} conversations, {total_messages} messages")
+        return result
 
-        return transformed_data
-
-    def _validate_raw_data(self, raw_data: Dict[str, Any]) -> None:
-        """Validate the raw data structure with enhanced checks.
+    def _validate_input_data(self, raw_data: Dict[str, Any]) -> None:
+        """Validate the input data for transformation.
 
         Args:
             raw_data: Raw data to validate
 
         Raises:
-            ValueError: If data structure is invalid
+            ValueError: If the data is invalid
         """
         if not isinstance(raw_data, dict):
-            raise ValueError("Raw data must be a dictionary")
+            error_msg = f"Raw data must be a dictionary, got {type(raw_data).__name__}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         if 'conversations' not in raw_data:
-            raise ValueError("Raw data must contain 'conversations' key")
+            error_msg = "Raw data must contain a 'conversations' key"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
-        if not isinstance(raw_data.get('conversations', []), list):
-            raise ValueError("Conversations must be a list")
+        if not isinstance(raw_data['conversations'], dict):
+            error_msg = f"Conversations must be a dictionary, got {type(raw_data['conversations']).__name__}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
-        if 'userId' not in raw_data:
-            raise ValueError("Raw data must contain 'userId' key")
-
-        if 'exportDate' not in raw_data:
-            raise ValueError("Raw data must contain 'exportDate' key")
-
-        # Check for required fields in conversations
-        for i, conv in enumerate(raw_data.get('conversations', [])):
-            if not isinstance(conv, dict):
-                raise ValueError(f"Conversation at index {i} must be a dictionary")
-
-            if 'id' not in conv:
-                logger.warning(f"Conversation at index {i} is missing 'id' field")
-
-            if 'MessageList' not in conv:
-                logger.warning(f"Conversation at index {i} is missing 'MessageList' field")
-            elif not isinstance(conv['MessageList'], list):
-                raise ValueError(f"MessageList for conversation at index {i} must be a list")
-
-        logger.info("Raw data validation completed successfully")
-
-    def _validate_user_display_name(self, user_display_name: Optional[str], raw_data: Dict[str, Any]) -> str:
-        """Validate and sanitize user display name.
+    def _transform_conversation(
+        self,
+        conversation_id: str,
+        conversation_data: Dict[str, Any],
+        user_id: str,
+        user_display_name: Optional[str]
+    ) -> Dict[str, Any]:
+        """Transform a single conversation.
 
         Args:
-            user_display_name: User display name to validate
-            raw_data: Raw data containing user information
-
-        Returns:
-            str: Sanitized user display name
-        """
-        user_id = raw_data.get('userId', '')
-
-        if user_display_name is None or user_display_name.strip() == '':
-            logger.info(f"No user display name provided, using user ID: {user_id}")
-            return user_id
-
-        # Import validation function here to avoid circular imports
-        from src.utils.validation import validate_user_display_name
-
-        try:
-            sanitized_name = validate_user_display_name(user_display_name)
-            if sanitized_name != user_display_name:
-                logger.info(f"Sanitized user display name from '{user_display_name}' to '{sanitized_name}'")
-            return sanitized_name
-        except Exception as e:
-            logger.warning(f"User display name validation error: {e}. Using user ID instead.")
-            return user_id
-
-    def _validate_transformed_data(self, transformed_data: Dict[str, Any]) -> None:
-        """Validate the transformed data structure.
-
-        Args:
-            transformed_data: Transformed data to validate
-
-        Raises:
-            ValueError: If transformed data structure is invalid
-        """
-        if not isinstance(transformed_data, dict):
-            raise ValueError("Transformed data must be a dictionary")
-
-        if 'metadata' not in transformed_data:
-            raise ValueError("Transformed data must contain 'metadata' key")
-
-        if 'conversations' not in transformed_data:
-            raise ValueError("Transformed data must contain 'conversations' key")
-
-        if not isinstance(transformed_data['conversations'], dict):
-            raise ValueError("Transformed conversations must be a dictionary")
-
-        # Check for required fields in metadata
-        metadata = transformed_data.get('metadata', {})
-        required_metadata = ['user_display_name', 'export_time', 'total_conversations', 'total_messages']
-        missing_metadata = [field for field in required_metadata if field not in metadata]
-        if missing_metadata:
-            logger.warning(f"Missing metadata fields: {', '.join(missing_metadata)}")
-
-        # Check for required fields in conversations
-        for conv_id, conv in transformed_data.get('conversations', {}).items():
-            if not isinstance(conv, dict):
-                raise ValueError(f"Conversation '{conv_id}' must be a dictionary")
-
-            required_conv_fields = ['display_name', 'messages']
-            missing_conv_fields = [field for field in required_conv_fields if field not in conv]
-            if missing_conv_fields:
-                logger.warning(f"Conversation '{conv_id}' is missing fields: {', '.join(missing_conv_fields)}")
-
-            if 'messages' in conv and not isinstance(conv['messages'], list):
-                raise ValueError(f"Messages for conversation '{conv_id}' must be a list")
-
-            # Check for empty conversations
-            if 'messages' in conv and len(conv['messages']) == 0:
-                logger.warning(f"Conversation '{conv_id}' has no messages")
-
-        # Verify conversation count matches
-        if len(transformed_data.get('conversations', {})) != metadata.get('total_conversations', 0):
-            logger.warning(f"Metadata conversation count ({metadata.get('total_conversations', 0)}) " +
-                          f"doesn't match actual count ({len(transformed_data.get('conversations', {}))})")
-
-        logger.info("Transformed data validation completed successfully")
-
-    def _process_metadata(self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None) -> Dict[str, Any]:
-        """Process and structure the metadata.
-
-        Args:
-            raw_data: Raw data to process
+            conversation_id: ID of the conversation
+            conversation_data: Raw conversation data
+            user_id: ID of the user
             user_display_name: Display name of the user
 
         Returns:
-            Dict containing initialized transformed data structure
+            Transformed conversation data
         """
-        return {
-            'metadata': {
-                'user_display_name': user_display_name,
-                'export_time': datetime.datetime.now().isoformat(),
-                'total_conversations': len(raw_data.get('conversations', [])),
-                'total_messages': sum(len(c.get('MessageList', []))
-                                   for c in raw_data.get('conversations', []))
-            },
-            'conversations': {}
-        }
+        # Extract conversation properties
+        properties = conversation_data.get('Properties', {})
+        message_list = conversation_data.get('MessageList', [])
 
-    def _create_id_display_name_mapping(self, raw_data: Dict[str, Any],
-                                      transformed_data: Dict[str, Any]) -> Dict[str, str]:
-        """Create mapping of user IDs to display names.
+        # Get conversation type and participants
+        conversation_type = properties.get('conversationType', 'unknown')
+        display_name = properties.get('displayName', '')
+        participants = self._extract_participants(properties.get('participants', []), user_id, user_display_name)
 
-        Args:
-            raw_data: Raw data containing user information
-            transformed_data: Transformed data structure
-
-        Returns:
-            Dict mapping user IDs to display names
-        """
-        id_to_display_name = {}
-
-        # Add the main user's display name
-        user_display_name = transformed_data['metadata'].get('user_display_name')
-        if user_display_name:
-            id_to_display_name['user'] = user_display_name
-
-        return id_to_display_name
-
-    def _process_conversations(self, raw_data: Dict[str, Any],
-                             transformed_data: Dict[str, Any],
-                             id_to_display_name: Dict[str, str]) -> None:
-        """Process all conversations.
-
-        Args:
-            raw_data: Raw data containing conversations
-            transformed_data: Transformed data structure to update
-            id_to_display_name: Mapping of user IDs to display names
-        """
-        if self.parallel_processing:
-            self._process_conversations_parallel(
-                raw_data['conversations'],
-                transformed_data,
-                id_to_display_name
-            )
-        else:
-            self._process_all_conversations(
-                raw_data['conversations'],
-                transformed_data,
-                id_to_display_name
-            )
-
-    def _process_all_conversations(self, conversations: List[Dict[str, Any]],
-                                 transformed_data: Dict[str, Any],
-                                 id_to_display_name: Dict[str, str]) -> None:
-        """Process all conversations sequentially.
-
-        Args:
-            conversations: List of conversations to process
-            transformed_data: Transformed data structure to update
-            id_to_display_name: Mapping of user IDs to display names
-        """
-        for conversation in conversations:
-            self._process_single_conversation(conversation, transformed_data, id_to_display_name)
-
-    def _process_conversations_parallel(self, conversations: List[Dict[str, Any]],
-                                     transformed_data: Dict[str, Any],
-                                     id_to_display_name: Dict[str, str],
-                                     max_workers: int = None) -> None:
-        """Process conversations in parallel.
-
-        Args:
-            conversations: List of conversations to process
-            transformed_data: Transformed data structure to update
-            id_to_display_name: Mapping of user IDs to display names
-            max_workers: Maximum number of worker threads
-        """
-        if max_workers is None:
-            max_workers = min(32, (len(conversations) + 3) // 4)
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_conv = {
-                executor.submit(self._process_single_conversation,
-                              conv, transformed_data, id_to_display_name): conv
-                for conv in conversations
-            }
-
-            for future in as_completed(future_to_conv):
-                try:
-                    future.result()
-                except Exception as e:
-                    logger.error(f"Error processing conversation: {e}")
-
-    def _process_single_conversation(self, conversation: Dict[str, Any],
-                                  transformed_data: Dict[str, Any],
-                                  id_to_display_name: Dict[str, str]) -> None:
-        """Process a single conversation.
-
-        Args:
-            conversation: Conversation data to process
-            transformed_data: Transformed data structure to update
-            id_to_display_name: Mapping of user IDs to display names
-        """
-        conv_id, display_name = self._extract_conversation_metadata(conversation)
-
-        # Initialize conversation structure
-        self._initialize_conversation_structure(conv_id, display_name, transformed_data)
-
-        # Process messages
-        messages = conversation.get('MessageList', [])
-        if messages:
-            self._process_messages(conv_id, messages, transformed_data, id_to_display_name)
-            self._update_conversation_timespan(conv_id, messages, transformed_data)
-
-    def _extract_conversation_metadata(self, conversation: Dict[str, Any]) -> Tuple[str, str]:
-        """Extract conversation ID and display name.
-
-        Args:
-            conversation: Conversation data
-
-        Returns:
-            Tuple of (conversation_id, display_name)
-        """
-        conv_id = conversation.get('id', '')
-        display_name = conversation.get('displayName', '')
-        return conv_id, display_name
-
-    def _initialize_conversation_structure(self, conv_id: str, display_name: str,
-                                       transformed_data: Dict[str, Any]) -> None:
-        """Initialize the conversation structure in transformed data.
-
-        Args:
-            conv_id: Conversation ID
-            display_name: Display name of the conversation
-            transformed_data: Transformed data structure to update
-        """
-        transformed_data['conversations'][conv_id] = {
+        # Create transformed conversation structure
+        transformed_conversation = {
+            'id': conversation_id,
             'display_name': display_name,
-            'first_message_time': None,
-            'last_message_time': None,
-            'message_count': 0,
-            'messages': []
+            'type': conversation_type,
+            'participants': participants,
+            'created_at': properties.get('creationTime', ''),
+            'last_message_at': properties.get('lastUpdatedTime', ''),
+            'messages': [],
+            'metadata': {
+                'message_count': len(message_list),
+                'participant_count': len(participants)
+            }
         }
 
-    def _process_messages(self, conv_id: str, messages: List[Dict[str, Any]],
-                        transformed_data: Dict[str, Any],
-                        id_to_display_name: Dict[str, str]) -> None:
-        """Process messages for a conversation.
+        # Transform messages
+        if message_list:
+            if self.parallel_processing and len(message_list) > self.chunk_size:
+                # Process messages in parallel
+                transformed_messages = self._transform_messages_parallel(message_list, conversation_id)
+            else:
+                # Process messages sequentially
+                transformed_messages = self._transform_messages_sequential(message_list, conversation_id)
+
+            # Sort messages by timestamp
+            transformed_conversation['messages'] = sorted(
+                transformed_messages,
+                key=lambda m: m.get('timestamp', '0')
+            )
+
+        return transformed_conversation
+
+    def _extract_participants(
+        self,
+        participants_data: List[Dict[str, Any]],
+        user_id: str,
+        user_display_name: Optional[str]
+    ) -> List[Dict[str, Any]]:
+        """Extract and transform participant information.
 
         Args:
-            conv_id: Conversation ID
-            messages: List of messages to process
-            transformed_data: Transformed data structure to update
-            id_to_display_name: Mapping of user IDs to display names
-        """
-        # Sort messages by timestamp
-        sorted_messages = sorted(messages, key=lambda x: x.get('originalarrivaltime', ''))
-
-        # Process in chunks
-        for i in range(0, len(sorted_messages), self.chunk_size):
-            chunk = sorted_messages[i:i + self.chunk_size]
-            self._process_message_batch(conv_id, chunk, transformed_data, id_to_display_name)
-
-    def _process_message_batch(self, conv_id: str, messages: List[Dict[str, Any]],
-                            transformed_data: Dict[str, Any],
-                            id_to_display_name: Dict[str, str]) -> None:
-        """Process a batch of messages.
-
-        Args:
-            conv_id: Conversation ID
-            messages: List of messages to process
-            transformed_data: Transformed data structure to update
-            id_to_display_name: Mapping of user IDs to display names
-        """
-        for message in messages:
-            processed_message = self._transform_message(message, id_to_display_name)
-            if processed_message:
-                transformed_data['conversations'][conv_id]['messages'].append(processed_message)
-                transformed_data['conversations'][conv_id]['message_count'] += 1
-
-    def _transform_message(self, message: Dict[str, Any], id_to_display_name: Dict[str, str]) -> Optional[Dict[str, Any]]:
-        """Transform a single message.
-
-        Args:
-            message: Message to transform
-            id_to_display_name: Mapping of user IDs to display names
+            participants_data: Raw participant data
+            user_id: ID of the user
+            user_display_name: Display name of the user
 
         Returns:
-            Transformed message or None if message should be skipped
+            List of transformed participant data
         """
-        try:
-            msg_data = {
-                'id': message.get('id', ''),
-                'timestamp': message.get('originalarrivaltime', ''),
-                'sender_id': message.get('from', ''),
-                'sender_name': id_to_display_name.get(message.get('from', ''), ''),
-                'message_type': message.get('messagetype', ''),
-                'content': message.get('content', ''),
-                'is_edited': bool(message.get('edittime')),
+        transformed_participants = []
+
+        for participant in participants_data:
+            # Extract participant properties
+            mri = participant.get('mri', '')
+            display_name = participant.get('displayName', '')
+
+            # Check if this is the current user
+            is_self = mri == user_id
+
+            # Use provided user display name if this is the current user and no display name is available
+            if is_self and not display_name and user_display_name:
+                display_name = user_display_name
+
+            # Create transformed participant
+            transformed_participant = {
+                'id': mri,
+                'display_name': display_name,
+                'is_self': is_self
             }
 
-            # Extract structured data based on message type
-            msg_type = msg_data['message_type']
-            handler = self.message_handler_factory(msg_type)
-            if handler:
-                structured_data = self.structured_data_extractor(message)
-                if structured_data:
-                    msg_data['structured_data'] = structured_data
+            transformed_participants.append(transformed_participant)
 
-            # Clean content if present
-            if msg_data['content']:
-                # Try to use clean_content if available, otherwise use extract_all
-                if hasattr(self.content_extractor, 'clean_content'):
-                    msg_data['cleaned_content'] = self.content_extractor.clean_content(
-                        msg_data['content']
-                    )
+        return transformed_participants
+
+    def _transform_messages_parallel(self, messages: List[Dict[str, Any]], conversation_id: str) -> List[Dict[str, Any]]:
+        """Transform messages in parallel using multiple workers.
+
+        Args:
+            messages: List of raw messages
+            conversation_id: ID of the conversation
+
+        Returns:
+            List of transformed messages
+        """
+        # Split messages into chunks
+        chunks = [messages[i:i + self.chunk_size] for i in range(0, len(messages), self.chunk_size)]
+        transformed_messages = []
+
+        # Process chunks in parallel
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # Submit tasks
+            future_to_chunk = {
+                executor.submit(self._transform_messages_sequential, chunk, conversation_id): i
+                for i, chunk in enumerate(chunks)
+            }
+
+            # Collect results
+            for future in concurrent.futures.as_completed(future_to_chunk):
+                chunk_index = future_to_chunk[future]
+                try:
+                    chunk_result = future.result()
+                    transformed_messages.extend(chunk_result)
+                    logger.debug(f"Processed message chunk {chunk_index+1}/{len(chunks)} for conversation {conversation_id}")
+                except Exception as e:
+                    logger.error(f"Error processing message chunk {chunk_index+1}/{len(chunks)} for conversation {conversation_id}: {e}")
+                    if self.context:
+                        self.context.record_error('transform', f"Error processing message chunk for conversation {conversation_id}: {e}")
+
+        return transformed_messages
+
+    def _transform_messages_sequential(self, messages: List[Dict[str, Any]], conversation_id: str) -> List[Dict[str, Any]]:
+        """Transform messages sequentially.
+
+        Args:
+            messages: List of raw messages
+            conversation_id: ID of the conversation
+
+        Returns:
+            List of transformed messages
+        """
+        transformed_messages = []
+
+        for message in messages:
+            try:
+                # Get message type
+                message_type = message.get('messagetype', 'unknown')
+
+                # Get appropriate handler for this message type
+                handler = self.message_handler_factory.get_handler(message_type)
+
+                if handler:
+                    # Extract content
+                    content_html = message.get('content', '')
+                    content_text = self.content_extractor.extract_cleaned_content(content_html)
+
+                    # Transform message using handler
+                    transformed_message = handler.extract_structured_data(message)
+
+                    # Add extracted content
+                    transformed_message['content_html'] = content_html
+                    transformed_message['content_text'] = content_text
+
+                    # Add to result
+                    transformed_messages.append(transformed_message)
                 else:
-                    # Fall back to using extract_all if clean_content is not available
-                    content_data = self.content_extractor.extract_all(msg_data['content'])
-                    msg_data['content_data'] = content_data
-                    # Use the original content as cleaned content
-                    msg_data['cleaned_content'] = msg_data['content']
+                    logger.warning(f"No handler found for message type: {message_type}")
+            except Exception as e:
+                logger.error(f"Error transforming message in conversation {conversation_id}: {e}")
+                if self.context:
+                    self.context.record_error('transform', f"Error transforming message in conversation {conversation_id}: {e}")
 
-            return msg_data
-        except Exception as e:
-            logger.error(f"Error transforming message: {e}")
-            return None
-
-    def _update_conversation_timespan(self, conv_id: str, messages: List[Dict[str, Any]],
-                                   transformed_data: Dict[str, Any]) -> None:
-        """Update the first and last message times for a conversation.
-
-        Args:
-            conv_id: Conversation ID
-            messages: List of messages
-            transformed_data: Transformed data structure to update
-        """
-        if not messages:
-            return
-
-        # Sort messages by timestamp
-        sorted_messages = sorted(messages, key=lambda x: x.get('originalarrivaltime', ''))
-
-        # Update conversation timespan
-        transformed_data['conversations'][conv_id]['first_message_time'] = sorted_messages[0].get('originalarrivaltime', '')
-        transformed_data['conversations'][conv_id]['last_message_time'] = sorted_messages[-1].get('originalarrivaltime', '')
-
-    def _save_transformed_data(self, transformed_data: Dict[str, Any]) -> None:
-        """Save transformed data to file.
-
-        Args:
-            transformed_data: Transformed data to save
-        """
-        if self.context and self.context.output_dir:
-            filename = f"{self.context.output_dir}/transformed_data.json"
-            with open(filename, 'w') as f:
-                json.dump(transformed_data, f)
+        return transformed_messages

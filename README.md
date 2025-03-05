@@ -10,6 +10,7 @@ A Python library and API for parsing and analyzing Skype export data.
 - Query and analyze Skype conversations and messages
 - REST API for web applications
 - Asynchronous processing for large exports
+- Dependency injection framework for flexible component management
 
 ## Installation
 
@@ -54,6 +55,49 @@ print(f"Processed {results['phases']['transform']['processed_messages']} message
 print(f"Processed {results['phases']['transform']['processed_conversations']} conversations")
 print(f"Export ID: {results['export_id']}")
 ```
+
+### Using the Dependency Injection Framework
+
+For more flexible and testable code, you can use the dependency injection framework:
+
+```python
+from src.utils.di import get_service
+from src.utils.service_registry import register_all_services
+from src.utils.interfaces import (
+    FileHandlerProtocol,
+    DatabaseConnectionProtocol,
+    ExtractorProtocol,
+    TransformerProtocol,
+    LoaderProtocol
+)
+
+# Register all services
+register_all_services(
+    db_config={
+        'host': 'localhost',
+        'database': 'skype_logs',
+        'user': 'postgres',
+        'password': 'your_password',
+        'port': 5432
+    },
+    output_dir='output'
+)
+
+# Get services from the container
+file_handler = get_service(FileHandlerProtocol)
+db_connection = get_service(DatabaseConnectionProtocol)
+extractor = get_service(ExtractorProtocol)
+transformer = get_service(TransformerProtocol)
+loader = get_service(LoaderProtocol)
+
+# Use the services
+data = file_handler.read_file('skype_export.tar')
+extracted_data = extractor.extract('skype_export.tar')
+transformed_data = transformer.transform(extracted_data)
+loader.load(transformed_data)
+```
+
+See the [Dependency Injection Framework documentation](src/utils/README.md) for more details.
 
 ### Advanced Usage with Individual Components
 

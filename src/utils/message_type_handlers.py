@@ -9,29 +9,264 @@ extracting structured data from messages based on their type.
 import json
 import re
 import logging
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, Callable, Type
 from bs4 import BeautifulSoup
+
+from src.utils.interfaces import MessageHandlerProtocol, MessageHandlerFactoryProtocol
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class MessageTypeHandler:
-    """Base class for message type handlers."""
+class BaseMessageHandler(MessageHandlerProtocol):
+    """Base class for message handlers."""
 
-    @staticmethod
-    def extract_data(message: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Extract structured data from a message.
+    def can_handle(self, message_type: str) -> bool:
+        """Check if this handler can process the given message type.
 
         Args:
-            message (Dict[str, Any]): The message to extract data from
+            message_type: Type of message to check
 
         Returns:
-            Dict[str, Any]: Extracted structured data
+            True if this handler can process the message type, False otherwise
         """
-        return {}
+        return False
 
+    def extract_structured_data(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract structured data from a message.
+
+        Args:
+            message: Message to extract data from
+
+        Returns:
+            Dictionary containing structured data extracted from the message
+        """
+        # Base implementation extracts common fields
+        return {
+            'id': message.get('id', ''),
+            'timestamp': message.get('originalarrivaltime', ''),
+            'sender_id': message.get('from', ''),
+            'sender_name': message.get('displayName', ''),
+            'message_type': message.get('messagetype', 'unknown'),
+            'is_edited': bool(message.get('edittime', False)),
+        }
+
+class TextMessageHandler(BaseMessageHandler):
+    """Handler for text messages."""
+
+    def can_handle(self, message_type: str) -> bool:
+        """Check if this handler can process the given message type.
+
+        Args:
+            message_type: Type of message to check
+
+        Returns:
+            True if this handler can process the message type, False otherwise
+        """
+        return message_type.lower() in ['text', 'richtext', 'richtext/html']
+
+    def extract_structured_data(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract structured data from a text message.
+
+        Args:
+            message: Message to extract data from
+
+        Returns:
+            Dictionary containing structured data extracted from the message
+        """
+        # Get base data
+        data = super().extract_structured_data(message)
+
+        # Add text-specific data
+        data['has_mentions'] = 'mentioned' in message
+        data['has_emotions'] = 'emotions' in message
+
+        return data
+
+class MediaMessageHandler(BaseMessageHandler):
+    """Handler for media messages (images, videos, files)."""
+
+    def can_handle(self, message_type: str) -> bool:
+        """Check if this handler can process the given message type.
+
+        Args:
+            message_type: Type of message to check
+
+        Returns:
+            True if this handler can process the message type, False otherwise
+        """
+        return message_type.lower() in ['media', 'image', 'video', 'file', 'uri']
+
+    def extract_structured_data(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract structured data from a media message.
+
+        Args:
+            message: Message to extract data from
+
+        Returns:
+            Dictionary containing structured data extracted from the message
+        """
+        # Get base data
+        data = super().extract_structured_data(message)
+
+        # Add media-specific data
+        data['attachments'] = []
+
+        # Extract attachments
+        if 'properties' in message and 'attachments' in message['properties']:
+            for attachment in message['properties']['attachments']:
+                data['attachments'].append({
+                    'type': attachment.get('type', 'unknown'),
+                    'name': attachment.get('name', ''),
+                    'url': attachment.get('url', ''),
+                    'content_type': attachment.get('contentType', ''),
+                    'size': attachment.get('size', 0)
+                })
+
+        return data
+
+class EventMessageHandler(BaseMessageHandler):
+    """Handler for event messages (calls, added/removed users, etc.)."""
+
+    def can_handle(self, message_type: str) -> bool:
+        """Check if this handler can process the given message type.
+
+        Args:
+            message_type: Type of message to check
+
+        Returns:
+            True if this handler can process the message type, False otherwise
+        """
+        return message_type.lower() in ['event', 'systemalert', 'call', 'thread']
+
+    def extract_structured_data(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract structured data from an event message.
+
+        Args:
+            message: Message to extract data from
+
+        Returns:
+            Dictionary containing structured data extracted from the message
+        """
+        # Get base data
+        data = super().extract_structured_data(message)
+
+        # Add event-specific data
+        data['event_type'] = message.get('properties', {}).get('eventType', 'unknown')
+
+        # Extract call data if available
+        if 'properties' in message and 'callLog' in message['properties']:
+            call_log = message['properties']['callLog']
+            data['call_data'] = {
+                'duration': call_log.get('duration', 0),
+                'participants': call_log.get('participants', []),
+                'start_time': call_log.get('startTime', ''),
+                'end_time': call_log.get('endTime', '')
+            }
+
+        return data
+
+class UnknownMessageHandler(BaseMessageHandler):
+    """Handler for unknown message types."""
+
+    def can_handle(self, message_type: str) -> bool:
+        """Check if this handler can process the given message type.
+
+        Args:
+            message_type: Type of message to check
+
+        Returns:
+            True if this handler can process the message type, False otherwise
+        """
+        return True  # Fallback handler for any message type
+
+    def extract_structured_data(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract structured data from an unknown message.
+
+        Args:
+            message: Message to extract data from
+
+        Returns:
+            Dictionary containing structured data extracted from the message
+        """
+        # Get base data
+        data = super().extract_structured_data(message)
+
+        # Add raw properties for debugging
+        if 'properties' in message:
+            data['raw_properties'] = message['properties']
+
+        return data
+
+class SkypeMessageHandlerFactory(MessageHandlerFactoryProtocol):
+    """Factory for creating message handlers based on message type."""
+
+    def __init__(self):
+        """Initialize the message handler factory."""
+        # Register handlers in order of specificity
+        self.handlers = [
+            TextMessageHandler(),
+            MediaMessageHandler(),
+            EventMessageHandler(),
+            UnknownMessageHandler()  # Fallback handler
+        ]
+        logger.info("SkypeMessageHandlerFactory initialized with handlers")
+
+    def get_handler(self, message_type: str) -> Optional[MessageHandlerProtocol]:
+        """Get a handler for the specified message type.
+
+        Args:
+            message_type: Type of message to get a handler for
+
+        Returns:
+            A handler for the message type, or None if no handler is found
+        """
+        # Normalize message type
+        normalized_type = message_type.lower() if message_type else 'unknown'
+
+        # Find the first handler that can handle this message type
+        for handler in self.handlers:
+            if handler.can_handle(normalized_type):
+                return handler
+
+        # Should never reach here since UnknownMessageHandler handles everything
+        logger.warning(f"No handler found for message type: {message_type}")
+        return None
+
+# Legacy function for backward compatibility
+def get_handler_for_message_type(message_type: str) -> Optional[Callable[[Dict[str, Any]], Dict[str, Any]]]:
+    """Legacy function to get a handler for the specified message type.
+
+    Args:
+        message_type: Type of message to get a handler for
+
+    Returns:
+        A function that can handle the message type, or None if no handler is found
+    """
+    factory = SkypeMessageHandlerFactory()
+    handler = factory.get_handler(message_type)
+
+    if handler:
+        return handler.extract_structured_data
+    return None
+
+# Legacy function for backward compatibility
+def extract_structured_data(message: Dict[str, Any]) -> Dict[str, Any]:
+    """Legacy function to extract structured data from a message.
+
+    Args:
+        message: Message to extract data from
+
+    Returns:
+        Dictionary containing structured data extracted from the message
+    """
+    message_type = message.get('messagetype', 'unknown')
+    factory = SkypeMessageHandlerFactory()
+    handler = factory.get_handler(message_type)
+
+    if handler:
+        return handler.extract_structured_data(message)
+    return {}
 
 class PollHandler(MessageTypeHandler):
     """Handler for Poll message type."""

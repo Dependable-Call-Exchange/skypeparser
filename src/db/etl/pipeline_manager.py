@@ -10,9 +10,14 @@ import json
 import os
 from typing import Dict, Any, Optional, BinaryIO, List
 
-from .extractor import Extractor
-from .transformer import Transformer
-from .loader import Loader
+from src.utils.interfaces import (
+    ExtractorProtocol,
+    TransformerProtocol,
+    LoaderProtocol,
+    DatabaseConnectionProtocol
+)
+from src.utils.di import get_service, get_service_provider
+from src.utils.service_registry import register_all_services
 from .context import ETLContext
 
 logger = logging.getLogger(__name__)
@@ -30,7 +35,8 @@ class ETLPipeline:
         batch_size: int = 100,
         max_workers: Optional[int] = None,
         task_id: Optional[str] = None,
-        context: Optional[ETLContext] = None
+        context: Optional[ETLContext] = None,
+        use_di: bool = True
     ):
         """Initialize the ETL pipeline.
 
@@ -44,13 +50,12 @@ class ETLPipeline:
             max_workers: Maximum number of worker threads/processes
             task_id: Unique identifier for this ETL task (generated if not provided)
             context: Optional existing ETLContext to use (for resuming from checkpoints)
+            use_di: Whether to use dependency injection for resolving dependencies
         """
         # Use provided context or create a new one
         if context:
             self.context = context
-            logger.info(f"Using existing ETL context with task ID: {self.context.task_id}")
         else:
-            # Create shared context
             self.context = ETLContext(
                 db_config=db_config,
                 output_dir=output_dir,
@@ -61,14 +66,27 @@ class ETLPipeline:
                 max_workers=max_workers,
                 task_id=task_id
             )
-            logger.info(f"Created new ETL context with task ID: {self.context.task_id}")
 
-        # Initialize components with shared context
-        self.extractor = Extractor(context=self.context)
-        self.transformer = Transformer(context=self.context)
-        self.loader = Loader(context=self.context)
+        # Register services with the dependency injection container if using DI
+        self.use_di = use_di
+        if use_di:
+            register_all_services(db_config=db_config, output_dir=output_dir)
 
-        logger.info("Initialized ETL pipeline with shared context")
+            # Get services from the container
+            self.extractor = get_service(ExtractorProtocol)
+            self.transformer = get_service(TransformerProtocol)
+            self.loader = get_service(LoaderProtocol)
+        else:
+            # Create components directly
+            from .extractor import Extractor
+            from .transformer import Transformer
+            from .loader import Loader
+
+            self.extractor = Extractor(context=self.context)
+            self.transformer = Transformer(context=self.context)
+            self.loader = Loader(context=self.context)
+
+        logger.info("ETL pipeline initialized")
 
     def run_pipeline(
         self,
@@ -77,69 +95,89 @@ class ETLPipeline:
         user_display_name: Optional[str] = None,
         resume_from_checkpoint: bool = False
     ) -> Dict[str, Any]:
-        """Run the complete ETL pipeline.
+        """Run the ETL pipeline.
 
         Args:
             file_path: Path to the Skype export file
-            file_obj: File-like object containing Skype export data
+            file_obj: File-like object containing the Skype export
             user_display_name: Display name of the user
-            resume_from_checkpoint: Whether to attempt to resume from the latest checkpoint
+            resume_from_checkpoint: Whether to resume from a checkpoint
 
         Returns:
-            Dict containing pipeline results and statistics
-        """
-        logger.info("Starting ETL pipeline")
+            Dictionary containing the results of the pipeline run
 
+        Raises:
+            ValueError: If input parameters are invalid
+            Exception: If an error occurs during pipeline execution
+        """
         # Validate input parameters
         self._validate_pipeline_input(file_path, file_obj, user_display_name)
 
-        # Set file source in context
-        self.context.set_file_source(file_path, file_obj)
+        # Set user display name in context
+        if user_display_name:
+            self.context.user_display_name = user_display_name
+
+        # Resume from checkpoint if requested
+        if resume_from_checkpoint:
+            return self._resume_pipeline(file_path, file_obj, user_display_name)
+
+        # Initialize results dictionary
+        results = {
+            'task_id': self.context.task_id,
+            'phases': {
+                'extract': {'status': 'pending'},
+                'transform': {'status': 'pending'},
+                'load': {'status': 'pending'}
+            }
+        }
 
         try:
-            # Check if we should resume from a checkpoint
-            if resume_from_checkpoint and self.context.checkpoints:
-                logger.info("Attempting to resume from checkpoint")
-                return self._resume_pipeline(file_path, file_obj, user_display_name)
-
-            # Run the pipeline normally
             # Extract phase
+            logger.info("Starting extraction phase")
             raw_data = self._run_extract_phase(file_path, file_obj)
+            results['phases']['extract'] = {
+                'status': 'completed',
+                'conversation_count': len(raw_data.get('conversations', {}))
+            }
 
             # Transform phase
+            logger.info("Starting transformation phase")
             transformed_data = self._run_transform_phase(raw_data, user_display_name)
+            results['phases']['transform'] = {
+                'status': 'completed',
+                'processed_conversations': len(transformed_data.get('conversations', {})),
+                'processed_messages': sum(len(conv.get('messages', []))
+                                         for conv in transformed_data.get('conversations', {}).values())
+            }
 
             # Load phase
+            logger.info("Starting loading phase")
             export_id = self._run_load_phase(raw_data, transformed_data, file_path)
+            results['phases']['load'] = {
+                'status': 'completed',
+                'export_id': export_id
+            }
 
-            # Get final summary
-            summary = self.context.get_summary()
-            summary['success'] = True
-            summary['export_id'] = export_id
+            # Set overall results
+            results['status'] = 'completed'
+            results['export_id'] = export_id
+            results['conversation_count'] = len(transformed_data.get('conversations', {}))
+            results['message_count'] = sum(len(conv.get('messages', []))
+                                          for conv in transformed_data.get('conversations', {}).values())
 
             logger.info(f"ETL pipeline completed successfully with export ID: {export_id}")
-            return summary
+            return results
 
         except Exception as e:
-            logger.exception(f"Error in ETL pipeline: {e}")
+            # Log error
+            logger.error(f"Error in ETL pipeline: {e}")
 
-            # Record fatal error
-            self.context.record_error(
-                phase=self.context.current_phase or "unknown",
-                error=e,
-                fatal=True
-            )
+            # Update results with error
+            results['status'] = 'failed'
+            results['error'] = str(e)
 
-            # Get error summary
-            summary = self.context.get_summary()
-            summary['success'] = False
-            summary['error'] = str(e)
-
-            return summary
-
-        finally:
-            # Close any open connections
-            self.loader.close_db()
+            # Re-raise exception
+            raise
 
     def _validate_pipeline_input(
         self,
@@ -151,38 +189,40 @@ class ETLPipeline:
 
         Args:
             file_path: Path to the Skype export file
-            file_obj: File-like object containing Skype export data
+            file_obj: File-like object containing the Skype export
             user_display_name: Display name of the user
 
         Raises:
             ValueError: If input parameters are invalid
         """
-        # Validate file input
-        if not file_path and not file_obj:
+        # Check that at least one of file_path or file_obj is provided
+        if file_path is None and file_obj is None:
             error_msg = "Either file_path or file_obj must be provided"
             logger.error(error_msg)
             raise ValueError(error_msg)
 
-        # Validate file path if provided
-        if file_path:
+        # Validate file_path if provided
+        if file_path is not None:
             if not isinstance(file_path, str):
-                raise ValueError(f"file_path must be a string, got {type(file_path).__name__}")
+                error_msg = f"file_path must be a string, got {type(file_path).__name__}"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
 
-            # Check if file exists
             if not os.path.exists(file_path):
-                raise ValueError(f"File does not exist: {file_path}")
+                error_msg = f"File does not exist: {file_path}"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
 
-            # Check file extension
-            _, ext = os.path.splitext(file_path)
-            if ext.lower() not in ['.tar', '.json']:
-                raise ValueError(f"Unsupported file extension: {ext}. Supported extensions: .tar, .json")
+            if not os.path.isfile(file_path):
+                error_msg = f"Path is not a file: {file_path}"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
 
-        # Validate user display name if provided
-        if user_display_name is not None:
-            if not isinstance(user_display_name, str):
-                raise ValueError(f"user_display_name must be a string, got {type(user_display_name).__name__}")
-
-        logger.info("Pipeline input parameters validated successfully")
+        # Validate user_display_name if provided
+        if user_display_name is not None and not isinstance(user_display_name, str):
+            error_msg = f"user_display_name must be a string, got {type(user_display_name).__name__}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
     def _resume_pipeline(
         self,
@@ -190,126 +230,151 @@ class ETLPipeline:
         file_obj: Optional[BinaryIO] = None,
         user_display_name: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Resume the pipeline from the latest checkpoint.
+        """Resume the ETL pipeline from a checkpoint.
 
         Args:
             file_path: Path to the Skype export file
-            file_obj: File-like object containing Skype export data
+            file_obj: File-like object containing the Skype export
             user_display_name: Display name of the user
 
         Returns:
-            Dict containing pipeline results and statistics
+            Dictionary containing the results of the pipeline run
+
+        Raises:
+            ValueError: If no checkpoint is available
+            Exception: If an error occurs during pipeline execution
         """
-        # Determine the latest completed phase
-        completed_phases = list(self.context.checkpoints.keys())
-        if not completed_phases:
-            logger.warning("No checkpoints found to resume from")
-            return self.run_pipeline(file_path, file_obj, user_display_name, resume_from_checkpoint=False)
+        # Check if context has checkpoint data
+        if not self.context.has_checkpoint():
+            error_msg = "No checkpoint available to resume from"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
-        # Sort phases in order of execution
-        phase_order = {"extract": 1, "transform": 2, "load": 3}
-        completed_phases.sort(key=lambda p: phase_order.get(p, 999))
-        latest_phase = completed_phases[-1]
-
-        logger.info(f"Resuming from checkpoint after '{latest_phase}' phase")
+        # Initialize results dictionary
+        results = {
+            'task_id': self.context.task_id,
+            'phases': {
+                'extract': {'status': 'pending'},
+                'transform': {'status': 'pending'},
+                'load': {'status': 'pending'}
+            },
+            'resumed_from_checkpoint': True
+        }
 
         try:
-            # Resume based on the latest completed phase
-            if latest_phase == "extract":
-                # Extract phase is complete, resume from transform
-                if not self.context.raw_data:
-                    logger.warning("Raw data not available in context, cannot resume")
-                    return self.run_pipeline(file_path, file_obj, user_display_name, resume_from_checkpoint=False)
-
-                raw_data = self.context.raw_data
-
-                # Run transform phase
-                transformed_data = self._run_transform_phase(raw_data, user_display_name)
-
-                # Run load phase
-                export_id = self._run_load_phase(raw_data, transformed_data, file_path)
-
-            elif latest_phase == "transform":
-                # Transform phase is complete, resume from load
-                if not self.context.raw_data or not self.context.transformed_data:
-                    logger.warning("Required data not available in context, cannot resume")
-                    return self.run_pipeline(file_path, file_obj, user_display_name, resume_from_checkpoint=False)
-
-                raw_data = self.context.raw_data
-                transformed_data = self.context.transformed_data
-
-                # Run load phase
-                export_id = self._run_load_phase(raw_data, transformed_data, file_path)
-
-            elif latest_phase == "load":
-                # Load phase is complete, nothing to resume
-                logger.info("All phases already completed, nothing to resume")
-                export_id = self.context.export_id
-                if not export_id:
-                    logger.warning("Export ID not available in context")
-                    return self.run_pipeline(file_path, file_obj, user_display_name, resume_from_checkpoint=False)
+            # Check which phase to resume from
+            if self.context.get_phase_status('extract') == 'completed':
+                # Extract phase already completed
+                raw_data = self.context.get_raw_data()
+                results['phases']['extract'] = {
+                    'status': 'completed',
+                    'conversation_count': len(raw_data.get('conversations', {})),
+                    'from_checkpoint': True
+                }
+                logger.info("Resumed from extract phase checkpoint")
             else:
-                logger.warning(f"Unknown phase '{latest_phase}', cannot resume")
-                return self.run_pipeline(file_path, file_obj, user_display_name, resume_from_checkpoint=False)
+                # Run extract phase
+                logger.info("Starting extraction phase")
+                raw_data = self._run_extract_phase(file_path, file_obj)
+                results['phases']['extract'] = {
+                    'status': 'completed',
+                    'conversation_count': len(raw_data.get('conversations', {}))
+                }
 
-            # Get final summary
-            summary = self.context.get_summary()
-            summary['success'] = True
-            summary['export_id'] = export_id
-            summary['resumed'] = True
-            summary['resumed_from_phase'] = latest_phase
+            # Check if transform phase is already completed
+            if self.context.get_phase_status('transform') == 'completed':
+                # Transform phase already completed
+                transformed_data = self.context.get_transformed_data()
+                results['phases']['transform'] = {
+                    'status': 'completed',
+                    'processed_conversations': len(transformed_data.get('conversations', {})),
+                    'processed_messages': sum(len(conv.get('messages', []))
+                                             for conv in transformed_data.get('conversations', {}).values()),
+                    'from_checkpoint': True
+                }
+                logger.info("Resumed from transform phase checkpoint")
+            else:
+                # Run transform phase
+                logger.info("Starting transformation phase")
+                transformed_data = self._run_transform_phase(raw_data, user_display_name)
+                results['phases']['transform'] = {
+                    'status': 'completed',
+                    'processed_conversations': len(transformed_data.get('conversations', {})),
+                    'processed_messages': sum(len(conv.get('messages', []))
+                                             for conv in transformed_data.get('conversations', {}).values())
+                }
+
+            # Check if load phase is already completed
+            if self.context.get_phase_status('load') == 'completed':
+                # Load phase already completed
+                export_id = self.context.get_export_id()
+                results['phases']['load'] = {
+                    'status': 'completed',
+                    'export_id': export_id,
+                    'from_checkpoint': True
+                }
+                logger.info("Resumed from load phase checkpoint")
+            else:
+                # Run load phase
+                logger.info("Starting loading phase")
+                export_id = self._run_load_phase(raw_data, transformed_data, file_path)
+                results['phases']['load'] = {
+                    'status': 'completed',
+                    'export_id': export_id
+                }
+
+            # Set overall results
+            results['status'] = 'completed'
+            results['export_id'] = export_id
+            results['conversation_count'] = len(transformed_data.get('conversations', {}))
+            results['message_count'] = sum(len(conv.get('messages', []))
+                                          for conv in transformed_data.get('conversations', {}).values())
 
             logger.info(f"ETL pipeline resumed and completed successfully with export ID: {export_id}")
-            return summary
+            return results
 
         except Exception as e:
-            logger.exception(f"Error resuming ETL pipeline: {e}")
+            # Log error
+            logger.error(f"Error resuming ETL pipeline: {e}")
 
-            # Record fatal error
-            self.context.record_error(
-                phase=self.context.current_phase or "resume",
-                error=e,
-                fatal=True
-            )
+            # Update results with error
+            results['status'] = 'failed'
+            results['error'] = str(e)
 
-            # Get error summary
-            summary = self.context.get_summary()
-            summary['success'] = False
-            summary['error'] = str(e)
-            summary['resumed'] = True
-            summary['resumed_from_phase'] = latest_phase
-
-            return summary
+            # Re-raise exception
+            raise
 
     def save_checkpoint(self, checkpoint_dir: Optional[str] = None) -> str:
-        """Save the current context and checkpoints to a file.
+        """Save the current pipeline state to a checkpoint file.
 
         Args:
-            checkpoint_dir: Directory to save the checkpoint file (defaults to context.output_dir)
+            checkpoint_dir: Directory to save the checkpoint file
 
         Returns:
-            str: Path to the saved checkpoint file
+            Path to the saved checkpoint file
+
+        Raises:
+            ValueError: If checkpoint directory is not writable
+            Exception: If an error occurs during checkpoint saving
         """
-        # Use provided directory or context output directory
-        save_dir = checkpoint_dir or self.context.output_dir
-        if not save_dir:
-            raise ValueError("No output directory specified for saving checkpoint")
+        # Use provided checkpoint directory or default to output directory
+        checkpoint_dir = checkpoint_dir or self.context.output_dir
 
-        # Create directory if it doesn't exist
-        os.makedirs(save_dir, exist_ok=True)
+        # Ensure checkpoint directory exists
+        if not os.path.exists(checkpoint_dir):
+            os.makedirs(checkpoint_dir, exist_ok=True)
 
-        # Generate checkpoint filename
-        checkpoint_file = os.path.join(save_dir, f"etl_checkpoint_{self.context.task_id}.json")
+        # Create checkpoint file path
+        checkpoint_file = os.path.join(checkpoint_dir, f"checkpoint_{self.context.task_id}.json")
 
-        # Serialize context to JSON
-        checkpoint_data = self.context.serialize_checkpoint()
-
-        # Save to file
-        with open(checkpoint_file, 'w') as f:
-            json.dump(checkpoint_data, f, indent=2)
-
-        logger.info(f"Saved checkpoint to {checkpoint_file}")
-        return checkpoint_file
+        # Save context to checkpoint file
+        try:
+            self.context.save_to_file(checkpoint_file)
+            logger.info(f"Checkpoint saved to {checkpoint_file}")
+            return checkpoint_file
+        except Exception as e:
+            logger.error(f"Error saving checkpoint: {e}")
+            raise
 
     @classmethod
     def load_from_checkpoint(cls, checkpoint_file: str, db_config: Optional[Dict[str, Any]] = None) -> 'ETLPipeline':
@@ -320,149 +385,171 @@ class ETLPipeline:
             db_config: Optional database configuration to override the one in the checkpoint
 
         Returns:
-            ETLPipeline: A new pipeline instance with the restored context
+            A new ETLPipeline instance initialized from the checkpoint
+
+        Raises:
+            ValueError: If checkpoint file is invalid or not found
+            Exception: If an error occurs during checkpoint loading
         """
-        # Load checkpoint data
-        with open(checkpoint_file, 'r') as f:
-            checkpoint_data = json.load(f)
+        # Validate checkpoint file
+        if not os.path.exists(checkpoint_file):
+            error_msg = f"Checkpoint file not found: {checkpoint_file}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
-        # Create context from checkpoint
-        context = ETLContext.restore_from_checkpoint(checkpoint_data)
+        # Load context from checkpoint file
+        try:
+            context = ETLContext.load_from_file(checkpoint_file)
 
-        # Override database configuration if provided
-        if db_config:
-            context.db_config = db_config
+            # Override database configuration if provided
+            if db_config:
+                context.db_config = db_config
 
-        # Create pipeline with restored context
-        pipeline = cls(
-            db_config={},  # Empty dict as we're using the context
-            context=context
-        )
+            # Create pipeline with loaded context
+            pipeline = cls(
+                db_config=context.db_config,
+                context=context
+            )
 
-        logger.info(f"Loaded pipeline from checkpoint file: {checkpoint_file}")
-        return pipeline
+            logger.info(f"Pipeline loaded from checkpoint: {checkpoint_file}")
+            return pipeline
+        except Exception as e:
+            logger.error(f"Error loading checkpoint: {e}")
+            raise
 
     def get_available_checkpoints(self) -> List[str]:
-        """Get a list of available checkpoint phases.
+        """Get a list of available checkpoint files.
 
         Returns:
-            List[str]: List of phase names that have checkpoints
+            List of paths to available checkpoint files
         """
-        return list(self.context.checkpoints.keys())
+        checkpoint_dir = self.context.output_dir
+        if not os.path.exists(checkpoint_dir):
+            return []
+
+        # Find all checkpoint files
+        checkpoint_files = [os.path.join(checkpoint_dir, f) for f in os.listdir(checkpoint_dir)
+                           if f.startswith("checkpoint_") and f.endswith(".json")]
+
+        return checkpoint_files
 
     def _run_extract_phase(self, file_path: Optional[str] = None, file_obj: Optional[BinaryIO] = None) -> Dict[str, Any]:
-        """Run the extraction phase of the pipeline.
+        """Run the extract phase of the ETL pipeline.
 
         Args:
             file_path: Path to the Skype export file
-            file_obj: File-like object containing Skype export data
+            file_obj: File-like object containing the Skype export
 
         Returns:
-            Dict containing the raw data
+            Raw data extracted from the source
+
+        Raises:
+            Exception: If an error occurs during extraction
         """
         try:
-            # Start extract phase in context
-            self.context.start_phase("extract")
+            # Update context phase
+            self.context.set_phase('extract')
 
             # Run extraction
-            raw_data = self.extractor.extract(file_path, file_obj)
+            raw_data = self.extractor.extract(file_path=file_path, file_obj=file_obj)
 
-            # Store raw data in context
-            self.context.raw_data = raw_data
-
-            # End extract phase
-            self.context.end_phase({
-                'success': True,
-                'conversation_count': len(raw_data.get('conversations', [])),
-                'user_id': raw_data.get('userId', '')
-            })
+            # Save checkpoint
+            if self.context.output_dir:
+                self.save_checkpoint()
 
             return raw_data
-
         except Exception as e:
-            # Record error and re-raise
-            self.context.record_error("extract", e, fatal=True)
+            # Log error
+            logger.error(f"Error in extract phase: {e}")
+
+            # Update context with error
+            self.context.record_error('extract', str(e))
+
+            # Re-raise exception
             raise
 
     def _run_transform_phase(self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None) -> Dict[str, Any]:
-        """Run the transformation phase of the pipeline.
+        """Run the transform phase of the ETL pipeline.
 
         Args:
-            raw_data: Raw data from the extraction phase
+            raw_data: Raw data from the extract phase
             user_display_name: Display name of the user
 
         Returns:
-            Dict containing the transformed data
+            Transformed data
+
+        Raises:
+            Exception: If an error occurs during transformation
         """
         try:
-            # Start transform phase in context
-            self.context.start_phase(
-                "transform",
-                total_conversations=len(raw_data.get('conversations', [])),
-                total_messages=sum(len(conv.get('MessageList', [])) for conv in raw_data.get('conversations', []))
-            )
+            # Update context phase
+            self.context.set_phase('transform')
 
             # Run transformation
             transformed_data = self.transformer.transform(raw_data, user_display_name)
 
-            # Store transformed data in context
-            self.context.transformed_data = transformed_data
-
-            # End transform phase
-            self.context.end_phase({
-                'success': True,
-                'conversation_count': len(transformed_data.get('conversations', {}))
-            })
+            # Save checkpoint
+            if self.context.output_dir:
+                self.save_checkpoint()
 
             return transformed_data
-
         except Exception as e:
-            # Record error and re-raise
-            self.context.record_error("transform", e, fatal=True)
+            # Log error
+            logger.error(f"Error in transform phase: {e}")
+
+            # Update context with error
+            self.context.record_error('transform', str(e))
+
+            # Re-raise exception
             raise
 
     def _run_load_phase(self, raw_data: Dict[str, Any], transformed_data: Dict[str, Any], file_source: Optional[str] = None) -> int:
-        """Run the loading phase of the pipeline.
+        """Run the load phase of the ETL pipeline.
 
         Args:
-            raw_data: Raw data from the extraction phase
-            transformed_data: Transformed data from the transformation phase
-            file_source: Source of the data (e.g., file path)
+            raw_data: Raw data from the extract phase
+            transformed_data: Transformed data from the transform phase
+            file_source: Original file source (path or name)
 
         Returns:
-            int: The export ID in the database
+            Export ID of the loaded data
+
+        Raises:
+            Exception: If an error occurs during loading
         """
         try:
-            # Start load phase in context
-            self.context.start_phase(
-                "load",
-                total_conversations=len(transformed_data.get('conversations', {})),
-                total_messages=sum(len(conv.get('messages', [])) for conv in transformed_data.get('conversations', {}).values())
-            )
+            # Update context phase
+            self.context.set_phase('load')
 
-            # Run loading
-            export_id = self.loader.load(raw_data, transformed_data, file_source)
+            # Connect to database
+            self.loader.connect_db()
 
-            # Store export ID in context
-            self.context.export_id = export_id
+            try:
+                # Run loading
+                export_id = self.loader.load(raw_data, transformed_data, file_source)
 
-            # End load phase
-            self.context.end_phase({
-                'success': True,
-                'export_id': export_id
-            })
+                # Save checkpoint
+                if self.context.output_dir:
+                    self.save_checkpoint()
 
-            return export_id
-
+                return export_id
+            finally:
+                # Close database connection
+                self.loader.close_db()
         except Exception as e:
-            # Record error and re-raise
-            self.context.record_error("load", e, fatal=True)
+            # Log error
+            logger.error(f"Error in load phase: {e}")
+
+            # Update context with error
+            self.context.record_error('load', str(e))
+
+            # Re-raise exception
             raise
 
     def get_context(self) -> ETLContext:
         """Get the ETL context.
 
         Returns:
-            ETLContext: The shared context object
+            The ETL context
         """
         return self.context

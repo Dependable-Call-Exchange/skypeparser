@@ -6,11 +6,11 @@ including raw exports, conversations, and messages.
 """
 
 import logging
-import psycopg2
-import psycopg2.extras
 import json
 from typing import Dict, List, Any, Optional, Tuple
 
+from src.utils.interfaces import LoaderProtocol, DatabaseConnectionProtocol
+from src.utils.di import get_service
 from src.utils.validation import validate_db_config
 from .context import ETLContext
 
@@ -48,114 +48,95 @@ CREATE TABLE IF NOT EXISTS skype_messages (
     timestamp TIMESTAMP NOT NULL,
     sender_id TEXT NOT NULL,
     sender_name TEXT,
-    message_type TEXT,
-    raw_content TEXT,
-    cleaned_content TEXT,
+    content TEXT,
+    html_content TEXT,
+    message_type TEXT NOT NULL,
     is_edited BOOLEAN DEFAULT FALSE,
-    structured_data JSONB,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    reactions JSONB,
+    attachments JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
 
-class Loader:
-    """Handles loading of transformed data into the database."""
+class Loader(LoaderProtocol):
+    """Handles loading of transformed Skype data into the database."""
 
-    def __init__(self, context: ETLContext = None, db_config: Optional[Dict[str, Any]] = None, batch_size: int = 100):
+    def __init__(self,
+                 context: ETLContext = None,
+                 db_config: Optional[Dict[str, Any]] = None,
+                 batch_size: int = 100,
+                 db_connection: Optional[DatabaseConnectionProtocol] = None):
         """Initialize the Loader.
 
         Args:
             context: Shared ETL context object
-            db_config: Database configuration dictionary (used if context not provided)
-            batch_size: Size of database batch operations (used if context not provided)
+            db_config: Database configuration (used if context not provided)
+            batch_size: Number of records to insert in a single batch
+            db_connection: Optional database connection
         """
         self.context = context
-
-        # Use context settings if available, otherwise use parameters
-        if context:
-            self.db_config = context.db_config
-            self.batch_size = context.batch_size
-        else:
-            self.db_config = db_config
-            self.batch_size = batch_size
-
-        # Validate database configuration
-        if self.db_config:
-            validate_db_config(self.db_config)
-
-        self.conn = None
-        self.transaction_active = False
-
-        logger.info("Initialized loader")
+        self.db_config = db_config if context is None else context.db_config
+        self.batch_size = batch_size
+        self.db_connection = db_connection or get_service(DatabaseConnectionProtocol)
+        self._conn = None
+        self._cursor = None
 
     def connect_db(self) -> None:
         """Connect to the database and create tables if they don't exist."""
-        try:
-            self.conn = psycopg2.connect(**self.db_config)
-            self._create_tables()
-            logger.info("Connected to database successfully")
-        except Exception as e:
-            logger.error(f"Error connecting to database: {e}")
-            raise
+        logger.info("Connecting to database")
+
+        # Connect to the database
+        self.db_connection.connect()
+
+        # Create tables
+        self._create_tables()
+
+        logger.info("Database connection established")
 
     def close_db(self) -> None:
         """Close the database connection."""
-        if self.conn:
-            try:
-                self.conn.close()
-                logger.info("Closed database connection")
-            except Exception as e:
-                logger.error(f"Error closing database connection: {e}")
+        logger.info("Closing database connection")
+
+        if self.db_connection:
+            self.db_connection.disconnect()
+
+        logger.info("Database connection closed")
 
     def _create_tables(self) -> None:
-        """Create the necessary database tables if they don't exist."""
-        with self.conn.cursor() as cursor:
-            cursor.execute(RAW_EXPORTS_TABLE)
-            cursor.execute(CONVERSATIONS_TABLE)
-            cursor.execute(MESSAGES_TABLE)
-        self.conn.commit()
+        """Create database tables if they don't exist."""
+        logger.info("Creating database tables if they don't exist")
+
+        # Execute table creation queries
+        self.db_connection.execute(RAW_EXPORTS_TABLE)
+        self.db_connection.execute(CONVERSATIONS_TABLE)
+        self.db_connection.execute(MESSAGES_TABLE)
 
     def load(self, raw_data: Dict[str, Any], transformed_data: Dict[str, Any], file_source: Optional[str] = None) -> int:
         """Load transformed data into the database.
 
         Args:
-            raw_data: Raw data from the extractor
-            transformed_data: Transformed data from the transformer
-            file_source: Source of the data (e.g., file path)
+            raw_data: Raw data from the extraction phase
+            transformed_data: Transformed data from the transformation phase
+            file_source: Original file source (path or name)
 
         Returns:
-            int: The export ID in the database
+            The export ID of the loaded data
 
         Raises:
-            ValueError: If database connection is not available
+            ValueError: If the input data is invalid
+            Exception: If there's an error during loading
         """
-        logger.info("Starting data loading")
-
         # Validate input data
         self._validate_input_data(raw_data, transformed_data)
-
-        # Connect to database if not already connected
-        if not self.conn:
-            self.connect_db()
 
         # Validate database connection
         self._validate_database_connection()
 
-        # Count total conversations and messages for progress tracking
-        total_conversations = len(transformed_data.get('conversations', {}))
-        total_messages = sum(len(conv.get('messages', [])) for conv in transformed_data.get('conversations', {}).values())
-
-        # Update context if available
-        if self.context:
-            # Context phase is managed by the pipeline manager, but we can update counts
-            self.context.progress_tracker.total_conversations = total_conversations
-            self.context.progress_tracker.total_messages = total_messages
-
-        logger.info(f"Loading {total_conversations} conversations with {total_messages} messages")
+        # Begin transaction
+        self._begin_transaction()
 
         try:
-            # Begin transaction
-            self._begin_transaction()
-
             # Store raw export data
             export_id = self._store_raw_export(raw_data, file_source)
 
@@ -170,222 +151,243 @@ class Loader:
 
             # Update context if available
             if self.context:
-                self.context.export_id = export_id
-                self.context.update_progress(conversations=total_conversations, messages=total_messages)
+                self.context.set_export_id(export_id)
+                self.context.set_phase_status('load', 'completed')
 
-            logger.info(f"Data loading complete with export ID: {export_id}")
+            logger.info(f"Data loaded successfully with export ID: {export_id}")
             return export_id
 
         except Exception as e:
             # Rollback transaction on error
             self._rollback_transaction()
 
-            # Record error in context if available
-            if self.context:
-                self.context.record_error("load", e, fatal=True)
-
+            # Log error
             logger.error(f"Error loading data: {e}")
+
+            # Update context if available
+            if self.context:
+                self.context.record_error('load', str(e))
+
+            # Re-raise exception
             raise
 
     def _validate_input_data(self, raw_data: Dict[str, Any], transformed_data: Dict[str, Any]) -> None:
         """Validate input data for loading.
 
         Args:
-            raw_data: Raw data from the extractor
-            transformed_data: Transformed data from the transformer
+            raw_data: Raw data from the extraction phase
+            transformed_data: Transformed data from the transformation phase
 
         Raises:
-            ValueError: If input data is invalid
+            ValueError: If the input data is invalid
         """
-        # Validate raw data
+        # Check that raw_data is a dictionary
         if not isinstance(raw_data, dict):
-            raise ValueError("Raw data must be a dictionary")
+            error_msg = f"Raw data must be a dictionary, got {type(raw_data).__name__}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
-        if 'userId' not in raw_data:
-            raise ValueError("Raw data must contain 'userId' key")
-
-        if 'exportDate' not in raw_data:
-            raise ValueError("Raw data must contain 'exportDate' key")
-
-        # Validate transformed data
+        # Check that transformed_data is a dictionary
         if not isinstance(transformed_data, dict):
-            raise ValueError("Transformed data must be a dictionary")
+            error_msg = f"Transformed data must be a dictionary, got {type(transformed_data).__name__}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
-        if 'conversations' not in transformed_data:
-            raise ValueError("Transformed data must contain 'conversations' key")
+        # Check that transformed_data contains required keys
+        required_keys = ['user_id', 'export_date', 'conversations']
+        missing_keys = [key for key in required_keys if key not in transformed_data]
+        if missing_keys:
+            error_msg = f"Transformed data missing required keys: {', '.join(missing_keys)}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
+        # Check that conversations is a dictionary
         if not isinstance(transformed_data['conversations'], dict):
-            raise ValueError("Transformed conversations must be a dictionary")
+            error_msg = "Transformed data 'conversations' must be a dictionary"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
-        # Check for empty data
-        if not transformed_data.get('conversations'):
-            logger.warning("No conversations to load")
-
-        # Check for required fields in conversations
-        for conv_id, conv in transformed_data.get('conversations', {}).items():
-            if not isinstance(conv, dict):
-                raise ValueError(f"Conversation '{conv_id}' must be a dictionary")
-
-            if 'messages' not in conv:
-                logger.warning(f"Conversation '{conv_id}' has no messages field")
-            elif not isinstance(conv['messages'], list):
-                raise ValueError(f"Messages for conversation '{conv_id}' must be a list")
-
-        logger.info("Input data validation completed successfully")
+        # Check that at least one conversation exists
+        if not transformed_data['conversations']:
+            logger.warning("No conversations found in transformed data")
 
     def _validate_database_connection(self) -> None:
         """Validate database connection.
 
         Raises:
-            ValueError: If database connection is not available or invalid
+            ValueError: If the database connection is invalid
         """
-        if not self.conn:
-            error_msg = "Database connection not available"
+        if not self.db_connection:
+            error_msg = "Database connection not initialized"
             logger.error(error_msg)
             raise ValueError(error_msg)
 
-        # Check if connection is still alive
-        try:
-            with self.conn.cursor() as cursor:
-                cursor.execute("SELECT 1")
-                result = cursor.fetchone()
-                if result != (1,):
-                    raise ValueError("Database connection test failed")
-        except Exception as e:
-            logger.error(f"Database connection validation error: {e}")
-
-            # Try to reconnect
-            logger.info("Attempting to reconnect to database")
-            try:
-                self.close_db()
-                self.connect_db()
-                logger.info("Successfully reconnected to database")
-            except Exception as reconnect_error:
-                logger.error(f"Failed to reconnect to database: {reconnect_error}")
-                raise ValueError(f"Database connection is invalid and reconnection failed: {reconnect_error}")
-
     def _store_raw_export(self, raw_data: Dict[str, Any], file_source: Optional[str] = None) -> int:
-        """Store raw export data and return the export ID.
+        """Store raw export data in the database.
 
         Args:
-            raw_data: Raw data to insert
-            file_source: Optional source file path
+            raw_data: Raw data from the extraction phase
+            file_source: Original file source (path or name)
 
         Returns:
-            export_id: ID of the created export record
+            The export ID of the stored data
         """
-        user_display_name = raw_data['metadata'].get('user_display_name', '')
-        export_time = raw_data['metadata'].get('export_time', '')
+        logger.info("Storing raw export data")
 
-        with self.conn.cursor() as cursor:
-            cursor.execute("""
-                INSERT INTO skype_raw_exports (user_id, export_date, raw_data, file_source)
-                VALUES (%s, %s, %s, %s)
-                RETURNING export_id
-            """, (user_display_name, export_time, psycopg2.extras.Json(raw_data), file_source))
+        # Get user ID and export date from context or use defaults
+        user_id = self.context.user_id if self.context else "unknown"
+        export_date = self.context.export_date if self.context else "NOW()"
 
-            export_id = cursor.fetchone()[0]
-            return export_id
+        # Insert raw export data
+        query = """
+        INSERT INTO skype_raw_exports (user_id, export_date, raw_data, file_source)
+        VALUES (%s, %s, %s, %s)
+        RETURNING export_id
+        """
+
+        # Convert raw_data to JSON string
+        raw_data_json = json.dumps(raw_data)
+
+        # Execute query
+        result = self.db_connection.fetch_one(query, (user_id, export_date, raw_data_json, file_source))
+
+        # Get export ID
+        export_id = result[0]
+
+        logger.info(f"Raw export data stored with ID: {export_id}")
+        return export_id
 
     def _store_conversations(self, transformed_data: Dict[str, Any], export_id: int) -> None:
-        """Store conversations into the database.
+        """Store conversations in the database.
 
         Args:
-            transformed_data: Transformed data containing conversations
-            export_id: ID of the export record
+            transformed_data: Transformed data from the transformation phase
+            export_id: Export ID to associate with the conversations
         """
-        with self.conn.cursor() as cursor:
-            for conv_id, conv_data in transformed_data['conversations'].items():
-                # Insert conversation
-                self._insert_conversation(cursor, conv_id, conv_data, export_id)
+        logger.info("Storing conversations")
 
-    def _insert_conversation(self, cursor, conv_id: str, conv_data: Dict[str, Any],
-                           export_id: int) -> None:
-        """Insert a single conversation into the database.
+        # Get conversations from transformed data
+        conversations = transformed_data['conversations']
+
+        # Insert each conversation
+        for conv_id, conv_data in conversations.items():
+            self._insert_conversation(conv_id, conv_data, export_id)
+
+        logger.info(f"Stored {len(conversations)} conversations")
+
+    def _insert_conversation(self, conv_id: str, conv_data: Dict[str, Any], export_id: int) -> None:
+        """Insert a conversation into the database.
 
         Args:
-            cursor: Database cursor
             conv_id: Conversation ID
             conv_data: Conversation data
-            export_id: ID of the export record
+            export_id: Export ID to associate with the conversation
         """
-        cursor.execute("""
-            INSERT INTO skype_conversations (
-                conversation_id, display_name, export_id,
-                first_message_time, last_message_time, message_count
-            )
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (conversation_id) DO UPDATE
-            SET
-                display_name = EXCLUDED.display_name,
-                export_id = EXCLUDED.export_id,
-                first_message_time = EXCLUDED.first_message_time,
-                last_message_time = EXCLUDED.last_message_time,
-                message_count = EXCLUDED.message_count,
-                updated_at = CURRENT_TIMESTAMP
-        """, (
+        # Extract conversation data
+        display_name = conv_data.get('display_name', '')
+        first_message_time = conv_data.get('first_message_time')
+        last_message_time = conv_data.get('last_message_time')
+        message_count = len(conv_data.get('messages', []))
+
+        # Insert conversation
+        query = """
+        INSERT INTO skype_conversations
+        (conversation_id, display_name, export_id, first_message_time, last_message_time, message_count)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (conversation_id)
+        DO UPDATE SET
+            display_name = EXCLUDED.display_name,
+            export_id = EXCLUDED.export_id,
+            first_message_time = EXCLUDED.first_message_time,
+            last_message_time = EXCLUDED.last_message_time,
+            message_count = EXCLUDED.message_count,
+            updated_at = CURRENT_TIMESTAMP
+        """
+
+        # Execute query
+        self.db_connection.execute(query, (
             conv_id,
-            conv_data.get('display_name', ''),
+            display_name,
             export_id,
-            conv_data.get('first_message_time'),
-            conv_data.get('last_message_time'),
-            conv_data.get('message_count', 0)
+            first_message_time,
+            last_message_time,
+            message_count
         ))
 
     def _store_messages(self, transformed_data: Dict[str, Any]) -> None:
-        """Store messages into the database.
+        """Store messages in the database.
 
         Args:
-            transformed_data: Transformed data containing messages
+            transformed_data: Transformed data from the transformation phase
         """
-        with self.conn.cursor() as cursor:
-            for conv_id, conv_data in transformed_data['conversations'].items():
-                # Insert messages for this conversation
-                if conv_data.get('messages'):
-                    self._insert_messages(cursor, conv_id, conv_data['messages'])
+        logger.info("Storing messages")
 
-    def _insert_messages(self, cursor, conv_id: str, messages: List[Dict[str, Any]]) -> None:
-        """Insert messages for a conversation into the database.
+        # Get conversations from transformed data
+        conversations = transformed_data['conversations']
+
+        # Track total messages
+        total_messages = 0
+
+        # Insert messages for each conversation
+        for conv_id, conv_data in conversations.items():
+            messages = conv_data.get('messages', [])
+            if messages:
+                self._insert_messages(conv_id, messages)
+                total_messages += len(messages)
+
+        logger.info(f"Stored {total_messages} messages")
+
+    def _insert_messages(self, conv_id: str, messages: List[Dict[str, Any]]) -> None:
+        """Insert messages into the database.
 
         Args:
-            cursor: Database cursor
             conv_id: Conversation ID
             messages: List of messages to insert
         """
-        for message in messages:
-            cursor.execute("""
-                INSERT INTO skype_messages (
-                    conversation_id, timestamp, sender_id, sender_name,
-                    message_type, raw_content, cleaned_content,
-                    is_edited, structured_data
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                conv_id,
-                message.get('timestamp'),
-                message.get('sender_id'),
-                message.get('sender_name'),
-                message.get('message_type'),
-                message.get('content'),
-                message.get('cleaned_content'),
-                message.get('is_edited', False),
-                psycopg2.extras.Json(message.get('structured_data', {}))
-                    if message.get('structured_data') else None
-            ))
+        # Prepare batch insert
+        batch_size = self.batch_size
+        for i in range(0, len(messages), batch_size):
+            batch = messages[i:i+batch_size]
+
+            # Prepare parameters for batch insert
+            params_list = []
+            for msg in batch:
+                params_list.append((
+                    conv_id,
+                    msg.get('timestamp'),
+                    msg.get('sender_id', ''),
+                    msg.get('sender_name', ''),
+                    msg.get('content', ''),
+                    msg.get('html_content', ''),
+                    msg.get('message_type', 'text'),
+                    msg.get('is_edited', False),
+                    msg.get('is_deleted', False),
+                    json.dumps(msg.get('reactions', {})),
+                    json.dumps(msg.get('attachments', []))
+                ))
+
+            # Insert batch
+            query = """
+            INSERT INTO skype_messages
+            (conversation_id, timestamp, sender_id, sender_name, content, html_content,
+             message_type, is_edited, is_deleted, reactions, attachments)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+
+            # Execute batch insert
+            self.db_connection.execute_many(query, params_list)
 
     def _begin_transaction(self) -> None:
-        """Begin a transaction."""
-        self.conn.autocommit = False
-        self.transaction_active = True
+        """Begin a database transaction."""
+        logger.debug("Beginning database transaction")
+        # Transaction is handled by the database connection
 
     def _commit_transaction(self) -> None:
-        """Commit the transaction."""
-        self.conn.commit()
-        self.conn.autocommit = True
-        self.transaction_active = False
+        """Commit the current database transaction."""
+        logger.debug("Committing database transaction")
+        # Transaction is handled by the database connection
 
     def _rollback_transaction(self) -> None:
-        """Rollback the transaction."""
-        self.conn.rollback()
-        self.conn.autocommit = True
-        self.transaction_active = False
+        """Rollback the current database transaction."""
+        logger.debug("Rolling back database transaction")
+        # Transaction is handled by the database connection
