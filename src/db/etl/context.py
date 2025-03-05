@@ -63,6 +63,10 @@ class ETLContext:
             max_workers: Maximum number of worker threads/processes
             task_id: Unique identifier for this ETL task (generated if not provided)
         """
+        # Validate configuration parameters
+        self._validate_configuration(db_config, output_dir, memory_limit_mb,
+                                    chunk_size, batch_size, max_workers)
+
         # Core configuration
         self.db_config = db_config
         self.output_dir = output_dir
@@ -104,6 +108,71 @@ class ETLContext:
         }
 
         logger.info(f"Initialized ETL context with task ID: {self.task_id}")
+
+    def _validate_configuration(self, db_config: Dict[str, Any],
+                               output_dir: Optional[str],
+                               memory_limit_mb: int,
+                               chunk_size: int,
+                               batch_size: int,
+                               max_workers: Optional[int]) -> None:
+        """
+        Validate all configuration parameters.
+
+        Args:
+            db_config: Database configuration dictionary
+            output_dir: Optional directory to save intermediate files
+            memory_limit_mb: Memory limit in MB
+            chunk_size: Size of message chunks for batch processing
+            batch_size: Size of database batch operations
+            max_workers: Maximum number of worker threads/processes
+
+        Raises:
+            ValueError: If any configuration parameter is invalid
+        """
+        # Validate database configuration
+        if not isinstance(db_config, dict):
+            raise ValueError("Database configuration must be a dictionary")
+
+        # Import validation function here to avoid circular imports
+        from src.utils.validation import validate_db_config
+        try:
+            validate_db_config(db_config)
+        except Exception as e:
+            raise ValueError(f"Invalid database configuration: {str(e)}")
+
+        # Validate output directory if provided
+        if output_dir is not None:
+            if not isinstance(output_dir, str):
+                raise ValueError("Output directory must be a string")
+
+            # Check if directory exists, create if it doesn't
+            if not os.path.exists(output_dir):
+                try:
+                    os.makedirs(output_dir, exist_ok=True)
+                    logger.info(f"Created output directory: {output_dir}")
+                except Exception as e:
+                    raise ValueError(f"Failed to create output directory: {str(e)}")
+            elif not os.path.isdir(output_dir):
+                raise ValueError(f"Output path exists but is not a directory: {output_dir}")
+            elif not os.access(output_dir, os.W_OK):
+                raise ValueError(f"Output directory is not writable: {output_dir}")
+
+        # Validate numeric parameters
+        if not isinstance(memory_limit_mb, int) or memory_limit_mb <= 0:
+            raise ValueError(f"Memory limit must be a positive integer, got {memory_limit_mb}")
+
+        if not isinstance(chunk_size, int) or chunk_size <= 0:
+            raise ValueError(f"Chunk size must be a positive integer, got {chunk_size}")
+
+        if not isinstance(batch_size, int) or batch_size <= 0:
+            raise ValueError(f"Batch size must be a positive integer, got {batch_size}")
+
+        # Validate max_workers if provided
+        if max_workers is not None:
+            if not isinstance(max_workers, int) or max_workers <= 0:
+                raise ValueError(f"Max workers must be a positive integer, got {max_workers}")
+
+        logger.info("All configuration parameters validated successfully")
 
     def start_phase(self, phase_name: str, total_conversations: int = 0, total_messages: int = 0) -> None:
         """

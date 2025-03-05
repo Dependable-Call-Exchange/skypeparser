@@ -130,19 +130,15 @@ class Loader:
         """
         logger.info("Starting data loading")
 
+        # Validate input data
+        self._validate_input_data(raw_data, transformed_data)
+
         # Connect to database if not already connected
         if not self.conn:
             self.connect_db()
 
-        if not self.conn:
-            error_msg = "Database connection not available"
-            logger.error(error_msg)
-
-            # Record error in context if available
-            if self.context:
-                self.context.record_error("load", ValueError(error_msg), fatal=True)
-
-            raise ValueError(error_msg)
+        # Validate database connection
+        self._validate_database_connection()
 
         # Count total conversations and messages for progress tracking
         total_conversations = len(transformed_data.get('conversations', {}))
@@ -160,11 +156,14 @@ class Loader:
             # Begin transaction
             self._begin_transaction()
 
-            # Insert raw export data and get export ID
-            export_id = self._insert_raw_export(raw_data, transformed_data, file_source)
+            # Store raw export data
+            export_id = self._store_raw_export(raw_data, file_source)
 
-            # Insert conversations and messages
-            self._insert_conversations_and_messages(transformed_data, export_id)
+            # Store conversations
+            self._store_conversations(transformed_data, export_id)
+
+            # Store messages
+            self._store_messages(transformed_data)
 
             # Commit transaction
             self._commit_transaction()
@@ -172,38 +171,111 @@ class Loader:
             # Update context if available
             if self.context:
                 self.context.export_id = export_id
-                self.context.check_memory()
+                self.context.update_progress(conversations=total_conversations, messages=total_messages)
 
-            logger.info(f"Loading complete with export ID: {export_id}")
-
+            logger.info(f"Data loading complete with export ID: {export_id}")
             return export_id
 
         except Exception as e:
-            # Rollback transaction
+            # Rollback transaction on error
             self._rollback_transaction()
-
-            logger.error(f"Error during loading phase: {e}")
 
             # Record error in context if available
             if self.context:
                 self.context.record_error("load", e, fatal=True)
 
+            logger.error(f"Error loading data: {e}")
             raise
 
-    def _insert_raw_export(self, raw_data: Dict[str, Any], transformed_data: Dict[str, Any],
-                          file_source: Optional[str] = None) -> int:
-        """Insert the raw export data and return the export ID.
+    def _validate_input_data(self, raw_data: Dict[str, Any], transformed_data: Dict[str, Any]) -> None:
+        """Validate input data for loading.
+
+        Args:
+            raw_data: Raw data from the extractor
+            transformed_data: Transformed data from the transformer
+
+        Raises:
+            ValueError: If input data is invalid
+        """
+        # Validate raw data
+        if not isinstance(raw_data, dict):
+            raise ValueError("Raw data must be a dictionary")
+
+        if 'userId' not in raw_data:
+            raise ValueError("Raw data must contain 'userId' key")
+
+        if 'exportDate' not in raw_data:
+            raise ValueError("Raw data must contain 'exportDate' key")
+
+        # Validate transformed data
+        if not isinstance(transformed_data, dict):
+            raise ValueError("Transformed data must be a dictionary")
+
+        if 'conversations' not in transformed_data:
+            raise ValueError("Transformed data must contain 'conversations' key")
+
+        if not isinstance(transformed_data['conversations'], dict):
+            raise ValueError("Transformed conversations must be a dictionary")
+
+        # Check for empty data
+        if not transformed_data.get('conversations'):
+            logger.warning("No conversations to load")
+
+        # Check for required fields in conversations
+        for conv_id, conv in transformed_data.get('conversations', {}).items():
+            if not isinstance(conv, dict):
+                raise ValueError(f"Conversation '{conv_id}' must be a dictionary")
+
+            if 'messages' not in conv:
+                logger.warning(f"Conversation '{conv_id}' has no messages field")
+            elif not isinstance(conv['messages'], list):
+                raise ValueError(f"Messages for conversation '{conv_id}' must be a list")
+
+        logger.info("Input data validation completed successfully")
+
+    def _validate_database_connection(self) -> None:
+        """Validate database connection.
+
+        Raises:
+            ValueError: If database connection is not available or invalid
+        """
+        if not self.conn:
+            error_msg = "Database connection not available"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        # Check if connection is still alive
+        try:
+            with self.conn.cursor() as cursor:
+                cursor.execute("SELECT 1")
+                result = cursor.fetchone()
+                if result != (1,):
+                    raise ValueError("Database connection test failed")
+        except Exception as e:
+            logger.error(f"Database connection validation error: {e}")
+
+            # Try to reconnect
+            logger.info("Attempting to reconnect to database")
+            try:
+                self.close_db()
+                self.connect_db()
+                logger.info("Successfully reconnected to database")
+            except Exception as reconnect_error:
+                logger.error(f"Failed to reconnect to database: {reconnect_error}")
+                raise ValueError(f"Database connection is invalid and reconnection failed: {reconnect_error}")
+
+    def _store_raw_export(self, raw_data: Dict[str, Any], file_source: Optional[str] = None) -> int:
+        """Store raw export data and return the export ID.
 
         Args:
             raw_data: Raw data to insert
-            transformed_data: Transformed data containing metadata
             file_source: Optional source file path
 
         Returns:
             export_id: ID of the created export record
         """
-        user_display_name = transformed_data['metadata'].get('user_display_name', '')
-        export_time = transformed_data['metadata'].get('export_time', '')
+        user_display_name = raw_data['metadata'].get('user_display_name', '')
+        export_time = raw_data['metadata'].get('export_time', '')
 
         with self.conn.cursor() as cursor:
             cursor.execute("""
@@ -215,21 +287,17 @@ class Loader:
             export_id = cursor.fetchone()[0]
             return export_id
 
-    def _insert_conversations_and_messages(self, transformed_data: Dict[str, Any], export_id: int) -> None:
-        """Insert conversations and their messages into the database.
+    def _store_conversations(self, transformed_data: Dict[str, Any], export_id: int) -> None:
+        """Store conversations into the database.
 
         Args:
-            transformed_data: Transformed data containing conversations and messages
+            transformed_data: Transformed data containing conversations
             export_id: ID of the export record
         """
         with self.conn.cursor() as cursor:
             for conv_id, conv_data in transformed_data['conversations'].items():
                 # Insert conversation
                 self._insert_conversation(cursor, conv_id, conv_data, export_id)
-
-                # Insert messages for this conversation
-                if conv_data.get('messages'):
-                    self._insert_messages(cursor, conv_id, conv_data['messages'])
 
     def _insert_conversation(self, cursor, conv_id: str, conv_data: Dict[str, Any],
                            export_id: int) -> None:
@@ -263,6 +331,18 @@ class Loader:
             conv_data.get('last_message_time'),
             conv_data.get('message_count', 0)
         ))
+
+    def _store_messages(self, transformed_data: Dict[str, Any]) -> None:
+        """Store messages into the database.
+
+        Args:
+            transformed_data: Transformed data containing messages
+        """
+        with self.conn.cursor() as cursor:
+            for conv_id, conv_data in transformed_data['conversations'].items():
+                # Insert messages for this conversation
+                if conv_data.get('messages'):
+                    self._insert_messages(cursor, conv_id, conv_data['messages'])
 
     def _insert_messages(self, cursor, conv_id: str, messages: List[Dict[str, Any]]) -> None:
         """Insert messages for a conversation into the database.

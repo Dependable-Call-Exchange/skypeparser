@@ -69,6 +69,9 @@ class Transformer:
         # Validate the raw data
         self._validate_raw_data(raw_data)
 
+        # Validate user display name
+        user_display_name = self._validate_user_display_name(user_display_name, raw_data)
+
         # Count total conversations and messages for progress tracking
         total_conversations = len(raw_data.get('conversations', []))
         total_messages = sum(len(conv.get('MessageList', [])) for conv in raw_data.get('conversations', []))
@@ -90,6 +93,9 @@ class Transformer:
         # Process conversations
         self._process_conversations(raw_data, transformed_data, id_to_display_name)
 
+        # Validate the transformed data
+        self._validate_transformed_data(transformed_data)
+
         # Save transformed data if output directory is specified
         self._save_transformed_data(transformed_data)
 
@@ -103,7 +109,7 @@ class Transformer:
         return transformed_data
 
     def _validate_raw_data(self, raw_data: Dict[str, Any]) -> None:
-        """Validate the raw data structure.
+        """Validate the raw data structure with enhanced checks.
 
         Args:
             raw_data: Raw data to validate
@@ -113,8 +119,113 @@ class Transformer:
         """
         if not isinstance(raw_data, dict):
             raise ValueError("Raw data must be a dictionary")
+
         if 'conversations' not in raw_data:
             raise ValueError("Raw data must contain 'conversations' key")
+
+        if not isinstance(raw_data.get('conversations', []), list):
+            raise ValueError("Conversations must be a list")
+
+        if 'userId' not in raw_data:
+            raise ValueError("Raw data must contain 'userId' key")
+
+        if 'exportDate' not in raw_data:
+            raise ValueError("Raw data must contain 'exportDate' key")
+
+        # Check for required fields in conversations
+        for i, conv in enumerate(raw_data.get('conversations', [])):
+            if not isinstance(conv, dict):
+                raise ValueError(f"Conversation at index {i} must be a dictionary")
+
+            if 'id' not in conv:
+                logger.warning(f"Conversation at index {i} is missing 'id' field")
+
+            if 'MessageList' not in conv:
+                logger.warning(f"Conversation at index {i} is missing 'MessageList' field")
+            elif not isinstance(conv['MessageList'], list):
+                raise ValueError(f"MessageList for conversation at index {i} must be a list")
+
+        logger.info("Raw data validation completed successfully")
+
+    def _validate_user_display_name(self, user_display_name: Optional[str], raw_data: Dict[str, Any]) -> str:
+        """Validate and sanitize user display name.
+
+        Args:
+            user_display_name: User display name to validate
+            raw_data: Raw data containing user information
+
+        Returns:
+            str: Sanitized user display name
+        """
+        user_id = raw_data.get('userId', '')
+
+        if user_display_name is None or user_display_name.strip() == '':
+            logger.info(f"No user display name provided, using user ID: {user_id}")
+            return user_id
+
+        # Import validation function here to avoid circular imports
+        from src.utils.validation import validate_user_display_name
+
+        try:
+            sanitized_name = validate_user_display_name(user_display_name)
+            if sanitized_name != user_display_name:
+                logger.info(f"Sanitized user display name from '{user_display_name}' to '{sanitized_name}'")
+            return sanitized_name
+        except Exception as e:
+            logger.warning(f"User display name validation error: {e}. Using user ID instead.")
+            return user_id
+
+    def _validate_transformed_data(self, transformed_data: Dict[str, Any]) -> None:
+        """Validate the transformed data structure.
+
+        Args:
+            transformed_data: Transformed data to validate
+
+        Raises:
+            ValueError: If transformed data structure is invalid
+        """
+        if not isinstance(transformed_data, dict):
+            raise ValueError("Transformed data must be a dictionary")
+
+        if 'metadata' not in transformed_data:
+            raise ValueError("Transformed data must contain 'metadata' key")
+
+        if 'conversations' not in transformed_data:
+            raise ValueError("Transformed data must contain 'conversations' key")
+
+        if not isinstance(transformed_data['conversations'], dict):
+            raise ValueError("Transformed conversations must be a dictionary")
+
+        # Check for required fields in metadata
+        metadata = transformed_data.get('metadata', {})
+        required_metadata = ['user_display_name', 'export_time', 'total_conversations', 'total_messages']
+        missing_metadata = [field for field in required_metadata if field not in metadata]
+        if missing_metadata:
+            logger.warning(f"Missing metadata fields: {', '.join(missing_metadata)}")
+
+        # Check for required fields in conversations
+        for conv_id, conv in transformed_data.get('conversations', {}).items():
+            if not isinstance(conv, dict):
+                raise ValueError(f"Conversation '{conv_id}' must be a dictionary")
+
+            required_conv_fields = ['display_name', 'messages']
+            missing_conv_fields = [field for field in required_conv_fields if field not in conv]
+            if missing_conv_fields:
+                logger.warning(f"Conversation '{conv_id}' is missing fields: {', '.join(missing_conv_fields)}")
+
+            if 'messages' in conv and not isinstance(conv['messages'], list):
+                raise ValueError(f"Messages for conversation '{conv_id}' must be a list")
+
+            # Check for empty conversations
+            if 'messages' in conv and len(conv['messages']) == 0:
+                logger.warning(f"Conversation '{conv_id}' has no messages")
+
+        # Verify conversation count matches
+        if len(transformed_data.get('conversations', {})) != metadata.get('total_conversations', 0):
+            logger.warning(f"Metadata conversation count ({metadata.get('total_conversations', 0)}) " +
+                          f"doesn't match actual count ({len(transformed_data.get('conversations', {}))})")
+
+        logger.info("Transformed data validation completed successfully")
 
     def _process_metadata(self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None) -> Dict[str, Any]:
         """Process and structure the metadata.
@@ -372,7 +483,7 @@ class Transformer:
         Args:
             transformed_data: Transformed data to save
         """
-        if self.context and self.context.output_directory:
-            filename = f"{self.context.output_directory}/{self.context.output_filename}"
+        if self.context and self.context.output_dir:
+            filename = f"{self.context.output_dir}/transformed_data.json"
             with open(filename, 'w') as f:
                 json.dump(transformed_data, f)

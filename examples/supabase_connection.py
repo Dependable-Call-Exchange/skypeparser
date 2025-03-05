@@ -24,7 +24,7 @@ from pathlib import Path
 # Add the parent directory to the path so we can import the modules
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.db.etl.pipeline import ETLPipeline
+from src.db.etl.pipeline_manager import ETLPipeline
 from src.db.etl.context import ETLContext
 
 # Set up logging
@@ -114,19 +114,23 @@ def main():
         # Create ETL context
         context = ETLContext(
             db_config=db_config,
+            output_dir=config.get('output_dir', 'output'),
+            memory_limit_mb=config.get('memory_limit_mb', 1024),
+            parallel_processing=config.get('parallel_processing', True),
+            chunk_size=config.get('chunk_size', 1000),
             batch_size=config.get('batch_size', 100),
-            checkpoint_interval=config.get('checkpoint_interval', 1000)
+            task_id=f"supabase-import-{input_file.stem}"
         )
 
         # Create and run ETL pipeline
-        pipeline = ETLPipeline(context)
+        pipeline = ETLPipeline(db_config=db_config, context=context)
 
         logger.info(f"Starting ETL pipeline with file: {input_file}")
         logger.info(f"Connecting to Supabase PostgreSQL at: {db_config['host']}")
 
         # Run the pipeline
-        result = pipeline.run(
-            input_file=str(input_file),
+        result = pipeline.run_pipeline(
+            file_path=str(input_file),
             user_display_name=args.user_display_name
         )
 

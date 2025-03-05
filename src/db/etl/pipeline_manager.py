@@ -90,6 +90,9 @@ class ETLPipeline:
         """
         logger.info("Starting ETL pipeline")
 
+        # Validate input parameters
+        self._validate_pipeline_input(file_path, file_obj, user_display_name)
+
         # Set file source in context
         self.context.set_file_source(file_path, file_obj)
 
@@ -137,6 +140,49 @@ class ETLPipeline:
         finally:
             # Close any open connections
             self.loader.close_db()
+
+    def _validate_pipeline_input(
+        self,
+        file_path: Optional[str],
+        file_obj: Optional[BinaryIO],
+        user_display_name: Optional[str]
+    ) -> None:
+        """Validate pipeline input parameters.
+
+        Args:
+            file_path: Path to the Skype export file
+            file_obj: File-like object containing Skype export data
+            user_display_name: Display name of the user
+
+        Raises:
+            ValueError: If input parameters are invalid
+        """
+        # Validate file input
+        if not file_path and not file_obj:
+            error_msg = "Either file_path or file_obj must be provided"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        # Validate file path if provided
+        if file_path:
+            if not isinstance(file_path, str):
+                raise ValueError(f"file_path must be a string, got {type(file_path).__name__}")
+
+            # Check if file exists
+            if not os.path.exists(file_path):
+                raise ValueError(f"File does not exist: {file_path}")
+
+            # Check file extension
+            _, ext = os.path.splitext(file_path)
+            if ext.lower() not in ['.tar', '.json']:
+                raise ValueError(f"Unsupported file extension: {ext}. Supported extensions: .tar, .json")
+
+        # Validate user display name if provided
+        if user_display_name is not None:
+            if not isinstance(user_display_name, str):
+                raise ValueError(f"user_display_name must be a string, got {type(user_display_name).__name__}")
+
+        logger.info("Pipeline input parameters validated successfully")
 
     def _resume_pipeline(
         self,

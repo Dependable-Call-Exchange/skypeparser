@@ -9,6 +9,7 @@ import logging
 import os
 import json
 from typing import Dict, Any, Optional, BinaryIO
+import datetime
 
 from src.utils.file_handler import read_file_object, read_tarfile, read_tarfile_object
 from src.utils.validation import (
@@ -48,8 +49,8 @@ class Extractor:
         Raises:
             ValueError: If neither file_path nor file_obj is provided
         """
-        if not file_path and not file_obj:
-            raise ValueError("Either file_path or file_obj must be provided")
+        # Validate input parameters
+        self._validate_input_parameters(file_path, file_obj)
 
         # Log extraction start
         logger.info("Starting data extraction")
@@ -62,7 +63,7 @@ class Extractor:
         raw_data = self._extract_data_from_source(file_path, file_obj)
 
         # Validate the extracted data
-        validate_skype_data(raw_data)
+        self._validate_extracted_data(raw_data)
 
         # Save raw data if output directory is specified
         self._save_raw_data(raw_data, file_path)
@@ -78,6 +79,96 @@ class Extractor:
 
         logger.info(f"Extracted data with {len(raw_data.get('conversations', []))} conversations")
         return raw_data
+
+    def _validate_input_parameters(self, file_path: Optional[str], file_obj: Optional[BinaryIO]) -> None:
+        """Validate input parameters for extraction.
+
+        Args:
+            file_path: Path to the file to extract from
+            file_obj: File-like object to extract from
+
+        Raises:
+            ValueError: If input parameters are invalid
+        """
+        if not file_path and not file_obj:
+            raise ValueError("Either file_path or file_obj must be provided")
+
+        if file_path and not isinstance(file_path, str):
+            raise ValueError(f"file_path must be a string, got {type(file_path).__name__}")
+
+        if file_path and file_obj:
+            logger.warning("Both file_path and file_obj provided, using file_path")
+
+        if file_path:
+            # Check file extension
+            _, ext = os.path.splitext(file_path)
+            if ext.lower() not in ['.tar', '.json']:
+                raise ValueError(f"Unsupported file extension: {ext}. Supported extensions: .tar, .json")
+
+    def _validate_extracted_data(self, raw_data: Dict[str, Any]) -> None:
+        """Validate the extracted data structure with enhanced checks.
+
+        Args:
+            raw_data: The raw data to validate
+
+        Raises:
+            ValueError: If the data is invalid
+        """
+        try:
+            # Use the existing validation function
+            validate_skype_data(raw_data)
+
+            # Additional validation checks
+            if not raw_data.get('conversations'):
+                logger.warning("No conversations found in the extracted data")
+
+            # Check for empty conversations
+            empty_conversations = [i for i, conv in enumerate(raw_data.get('conversations', []))
+                                  if not conv.get('MessageList')]
+            if empty_conversations:
+                logger.warning(f"Found {len(empty_conversations)} empty conversations without messages")
+
+            # Check for conversations with missing IDs
+            missing_ids = [i for i, conv in enumerate(raw_data.get('conversations', []))
+                          if not conv.get('id')]
+            if missing_ids:
+                logger.warning(f"Found {len(missing_ids)} conversations with missing IDs")
+
+            # Validate message timestamps if present
+            invalid_timestamps = 0
+            for conv in raw_data.get('conversations', []):
+                for msg in conv.get('MessageList', []):
+                    if 'originalarrivaltime' in msg and not self._is_valid_timestamp(msg['originalarrivaltime']):
+                        invalid_timestamps += 1
+
+            if invalid_timestamps > 0:
+                logger.warning(f"Found {invalid_timestamps} messages with invalid timestamps")
+
+            logger.info("Extracted data validation completed successfully")
+
+        except Exception as e:
+            logger.error(f"Data validation error: {e}")
+            raise ValueError(f"Invalid Skype data: {e}")
+
+    def _is_valid_timestamp(self, timestamp: str) -> bool:
+        """Check if a timestamp string is valid.
+
+        Args:
+            timestamp: Timestamp string to validate
+
+        Returns:
+            bool: True if the timestamp is valid
+        """
+        if not timestamp or not isinstance(timestamp, str):
+            return False
+
+        # Try to parse the timestamp
+        try:
+            # Check if it's in ISO format
+            datetime.datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            return True
+        except (ValueError, TypeError):
+            return False
 
     def _extract_data_from_source(self, file_path: Optional[str] = None, file_obj: Optional[BinaryIO] = None) -> Dict[str, Any]:
         """Extract data from either a file path or a file object.
