@@ -35,6 +35,8 @@ from ..utils.validation import (
     validate_user_display_name,
     validate_db_config
 )
+from .raw_storage.storage import SkypeDataStorage
+from .clean_storage.storage import SkypeCleanDataStorage
 
 # Set up logging
 logging.basicConfig(
@@ -110,50 +112,54 @@ def timestamp_parser(timestamp: str) -> Tuple[str, str, Optional[datetime.dateti
 
 class SkypeETLPipeline:
     """
-    Implements the ETL pipeline for Skype export data.
+    Extract-Transform-Load pipeline for Skype export data.
     """
 
-    def __init__(self, db_config: Dict[str, Any] = None, output_dir: Optional[str] = None):
+    def __init__(
+        self,
+        db_name: Optional[str] = None,
+        db_user: Optional[str] = None,
+        db_password: Optional[str] = None,
+        db_host: str = "localhost",
+        db_port: int = 5432,
+        output_dir: Optional[str] = None
+    ):
         """
         Initialize the ETL pipeline.
 
         Args:
-            db_config (dict, optional): Database configuration
-            output_dir (str, optional): Directory to output files to
+            db_name (str, optional): Database name
+            db_user (str, optional): Database user
+            db_password (str, optional): Database password
+            db_host (str, optional): Database host. Defaults to "localhost".
+            db_port (int, optional): Database port. Defaults to 5432.
+            output_dir (str, optional): Output directory for transformed data
         """
-        # Load configuration if not provided
-        if db_config is None:
-            from ..utils.config import load_config, get_db_config
-            config = load_config()
-            db_config = get_db_config(config)
-
-        # Store configuration
-        self.db_config = db_config
+        self.db_config = {
+            'dbname': db_name,
+            'user': db_user,
+            'password': db_password,
+            'host': db_host,
+            'port': db_port
+        }
         self.output_dir = output_dir
+        self.conn = None
+        self.raw_storage = None
+        self.clean_storage = None
+
+        # Initialize storage if database config is provided
+        if all(v is not None for v in [db_name, db_user, db_password]):
+            try:
+                validate_db_config(self.db_config)
+                self.raw_storage = SkypeDataStorage(self.db_config)
+                self.clean_storage = SkypeCleanDataStorage(self.db_config)
+                logger.info("Storage initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize storage: {e}")
 
         # Load message types configuration
         from ..utils.config import load_config
         self.config = load_config(message_types_file='config/message_types.json')
-
-        # Initialize database connection
-        self.conn = None
-        self.cursor = None
-
-        # Validate database configuration if provided
-        if db_config:
-            try:
-                validate_db_config(db_config)
-            except ValidationError as e:
-                logger.warning(f"Invalid database configuration: {e}")
-                self.db_config = None
-
-        # Validate and create output directory if provided
-        if output_dir:
-            try:
-                validate_directory(output_dir, create_if_missing=True)
-            except ValidationError as e:
-                logger.warning(f"Invalid output directory: {e}")
-                self.output_dir = None
 
     def connect_db(self) -> None:
         """
@@ -185,6 +191,15 @@ class SkypeETLPipeline:
         if self.conn:
             self.conn.close()
             logger.info("Database connection closed")
+
+        # Close storage connections if available
+        if self.raw_storage:
+            self.raw_storage.close()
+
+        if self.clean_storage:
+            self.clean_storage.close()
+
+        logger.info("All database connections closed")
 
     def extract(self, file_path: str = None, file_obj: BinaryIO = None) -> Dict[str, Any]:
         """
@@ -901,19 +916,38 @@ class SkypeETLPipeline:
         """
         logger.info("Starting loading phase")
 
-        if not self.conn:
-            error_msg = "Database connection not available"
+        if not self.conn and not (self.raw_storage and self.clean_storage):
+            error_msg = "Database connection or storage not available"
             logger.error(error_msg)
             raise ValueError(error_msg)
 
         try:
-            # Insert raw export data and get export ID
-            export_id = self._insert_raw_export(raw_data, transformed_data, file_source)
+            # Use storage classes if available
+            if self.raw_storage and self.clean_storage:
+                # Store raw data
+                file_name = file_source or "skype_export"
+                raw_export_id = self.raw_storage.store_raw_data(
+                    data=raw_data,
+                    file_name=file_name,
+                    export_date=transformed_data['metadata'].get('exportDate')
+                )
 
-            # Insert conversations and messages
-            self._insert_conversations_and_messages(transformed_data, export_id)
+                # Store transformed data
+                self.clean_storage.store_transformed_data(
+                    transformed_data=transformed_data,
+                    raw_export_id=raw_export_id
+                )
 
-            return export_id
+                return raw_export_id
+            else:
+                # Legacy direct database operations
+                # Insert raw export data and get export ID
+                export_id = self._insert_raw_export(raw_data, transformed_data, file_source)
+
+                # Insert conversations and messages
+                self._insert_conversations_and_messages(transformed_data, export_id)
+
+                return export_id
 
         except Exception as e:
             logger.error(f"Error during loading phase: {e}")
