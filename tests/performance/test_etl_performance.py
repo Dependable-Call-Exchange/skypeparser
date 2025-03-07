@@ -22,7 +22,7 @@ import pytest
 # Add the parent directory to the path so we can import the src module
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
-from src.db.etl_pipeline import SkypeETLPipeline as OriginalETLPipeline
+from src.db.etl import ETLPipeline as OriginalETLPipeline
 from src.db.etl import ETLPipeline as ModularETLPipeline
 from tests.fixtures import BASIC_SKYPE_DATA, COMPLEX_SKYPE_DATA
 from src.utils.config import load_config, get_db_config

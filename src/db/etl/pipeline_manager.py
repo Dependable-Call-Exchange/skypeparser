@@ -763,7 +763,7 @@ class ETLPipeline:
             'error_message': str(error),
             'traceback': traceback.format_exc(),
             'phase': getattr(self.context, 'current_phase', 'unknown'),
-            'timestamp': datetime.datetime.now().isoformat(),
+            'timestamp': datetime.now().isoformat(),
             'context': {}
         }
 

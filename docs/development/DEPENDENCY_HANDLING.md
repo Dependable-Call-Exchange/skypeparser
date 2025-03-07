@@ -4,6 +4,13 @@ This document outlines the centralized dependency handling approach implemented 
 
 ## Overview
 
+The Skype Parser project uses two complementary approaches to handle dependencies:
+
+1. **Centralized dependency handling** for optional external libraries (via `src/utils/dependencies.py`)
+2. **Dependency Injection (DI) framework** for internal components (via `src/utils/di.py` and `src/utils/service_registry.py`)
+
+## External Dependency Handling
+
 The Skype Parser project now uses a centralized approach to handle external dependencies across all modules. This approach ensures consistent behavior when dealing with optional dependencies like BeautifulSoup and psycopg2.
 
 ## Dependency Utility Module
@@ -173,6 +180,195 @@ __all__ = [
     'new_dependency'
 ]
 ```
+
+## Dependency Injection Framework
+
+The Skype Parser project implements a dependency injection framework to promote SOLID principles, particularly the Dependency Inversion Principle. This framework helps make components more testable, maintainable, and loosely coupled.
+
+### Key Components
+
+1. **Service Provider (`src/utils/di.py`)**: A container that manages service registrations and instantiations.
+2. **Service Registry (`src/utils/service_registry.py`)**: Centralizes the registration of services with the DI container.
+3. **Interfaces (`src/utils/interfaces.py`)**: Defines protocols (interfaces) that establish contracts for services.
+
+### Types of Service Registration
+
+The DI framework supports three types of service registration:
+
+1. **Singleton**: A single instance shared throughout the application
+   ```python
+   provider.register_singleton(DatabaseConnectionProtocol, db_connection)
+   provider.register_singleton_class(FileHandlerProtocol, FileHandler)
+   ```
+
+2. **Transient**: A new instance created each time the service is requested
+   ```python
+   provider.register_transient(TransformerProtocol, Transformer)
+   ```
+
+3. **Factory**: A custom function that creates the service
+   ```python
+   provider.register_factory(ComplexServiceProtocol, create_complex_service)
+   ```
+
+### Resolving Dependencies
+
+Services can be resolved from the DI container using the `get_service` function:
+
+```python
+from src.utils.di import get_service
+from src.utils.interfaces import DatabaseConnectionProtocol
+
+# Get the registered database connection
+db_connection = get_service(DatabaseConnectionProtocol)
+```
+
+### Best Practices for Dependency Injection
+
+When working with the Skype Parser project, follow these best practices for dependency injection:
+
+1. **Program to Interfaces**: Use the protocols defined in `interfaces.py` rather than concrete implementations.
+
+2. **Constructor Injection**: Accept dependencies through the constructor.
+   ```python
+   # Good
+   def __init__(self, db_connection: DatabaseConnectionProtocol, file_handler: FileHandlerProtocol):
+       self.db_connection = db_connection
+       self.file_handler = file_handler
+
+   # Avoid
+   def __init__(self):
+       self.db_connection = DatabaseConnection()  # Direct instantiation
+   ```
+
+3. **Use the Service Registry**: Register services through the service registry rather than directly instantiating them.
+
+4. **Resolve Through DI Container**: Obtain dependencies from the DI container rather than creating them directly.
+
+5. **Isolate Third-Party Dependencies**: Wrap third-party libraries in your own interfaces.
+
+### Example: Using Dependency Injection
+
+Here's an example of properly using dependency injection in a class:
+
+```python
+from src.utils.interfaces import DatabaseConnectionProtocol, FileHandlerProtocol
+
+class ExampleService:
+    def __init__(
+        self,
+        db_connection: DatabaseConnectionProtocol,
+        file_handler: FileHandlerProtocol
+    ):
+        self.db_connection = db_connection
+        self.file_handler = file_handler
+
+    def process_file(self, file_path: str) -> None:
+        # Use injected dependencies
+        data = self.file_handler.read_file(file_path)
+        self.db_connection.execute("INSERT INTO table VALUES (%s)", {"data": data})
+```
+
+To use this service with the DI container:
+
+```python
+from src.utils.di import get_service
+from src.utils.service_registry import register_all_services
+from src.utils.interfaces import DatabaseConnectionProtocol, FileHandlerProtocol
+
+# Register services
+register_all_services(db_config=db_config)
+
+# Resolve dependencies from the container
+db_connection = get_service(DatabaseConnectionProtocol)
+file_handler = get_service(FileHandlerProtocol)
+
+# Create the service with dependencies
+service = ExampleService(db_connection, file_handler)
+```
+
+### Service Lifetime Management
+
+Consider the appropriate lifetime for your services:
+
+- **Singleton**: Use for services that maintain state that should be shared (e.g., database connections)
+- **Transient**: Use for stateless services that perform operations but don't store state
+- **Factory**: Use for services with complex creation logic or those that depend on non-service parameters
+
+## SOLID Principles and Dependency Injection
+
+The dependency injection framework helps enforce SOLID principles:
+
+### Single Responsibility Principle (SRP)
+
+Each class should have only one reason to change. DI helps by:
+- Separating creation logic from business logic
+- Allowing classes to focus on their core functionality
+
+### Open/Closed Principle (OCP)
+
+Classes should be open for extension but closed for modification. DI helps by:
+- Allowing new implementations to be injected without changing existing code
+- Supporting plugin-like architecture through interfaces
+
+### Liskov Substitution Principle (LSP)
+
+Subtypes should be substitutable for their base types. DI helps by:
+- Working with interfaces rather than concrete implementations
+- Ensuring implementations adhere to contracts defined by protocols
+
+### Interface Segregation Principle (ISP)
+
+Clients should not be forced to depend on methods they do not use. DI helps by:
+- Promoting focused, specific interfaces
+- Allowing clients to depend only on the interfaces they need
+
+### Dependency Inversion Principle (DIP)
+
+High-level modules should not depend on low-level modules; both should depend on abstractions. DI helps by:
+- Explicitly inverting control flow
+- Ensuring high-level modules depend on abstractions (interfaces)
+- Allowing low-level modules to be swapped out easily
+
+## Testing with Dependency Injection
+
+One of the primary benefits of DI is improved testability. Here's how to use the DI framework for testing:
+
+```python
+# Create mock dependencies
+mock_db_connection = MagicMock(spec=DatabaseConnectionProtocol)
+mock_file_handler = MagicMock(spec=FileHandlerProtocol)
+
+# Register mocks with the DI container
+provider = ServiceProvider()
+provider.register_singleton(DatabaseConnectionProtocol, mock_db_connection)
+provider.register_singleton(FileHandlerProtocol, mock_file_handler)
+
+# Setup mock behavior
+mock_file_handler.read_file.return_value = {"test": "data"}
+
+# Create the service to test
+service = ExampleService(mock_db_connection, mock_file_handler)
+
+# Test the service
+service.process_file("test.json")
+
+# Verify mock interactions
+mock_file_handler.read_file.assert_called_once_with("test.json")
+mock_db_connection.execute.assert_called_once()
+```
+
+## Common Anti-Patterns to Avoid
+
+1. **Service Locator**: Avoid calling `get_service` within methods. Instead, use constructor injection.
+
+2. **Direct Instantiation**: Don't create dependencies directly within a class. This creates tight coupling.
+
+3. **Static Dependencies**: Avoid using static or global state. This makes testing difficult.
+
+4. **Circular Dependencies**: Be careful not to create circular references between services.
+
+5. **Overuse of DI**: Not everything needs to be injected; use DI where it adds value in terms of testing and maintainability.
 
 ## Conclusion
 

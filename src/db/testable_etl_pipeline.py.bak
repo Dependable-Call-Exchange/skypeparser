@@ -1,0 +1,352 @@
+#!/usr/bin/env python3
+"""
+Testable ETL Pipeline for Skype Export Data
+
+This module provides a testable version of the ETL pipeline with dependency injection
+support for easier testing. It allows injecting mock objects for file reading,
+database connections, and other dependencies.
+"""
+
+import logging
+import json
+import os
+from typing import Dict, Any, Optional, Callable, BinaryIO, List, Union
+
+# Import from the modular ETL pipeline instead of the deprecated one
+from src.db.etl import ETLPipeline
+from src.db.etl.context import ETLContext
+from src.db.etl.extractor import Extractor
+from src.db.etl.transformer import Transformer
+from src.db.etl.loader import Loader
+
+# Import protocols for DI
+from ..utils.interfaces import (
+    FileHandlerProtocol,
+    ContentExtractorProtocol,
+    MessageHandlerFactoryProtocol,
+    StructuredDataExtractorProtocol,
+    DatabaseConnectionProtocol
+)
+
+# Import DI utilities
+from ..utils.di import get_service_provider, get_service
+from ..utils.service_registry import register_all_services
+
+# Import additional modules
+from src.utils.db_connection import DatabaseConnection
+from src.utils.service_registry import register_core_services, register_database_connection, register_etl_services
+from src.parser.content_extractor import ContentExtractor
+from src.utils.message_type_handlers import SkypeMessageHandlerFactory
+from src.utils.structured_data_extractor import StructuredDataExtractor
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+class TestableETLPipeline:
+    """
+    A testable version of the ETL pipeline with dependency injection support.
+
+    This class allows injecting mock objects for file reading, database connections,
+    and other dependencies, making it easier to test the ETL pipeline in isolation.
+    """
+
+    def __init__(
+        self,
+        db_config: Dict[str, Any],
+        use_di: bool = False,
+        read_file_func: Optional[Callable[[str, Optional[str]], str]] = None,
+        tar_extract_func: Optional[Callable[[str, Optional[str]], Dict[str, Any]]] = None,
+        validate_file_exists_func: Optional[Callable[[str], bool]] = None,
+        validate_json_file_func: Optional[Callable[[str], bool]] = None,
+        validate_user_display_name_func: Optional[Callable[[str], str]] = None,
+        db_connection: Optional[Any] = None
+    ) -> None:
+        """
+        Initialize a TestableETLPipeline with injected dependencies.
+
+        Args:
+            db_config: Database configuration
+            use_di: Whether to use dependency injection
+            read_file_func: Function to read files
+            tar_extract_func: Function to extract tar files
+            validate_file_exists_func: Function to validate file existence
+            validate_json_file_func: Function to validate JSON files
+            validate_user_display_name_func: Function to validate user display name
+            db_connection: Database connection
+        """
+        # Save injected dependencies
+        self.db_config = db_config
+        self.use_di = use_di
+        self.read_file_func = read_file_func
+        self.tar_extract_func = tar_extract_func
+        self.validate_file_exists_func = validate_file_exists_func
+        self.validate_json_file_func = validate_json_file_func
+        self.validate_user_display_name_func = validate_user_display_name_func
+        self.db_connection = db_connection or DatabaseConnection(db_config)
+
+        # Initialize components
+        self.context = ETLContext(db_config=db_config)
+
+        # Create content extractor
+        self.content_extractor = ContentExtractor()
+
+        # Create message handler factory
+        self.message_handler_factory = SkypeMessageHandlerFactory()
+
+        # Create structured data extractor
+        self.structured_data_extractor = StructuredDataExtractor()
+
+        # Initialize pipeline
+        if self.use_di:
+            # Use the service registry functions
+            provider = register_core_services()
+            register_database_connection(db_config=db_config, provider=provider)
+            register_etl_services(context=self.context, provider=provider)
+
+            self.pipeline = ETLPipeline(db_config=db_config, context=self.context)
+        else:
+            # Create manually without DI
+            self.pipeline = ETLPipeline(db_config=db_config, context=self.context)
+            self.pipeline.extractor = Extractor(context=self.context)
+            self.pipeline.transformer = Transformer(context=self.context)
+            self.pipeline.loader = Loader(context=self.context, db_connection=self.db_connection)
+
+            # Inject dependencies if provided
+            if self.read_file_func:
+                self.pipeline.extractor.read_file = self.read_file_func
+
+            if self.tar_extract_func:
+                self.pipeline.extractor.extract_tar = self.tar_extract_func
+
+            # Directly assign the validation function to the extractor
+            if self.validate_file_exists_func:
+                # Replace the validate_file_exists function in the extractor
+                import types
+                from src.utils.validation import validate_file_exists as original_validate
+
+                # Create a function that replaces the original with our mock
+                def patched_validate(file_path, *args, **kwargs):
+                    return self.validate_file_exists_func(file_path)
+
+                # Replace the validate_file_exists in the module namespace
+                import src.utils.validation
+                self._original_validate = src.utils.validation.validate_file_exists
+                src.utils.validation.validate_file_exists = patched_validate
+
+            if self.validate_json_file_func:
+                self.pipeline.extractor.validate_json_file = self.validate_json_file_func
+
+            if self.validate_user_display_name_func:
+                self.pipeline.extractor.validate_user_display_name = self.validate_user_display_name_func
+
+    def __del__(self):
+        """Restore original validate function when object is deleted."""
+        if hasattr(self, '_original_validate'):
+            import src.utils.validation
+            src.utils.validation.validate_file_exists = self._original_validate
+
+    def run_pipeline(
+        self,
+        file_path: Optional[str] = None,
+        file_obj: Optional[BinaryIO] = None,
+        is_tar: bool = False,
+        user_display_name: Optional[str] = None,
+        resume_from_checkpoint: bool = False,
+        checkpoint_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Run the ETL pipeline with the injected dependencies.
+
+        Args:
+            file_path: Path to the Skype export file
+            file_obj: File object (alternative to file_path)
+            is_tar: Whether the file is a tar file
+            user_display_name: Display name of the user
+            resume_from_checkpoint: Whether to resume from a checkpoint
+            checkpoint_id: ID of the checkpoint to resume from
+
+        Returns:
+            Dictionary with the results of the pipeline run
+        """
+        # Override the internal validation in ETLPipeline._validate_pipeline_input
+        # to use our injected validator instead of os.path.exists
+
+        # Save the original method for restoration later
+        original_validate_method = self.pipeline._validate_pipeline_input
+
+        # Create a custom validation method that uses our injected validator
+        def custom_validate_input(self_pipeline, file_path_arg, file_obj_arg, user_display_name_arg):
+            """Custom validation that uses injected validators."""
+            # Check that at least one of file_path or file_obj is provided
+            if file_path_arg is None and file_obj_arg is None:
+                error_msg = "Either file_path or file_obj must be provided"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+
+            # Validate file_path if provided, using the injected validator
+            if file_path_arg is not None:
+                if not isinstance(file_path_arg, str):
+                    error_msg = f"file_path must be a string, got {type(file_path_arg).__name__}"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
+                # Use the injected validator if available
+                validate_file_exists = getattr(self.pipeline.extractor, "validate_file_exists", None)
+
+                if validate_file_exists and not validate_file_exists(file_path_arg):
+                    error_msg = f"File does not exist: {file_path_arg}"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
+        # Replace the validation method temporarily
+        self.pipeline._validate_pipeline_input = custom_validate_input.__get__(self.pipeline, type(self.pipeline))
+
+        try:
+            return self.pipeline.run_pipeline(
+                file_path=file_path,
+                file_obj=file_obj,
+                user_display_name=user_display_name,
+                resume_from_checkpoint=resume_from_checkpoint
+            )
+        finally:
+            # Restore the original method
+            self.pipeline._validate_pipeline_input = original_validate_method
+
+    def extract(
+        self,
+        file_path: Optional[str] = None,
+        file_obj: Optional[BinaryIO] = None
+    ) -> Dict[str, Any]:
+        """
+        Extract data from a Skype export file.
+
+        Args:
+            file_path: Path to the Skype export file
+            file_obj: File object (alternative to file_path)
+
+        Returns:
+            Dictionary with the extracted data
+        """
+        return self.pipeline.extractor.extract(
+            file_path=file_path,
+            file_obj=file_obj
+        )
+
+    def transform(
+        self,
+        raw_data: Dict[str, Any],
+        user_display_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Transform raw Skype data into a structured format.
+
+        Args:
+            raw_data: Raw Skype data
+            user_display_name: Display name of the user
+
+        Returns:
+            Dictionary with the transformed data
+        """
+        return self.pipeline.transformer.transform(
+            raw_data=raw_data,
+            user_display_name=user_display_name
+        )
+
+    def load(
+        self,
+        transformed_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Load transformed data into the database.
+
+        Args:
+            transformed_data: Transformed Skype data
+
+        Returns:
+            Dictionary with the results of the loading operation
+        """
+        return self.pipeline.loader.load(transformed_data=transformed_data)
+
+    def save_checkpoint(
+        self,
+        phase: str,
+        data: Dict[str, Any],
+        checkpoint_id: Optional[str] = None
+    ) -> str:
+        """
+        Save a checkpoint for the current pipeline state.
+
+        Args:
+            phase: Current phase of the pipeline
+            data: Data to save in the checkpoint
+            checkpoint_id: Optional ID for the checkpoint
+
+        Returns:
+            ID of the saved checkpoint
+        """
+        return self.pipeline.save_checkpoint(
+            phase=phase,
+            data=data,
+            checkpoint_id=checkpoint_id
+        )
+
+    def load_checkpoint(
+        self,
+        checkpoint_id: str
+    ) -> Dict[str, Any]:
+        """
+        Load a checkpoint by ID.
+
+        Args:
+            checkpoint_id: ID of the checkpoint to load
+
+        Returns:
+            Checkpoint data
+        """
+        return self.pipeline.load_checkpoint(checkpoint_id=checkpoint_id)
+
+    def get_available_checkpoints(self) -> List[str]:
+        """
+        Get a list of available checkpoint IDs.
+
+        Returns:
+            List of checkpoint IDs
+        """
+        return self.pipeline.get_available_checkpoints()
+
+    def connect_db(self):
+        """Connect to the database."""
+        self.pipeline.loader.connect_db()
+
+    def close_db(self):
+        """Close the database connection."""
+        self.pipeline.loader.close_db()
+
+    @classmethod
+    def load_from_checkpoint(
+        cls,
+        checkpoint_id: str,
+        db_config: Optional[Dict[str, Any]] = None,
+        output_dir: Optional[str] = None
+    ) -> 'TestableETLPipeline':
+        """
+        Create a new pipeline instance from a checkpoint.
+
+        Args:
+            checkpoint_id: ID of the checkpoint to load
+            db_config: Database configuration dictionary
+            output_dir: Directory for output files
+
+        Returns:
+            New TestableETLPipeline instance with the checkpoint loaded
+        """
+        pipeline = cls(db_config=db_config, output_dir=output_dir)
+        pipeline.load_checkpoint(checkpoint_id)
+        return pipeline
+
+if __name__ == "__main__":
+    # This module is not meant to be run directly
+    # It should be imported and used as a library
+    print("This module is not meant to be run directly.")
+    print("Please import it and use the TestableETLPipeline class instead.")
+    print("See the README.md file for usage examples.")

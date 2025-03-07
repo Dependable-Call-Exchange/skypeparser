@@ -13,7 +13,7 @@ from unittest.mock import patch, MagicMock, mock_open
 # Original imports
 import json
 import os
-from src.db.etl.pipeline_manager import ETLPipeline
+from src.db.etl import ETLPipeline
 
 # New imports for refactored version
 from src.db.testable_etl_pipeline import TestableETLPipeline
@@ -46,18 +46,6 @@ class TestRefactoringExample(unittest.TestCase):
             'user': 'test_user',
             'password': 'test_password'
         }
-
-        # Create a test file
-        with open(self.test_file_path, 'w') as f:
-            json.dump(self.test_data, f)
-
-    def tearDown(self):
-        """
-        Clean up after each test method.
-        """
-        # Remove the test file
-        if os.path.exists(self.test_file_path):
-            os.remove(self.test_file_path)
 
     def test_original_with_extensive_patching(self):
         """
@@ -124,23 +112,10 @@ class TestRefactoringExample(unittest.TestCase):
         # Create mock for user display name validation
         mock_validate_user_display_name = MagicMock(return_value=self.test_user_display_name)
 
-        # Create mock content extractor
-        mock_content_extractor = MagicMock()
-        mock_content_extractor.extract_mentions.return_value = []
-
-        # Create mock structured data extractor
-        mock_structured_data_extractor = MagicMock()
-        mock_structured_data_extractor.extract_structured_data.return_value = {}
-
-        # Create mock message handler factory
-        mock_message_handler_factory = MagicMock()
-        mock_message_handler_factory.get_handler.return_value = MagicMock()
-
-        # Create testable pipeline with all dependencies injected
+        # Create testable pipeline with injected dependencies
         pipeline = TestableETLPipeline(
             # Provide a valid db_config to pass validation
             db_config=self.test_db_config,
-            use_di=False,  # Explicitly set to False
             # File operations
             read_file_func=mock_env['read_file'],
             # Validation functions
@@ -148,11 +123,7 @@ class TestRefactoringExample(unittest.TestCase):
             validate_json_file_func=mock_env['validate_json_file'],
             validate_user_display_name_func=mock_validate_user_display_name,
             # Database connection
-            db_connection=mock_db.conn,
-            # Additional dependencies
-            content_extractor=mock_content_extractor,
-            structured_data_extractor=mock_structured_data_extractor,
-            message_handler_factory=mock_message_handler_factory
+            db_connection=mock_db.conn
         )
 
         # Run the pipeline

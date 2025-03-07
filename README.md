@@ -162,6 +162,51 @@ Or run a specific test file:
 pytest tests/unit/test_etl_pipeline.py
 ```
 
+## Development
+
+### Code Quality and SOLID Principles
+
+This project uses a combination of linters and static analyzers to enforce code quality and SOLID design principles:
+
+- **mypy**: Strict type checking to ensure proper interface usage and dependency injection
+- **pylint**: Enforces various SOLID principles through design rules
+- **flake8**: Checks for code style and common bugs
+- **pre-commit**: Automates checks before committing code
+
+A custom checker is also included to detect direct instantiation of service classes in constructors, enforcing the Dependency Inversion Principle.
+
+#### Setting up the development environment
+
+1. Install development dependencies:
+   ```bash
+   pip install -r requirements-dev.txt
+   ```
+
+2. Install pre-commit hooks:
+   ```bash
+   pre-commit install
+   ```
+
+3. Run checks manually:
+   ```bash
+   # Run all pre-commit hooks
+   pre-commit run --all-files
+
+   # Run DI compliance check only
+   python scripts/check_di_compliance.py src/
+
+   # Run mypy type checking
+   mypy src/ tests/
+   ```
+
+#### SOLID principles enforced
+
+- **Single Responsibility**: Limits on class attributes and methods
+- **Open/Closed**: Encourages proper abstraction and extension
+- **Liskov Substitution**: Checks for proper inheritance patterns
+- **Interface Segregation**: Limits constructor parameters and interface complexity
+- **Dependency Inversion**: Prevents direct instantiation of services, encourages injection
+
 ## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.

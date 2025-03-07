@@ -26,7 +26,7 @@ warnings.warn(
 )
 
 # For backward compatibility, expose any constants or functions that might be imported directly
-from ..parser.parser_module import timestamp_parser
+from ..parser.core_parser import timestamp_parser
 
 # Database schema definitions (for backward compatibility)
 RAW_EXPORTS_TABLE = "skype_raw_exports"
