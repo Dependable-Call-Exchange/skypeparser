@@ -31,16 +31,16 @@ def run_old_pipeline(file_path: str, user_display_name: str, db_config: Dict[str
         Dict containing the results of the ETL pipeline
     """
     # Import the old ETL pipeline
-    from src.db.etl_pipeline import SkypeETLPipeline
+    from src.db.etl import ETLPipeline
 
     # Initialize the pipeline
-    pipeline = SkypeETLPipeline(
+    pipeline = ETLPipeline(
         db_name=db_config.get('dbname'),
         db_user=db_config.get('user'),
         db_password=db_config.get('password'),
         db_host=db_config.get('host', 'localhost'),
         db_port=db_config.get('port', 5432),
-        output_dir='output'
+        use_di=False
     )
 
     # Run the pipeline

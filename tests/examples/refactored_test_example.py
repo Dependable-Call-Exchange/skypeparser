@@ -13,7 +13,7 @@ from unittest.mock import patch, MagicMock, mock_open
 # Original imports
 import json
 import os
-from src.db.etl_pipeline import SkypeETLPipeline
+from src.db.etl import ETLPipeline
 
 # New imports for refactored version
 from src.db.testable_etl_pipeline import TestableETLPipeline
@@ -69,7 +69,7 @@ class TestRefactoringExample(unittest.TestCase):
             mock_access.return_value = True
 
             # Create pipeline and run test
-            pipeline = SkypeETLPipeline(db_config=None)  # No DB for this test
+            pipeline = ETLPipeline(db_config={}, use_di=False)  # No DB for this test
             result = pipeline.run_pipeline(
                 file_path=self.test_file_path,
                 user_display_name=self.test_user_display_name

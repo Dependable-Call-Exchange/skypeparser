@@ -36,13 +36,13 @@ warnings.warn(
 )
 
 # Import functions from parser module
-from ..parser.parser_module import (
-    read_file,
-    read_tarfile,
+from ..parser.core_parser import (
     timestamp_parser,
-    content_parser,
-    tag_stripper
+    content_parser
 )
+
+# Import file handling functions
+from ..utils.file_handler import read_file, read_tarfile
 
 # Set up logging
 logging.basicConfig(
@@ -282,7 +282,6 @@ def import_skype_data(conn, data, user_display_name):
                     if raw_content:
                         try:
                             cleaned_content = content_parser(raw_content)
-                            cleaned_content = tag_stripper(cleaned_content)
                         except Exception as e:
                             logger.warning(f"Error cleaning content: {e}")
 

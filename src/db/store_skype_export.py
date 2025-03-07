@@ -28,8 +28,8 @@ from datetime import datetime
 from typing import Dict, Optional
 from pathlib import Path
 
-from ..parser.parser_module import read_file, read_tarfile
 from ..parser.core_parser import content_parser
+from ..utils.file_handler import read_file, read_tarfile
 from .raw_storage import SkypeDataStorage
 
 # Issue deprecation warning
