@@ -5,13 +5,9 @@ Utility functions for the Skype Parser project.
 from .file_utils import safe_filename
 from .file_handler import (
     read_file,
-    read_file_object,
+    read_file_obj,
     read_tarfile,
-    read_tarfile_object,
-    extract_tar_contents,
-    extract_tar_object,
-    list_tar_contents,
-    list_tar_object
+    read_tar_file_obj
 )
 from .dependencies import (
     BEAUTIFULSOUP_AVAILABLE,
@@ -46,13 +42,9 @@ __all__ = [
     # File utilities
     'safe_filename',
     'read_file',
-    'read_file_object',
+    'read_file_obj',
     'read_tarfile',
-    'read_tarfile_object',
-    'extract_tar_contents',
-    'extract_tar_object',
-    'list_tar_contents',
-    'list_tar_object',
+    'read_tar_file_obj',
 
     # Dependencies
     'BEAUTIFULSOUP_AVAILABLE',

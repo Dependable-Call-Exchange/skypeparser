@@ -39,6 +39,23 @@ class ContentExtractorProtocol(Protocol):
         ...
 
 
+# Structured data extraction interface
+class StructuredDataExtractorProtocol(Protocol):
+    """Protocol for extractors that convert raw message data to structured data."""
+
+    def extract_structured_data(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Extract structured data from a message.
+
+        Args:
+            message: The raw message data
+
+        Returns:
+            Structured data extracted from the message
+        """
+        ...
+
+
 # Message handling interfaces
 class MessageHandlerProtocol(Protocol):
     """Protocol for message type handlers."""

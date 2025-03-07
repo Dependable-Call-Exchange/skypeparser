@@ -71,7 +71,7 @@ class FileHandler(FileHandlerProtocol):
                 return data
             elif ext == '.tar':
                 # Read TAR file
-                return self.read_tar_file(file_path)
+                return self.read_tarfile(file_path)
             else:
                 error_msg = f"Unsupported file extension: {ext}. Supported extensions: .json, .tar"
                 logger.error(error_msg)
@@ -85,7 +85,7 @@ class FileHandler(FileHandlerProtocol):
             logger.error(error_msg)
             raise
 
-    def read_file_obj(self, file_obj: BinaryIO, file_name: Optional[str] = None) -> Dict[str, Any]:
+    def read_file_object(self, file_obj: BinaryIO, file_name: Optional[str] = None) -> Dict[str, Any]:
         """Read data from a file-like object.
 
         Args:
@@ -99,159 +99,179 @@ class FileHandler(FileHandlerProtocol):
             ValueError: If the file format is not supported
             Exception: If an error occurs during file reading
         """
-        logger.info(f"Reading from file object{' ' + file_name if file_name else ''}")
+        logger.info("Reading from file object")
 
-        # Determine file type based on name if provided
-        file_type = None
-        if file_name:
-            _, ext = os.path.splitext(file_name)
-            file_type = ext.lower()
+        # Validate file object
+        validate_file_object(file_obj)
 
         try:
-            if file_type == '.json' or not file_type:
-                # Try to read as JSON
+            # Determine file type based on file_name if provided
+            if file_name:
+                _, ext = os.path.splitext(file_name)
+                ext = ext.lower()
+
+                if ext == '.json':
+                    # Read JSON from file object
+                    file_obj.seek(0)
+                    data = json.load(file_obj)
+                    logger.info("Successfully read JSON from file object")
+                    return data
+                elif ext == '.tar':
+                    # Read TAR from file object
+                    return self.read_tar_file_obj(file_obj)
+
+            # If file_name is not provided or doesn't have a recognized extension,
+            # try to determine content type based on content
+            # First try JSON
+            try:
                 file_obj.seek(0)
-                content = file_obj.read()
-                if isinstance(content, bytes):
-                    content = content.decode('utf-8')
-                data = json.loads(content)
+                data = json.load(file_obj)
                 logger.info("Successfully read JSON from file object")
                 return data
-            elif file_type == '.tar':
-                # Read as TAR file
+            except json.JSONDecodeError:
+                # Not JSON, try TAR
                 return self.read_tar_file_obj(file_obj)
-            else:
-                error_msg = f"Unsupported file type: {file_type}. Supported types: .json, .tar"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
-        except json.JSONDecodeError as e:
-            error_msg = f"Error decoding JSON from file object: {e}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
         except Exception as e:
             error_msg = f"Error reading from file object: {e}"
             logger.error(error_msg)
             raise
 
-    def read_tar_file(self, file_path: str) -> Dict[str, Any]:
-        """Read data from a TAR file.
+    def read_tarfile(self, file_path: str, auto_select: bool = False) -> Dict[str, Any]:
+        """
+        Read data from a tar file.
 
         Args:
-            file_path: Path to the TAR file
+            file_path: Path to the tar file
+            auto_select: Whether to automatically select the main data file
 
         Returns:
-            Data read from the TAR file
+            The data read from the tar file
 
         Raises:
-            ValueError: If the TAR file does not contain a valid Skype export
-            Exception: If an error occurs during TAR file reading
+            ValueError: If the tar file doesn't exist or is invalid
+            Exception: If an error occurs during file reading
         """
-        logger.info(f"Reading TAR file: {file_path}")
+        logger.info(f"Reading tar file: {file_path}")
+
+        # Validate tar file
+        validate_file_exists(file_path)
+        validate_tar_file(file_path)
 
         try:
+            # Open TAR file
             with tarfile.open(file_path, 'r') as tar:
-                # Find the messages.json file
-                messages_file = None
-                for member in tar.getmembers():
-                    if member.name.endswith('messages.json'):
-                        messages_file = member
-                        break
+                # List all files in the archive
+                members = tar.getmembers()
+                logger.debug(f"Files in archive: {[m.name for m in members]}")
 
-                if not messages_file:
-                    error_msg = f"No messages.json file found in TAR archive: {file_path}"
+                # Look for JSON files
+                json_files = [m for m in members if m.name.lower().endswith('.json')]
+
+                if not json_files:
+                    error_msg = "No JSON files found in TAR archive"
                     logger.error(error_msg)
                     raise ValueError(error_msg)
 
-                # Extract and read the messages.json file
-                f = tar.extractfile(messages_file)
+                # Either auto-select or use the first JSON file
+                if auto_select:
+                    # Try to find the main data file (usually messages.json or similar)
+                    # This is a simplified heuristic and might need adjustment
+                    main_file_candidates = [
+                        m for m in json_files
+                        if 'message' in m.name.lower() or 'export' in m.name.lower()
+                    ]
+
+                    if main_file_candidates:
+                        selected_file = main_file_candidates[0]
+                    else:
+                        selected_file = json_files[0]
+                else:
+                    selected_file = json_files[0]
+
+                logger.info(f"Selected JSON file from archive: {selected_file.name}")
+
+                # Extract and read the selected file
+                f = tar.extractfile(selected_file)
                 if f is None:
-                    error_msg = f"Failed to extract messages.json from TAR archive: {file_path}"
+                    error_msg = f"Failed to extract {selected_file.name} from TAR archive"
                     logger.error(error_msg)
                     raise ValueError(error_msg)
 
-                content = f.read().decode('utf-8')
-                data = json.loads(content)
-                logger.info(f"Successfully read messages.json from TAR file: {file_path}")
+                # Read JSON data
+                data = json.load(f)
+                logger.info(f"Successfully read JSON from TAR archive: {selected_file.name}")
                 return data
-        except tarfile.ReadError as e:
+        except Exception as e:
             error_msg = f"Error reading TAR file {file_path}: {e}"
             logger.error(error_msg)
-            raise ValueError(error_msg)
-        except Exception as e:
-            error_msg = f"Error processing TAR file {file_path}: {e}"
-            logger.error(error_msg)
             raise
+
+    # Keep the original method names as aliases for backward compatibility
+    def read_file_obj(self, file_obj: BinaryIO, file_name: Optional[str] = None) -> Dict[str, Any]:
+        """Alias for read_file_object for backward compatibility."""
+        return self.read_file_object(file_obj, file_name)
+
+    def read_tar_file(self, file_path: str) -> Dict[str, Any]:
+        """Alias for read_tarfile for backward compatibility."""
+        return self.read_tarfile(file_path)
 
     def read_tar_file_obj(self, file_obj: BinaryIO) -> Dict[str, Any]:
-        """Read data from a TAR file-like object.
-
-        Args:
-            file_obj: File-like object containing a TAR archive
-
-        Returns:
-            Data read from the TAR file object
-
-        Raises:
-            ValueError: If the TAR file does not contain a valid Skype export
-            Exception: If an error occurs during TAR file reading
-        """
-        logger.info("Reading from TAR file object")
+        """Read data from a tar file object."""
+        logger.info("Reading from tar file object")
 
         try:
-            # Ensure we're at the beginning of the file
-            file_obj.seek(0)
-
+            # Open TAR file from file object
             with tarfile.open(fileobj=file_obj, mode='r') as tar:
-                # Find the messages.json file
-                messages_file = None
-                for member in tar.getmembers():
-                    if member.name.endswith('messages.json'):
-                        messages_file = member
-                        break
+                # List all files in the archive
+                members = tar.getmembers()
+                logger.debug(f"Files in archive: {[m.name for m in members]}")
 
-                if not messages_file:
-                    error_msg = "No messages.json file found in TAR archive"
+                # Look for JSON files
+                json_files = [m for m in members if m.name.lower().endswith('.json')]
+
+                if not json_files:
+                    error_msg = "No JSON files found in TAR archive"
                     logger.error(error_msg)
                     raise ValueError(error_msg)
 
-                # Extract and read the messages.json file
-                f = tar.extractfile(messages_file)
+                # Use the first JSON file
+                selected_file = json_files[0]
+                logger.info(f"Selected JSON file from archive: {selected_file.name}")
+
+                # Extract and read the selected file
+                f = tar.extractfile(selected_file)
                 if f is None:
-                    error_msg = "Failed to extract messages.json from TAR archive"
+                    error_msg = f"Failed to extract {selected_file.name} from TAR archive"
                     logger.error(error_msg)
                     raise ValueError(error_msg)
 
-                content = f.read().decode('utf-8')
-                data = json.loads(content)
-                logger.info("Successfully read messages.json from TAR file object")
+                # Read JSON data
+                data = json.load(f)
+                logger.info(f"Successfully read JSON from TAR archive: {selected_file.name}")
                 return data
-        except tarfile.ReadError as e:
-            error_msg = f"Error reading TAR file object: {e}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
         except Exception as e:
-            error_msg = f"Error processing TAR file object: {e}"
+            error_msg = f"Error reading from tar file object: {e}"
             logger.error(error_msg)
             raise
 
+# Helper functions that use a singleton FileHandler instance
 
-# Legacy function wrappers for backward compatibility
 def read_file(file_path: str) -> Dict[str, Any]:
-    """Legacy wrapper for FileHandler.read_file."""
-    handler = FileHandler()
-    return handler.read_file(file_path)
+    """Helper function to read a file using the FileHandler."""
+    from src.utils.di import get_service
+    return get_service(FileHandlerProtocol).read_file(file_path)
 
 def read_file_obj(file_obj: BinaryIO, file_name: Optional[str] = None) -> Dict[str, Any]:
-    """Legacy wrapper for FileHandler.read_file_obj."""
-    handler = FileHandler()
-    return handler.read_file_obj(file_obj, file_name)
+    """Helper function to read a file object using the FileHandler."""
+    from src.utils.di import get_service
+    return get_service(FileHandlerProtocol).read_file_object(file_obj, file_name)
 
-def read_tar_file(file_path: str) -> Dict[str, Any]:
-    """Legacy wrapper for FileHandler.read_tar_file."""
-    handler = FileHandler()
-    return handler.read_tar_file(file_path)
+def read_tarfile(file_path: str, auto_select: bool = False) -> Dict[str, Any]:
+    """Helper function to read a tar file using the FileHandler."""
+    from src.utils.di import get_service
+    return get_service(FileHandlerProtocol).read_tarfile(file_path, auto_select)
 
 def read_tar_file_obj(file_obj: BinaryIO) -> Dict[str, Any]:
-    """Legacy wrapper for FileHandler.read_tar_file_obj."""
-    handler = FileHandler()
-    return handler.read_tar_file_obj(file_obj)
+    """Helper function to read a tar file object using the FileHandler."""
+    from src.utils.di import get_service
+    return get_service(FileHandlerProtocol).read_tar_file_obj(file_obj)

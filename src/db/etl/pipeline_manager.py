@@ -17,7 +17,6 @@ from src.utils.interfaces import (
     DatabaseConnectionProtocol
 )
 from src.utils.di import get_service, get_service_provider
-from src.utils.service_registry import register_all_services
 from .context import ETLContext
 
 logger = logging.getLogger(__name__)
@@ -70,6 +69,8 @@ class ETLPipeline:
         # Register services with the dependency injection container if using DI
         self.use_di = use_di
         if use_di:
+            # Import here to avoid circular import
+            from src.utils.service_registry import register_all_services
             register_all_services(db_config=db_config, output_dir=output_dir)
 
             # Get services from the container

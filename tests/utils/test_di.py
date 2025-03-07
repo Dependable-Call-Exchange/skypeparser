@@ -55,8 +55,8 @@ def test_service_provider_singleton():
     provider.register_singleton(TestServiceProtocol, service)
 
     # Get the service twice
-    service1 = provider.get_service(TestServiceProtocol)
-    service2 = provider.get_service(TestServiceProtocol)
+    service1 = provider.get(TestServiceProtocol)
+    service2 = provider.get(TestServiceProtocol)
 
     # Check that they are the same instance
     assert service1 is service2
@@ -71,8 +71,8 @@ def test_service_provider_singleton_class():
     provider.register_singleton_class(TestServiceProtocol, TestService)
 
     # Get the service twice
-    service1 = provider.get_service(TestServiceProtocol)
-    service2 = provider.get_service(TestServiceProtocol)
+    service1 = provider.get(TestServiceProtocol)
+    service2 = provider.get(TestServiceProtocol)
 
     # Check that they are the same instance
     assert service1 is service2
@@ -83,12 +83,12 @@ def test_service_provider_transient_class():
     """Test that transient classes are instantiated each time."""
     provider = ServiceProvider()
 
-    # Register a transient class
-    provider.register_transient_class(TestServiceProtocol, TestService)
+    # Register a transient
+    provider.register_transient(TestServiceProtocol, TestService)
 
     # Get the service twice
-    service1 = provider.get_service(TestServiceProtocol)
-    service2 = provider.get_service(TestServiceProtocol)
+    service1 = provider.get(TestServiceProtocol)
+    service2 = provider.get(TestServiceProtocol)
 
     # Check that they are different instances
     assert service1 is not service2
@@ -110,8 +110,8 @@ def test_service_provider_factory():
     provider.register_factory(TestServiceProtocol, factory)
 
     # Get the service twice
-    service1 = provider.get_service(TestServiceProtocol)
-    service2 = provider.get_service(TestServiceProtocol)
+    service1 = provider.get(TestServiceProtocol)
+    service2 = provider.get(TestServiceProtocol)
 
     # Check that they are different instances with different dependencies
     assert service1 is not service2
@@ -128,7 +128,7 @@ def test_service_provider_dependency_resolution():
     provider.register_singleton_class(TestServiceProtocol, TestService)
 
     # Get the service
-    service = provider.get_service(TestServiceProtocol)
+    service = provider.get(TestServiceProtocol)
 
     # Check that the dependency was injected
     assert isinstance(service.dependency, TestDependency)
@@ -140,8 +140,8 @@ def test_service_provider_missing_service():
     provider = ServiceProvider()
 
     # Try to get a service that hasn't been registered
-    with pytest.raises(ValueError):
-        provider.get_service(TestServiceProtocol)
+    with pytest.raises(KeyError):
+        provider.get(TestServiceProtocol)
 
 
 def test_global_service_provider():
@@ -159,7 +159,9 @@ def test_global_service_provider():
     assert isinstance(service, TestService)
 
     # Clear the provider for other tests
-    provider._services.clear()
+    provider._singletons.clear()
+    provider._transients.clear()
+    provider._factories.clear()
 
 
 def test_service_override():
@@ -170,14 +172,14 @@ def test_service_override():
     provider.register_singleton_class(TestServiceProtocol, TestService)
 
     # Get the service
-    service1 = provider.get_service(TestServiceProtocol)
+    service1 = provider.get(TestServiceProtocol)
     assert isinstance(service1, TestService)
 
     # Override the service
     provider.register_singleton_class(TestServiceProtocol, AnotherTestService)
 
     # Get the service again
-    service2 = provider.get_service(TestServiceProtocol)
+    service2 = provider.get(TestServiceProtocol)
     assert isinstance(service2, AnotherTestService)
 
     # Check that they are different instances

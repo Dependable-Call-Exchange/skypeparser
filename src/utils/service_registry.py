@@ -18,13 +18,15 @@ from src.utils.interfaces import (
     DatabaseConnectionProtocol,
     ExtractorProtocol,
     TransformerProtocol,
-    LoaderProtocol
+    LoaderProtocol,
+    StructuredDataExtractorProtocol
 )
 
 # Import concrete implementations
 from src.parser.content_extractor import ContentExtractor
 from src.utils.message_type_handlers import get_handler_for_message_type, SkypeMessageHandlerFactory
 from src.utils.file_handler import FileHandler
+from src.utils.structured_data_extractor import StructuredDataExtractor
 from src.db.connection import DatabaseConnection
 from src.db.etl.extractor import Extractor
 from src.db.etl.transformer import Transformer
@@ -57,6 +59,9 @@ def register_core_services(provider: Optional[ServiceProvider] = None) -> Servic
 
     # Register file handler
     provider.register_singleton_class(FileHandlerProtocol, FileHandler)
+
+    # Register structured data extractor
+    provider.register_singleton_class(StructuredDataExtractorProtocol, StructuredDataExtractor)
 
     logger.info("Registered core services")
     return provider
