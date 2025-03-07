@@ -9,6 +9,7 @@ import logging
 import json
 import os
 from typing import Dict, Any, Optional, BinaryIO, List
+import datetime
 
 from src.utils.interfaces import (
     ExtractorProtocol,
@@ -117,6 +118,15 @@ class ETLPipeline:
         # Set user display name in context
         if user_display_name:
             self.context.user_display_name = user_display_name
+            # Always set user_id based on user_display_name
+            self.context.user_id = f"user_{hash(user_display_name) % 10000}"
+        else:
+            # Set a default user_id if user_display_name is not provided
+            self.context.user_id = "unknown_user"
+
+        # Set export_date if not already set
+        if not hasattr(self.context, 'export_date') or self.context.export_date is None:
+            self.context.export_date = datetime.datetime.now().isoformat()
 
         # Resume from checkpoint if requested
         if resume_from_checkpoint:
@@ -358,24 +368,46 @@ class ETLPipeline:
             ValueError: If checkpoint directory is not writable
             Exception: If an error occurs during checkpoint saving
         """
-        # Use provided checkpoint directory or default to output directory
-        checkpoint_dir = checkpoint_dir or self.context.output_dir
-
-        # Ensure checkpoint directory exists
-        if not os.path.exists(checkpoint_dir):
-            os.makedirs(checkpoint_dir, exist_ok=True)
-
-        # Create checkpoint file path
-        checkpoint_file = os.path.join(checkpoint_dir, f"checkpoint_{self.context.task_id}.json")
-
-        # Save context to checkpoint file
         try:
-            self.context.save_to_file(checkpoint_file)
+            # Use provided checkpoint directory or default to output directory
+            checkpoint_dir = checkpoint_dir or self.context.output_dir
+
+            # If no output directory is available, skip checkpoint
+            if not checkpoint_dir:
+                logger.warning("No checkpoint directory available, skipping checkpoint")
+                return ""
+
+            # Ensure checkpoint directory exists
+            if not os.path.exists(checkpoint_dir):
+                os.makedirs(checkpoint_dir, exist_ok=True)
+
+            # Create checkpoint file path
+            checkpoint_file = os.path.join(checkpoint_dir, f"checkpoint_{self.context.task_id}.json")
+
+            # Create a serializable representation of the context
+            checkpoint_data = {
+                'task_id': self.context.task_id,
+                'start_time': self.context.start_time.isoformat() if hasattr(self.context, 'start_time') else None,
+                'current_phase': self.context.current_phase if hasattr(self.context, 'current_phase') else None,
+                'db_config': self.context.db_config,
+                'output_dir': self.context.output_dir,
+                'memory_limit_mb': self.context.memory_limit_mb,
+                'parallel_processing': self.context.parallel_processing,
+                'chunk_size': self.context.chunk_size,
+                'batch_size': self.context.batch_size,
+                'max_workers': self.context.max_workers
+            }
+
+            # Save checkpoint data to file
+            with open(checkpoint_file, 'w') as f:
+                json.dump(checkpoint_data, f, indent=2)
+
             logger.info(f"Checkpoint saved to {checkpoint_file}")
             return checkpoint_file
         except Exception as e:
             logger.error(f"Error saving checkpoint: {e}")
-            raise
+            # Don't raise the exception, just log it and continue
+            return ""
 
     @classmethod
     def load_from_checkpoint(cls, checkpoint_file: str, db_config: Optional[Dict[str, Any]] = None) -> 'ETLPipeline':
@@ -392,24 +424,53 @@ class ETLPipeline:
             ValueError: If checkpoint file is invalid or not found
             Exception: If an error occurs during checkpoint loading
         """
-        # Validate checkpoint file
-        if not os.path.exists(checkpoint_file):
-            error_msg = f"Checkpoint file not found: {checkpoint_file}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-
-        # Load context from checkpoint file
         try:
-            context = ETLContext.load_from_file(checkpoint_file)
+            # Validate checkpoint file
+            if not os.path.exists(checkpoint_file):
+                error_msg = f"Checkpoint file not found: {checkpoint_file}"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
 
-            # Override database configuration if provided
-            if db_config:
-                context.db_config = db_config
+            # Load checkpoint data from file
+            with open(checkpoint_file, 'r') as f:
+                checkpoint_data = json.load(f)
 
-            # Create pipeline with loaded context
+            # Extract configuration from checkpoint
+            checkpoint_db_config = checkpoint_data.get('db_config', {})
+            output_dir = checkpoint_data.get('output_dir')
+            memory_limit_mb = checkpoint_data.get('memory_limit_mb', 1024)
+            parallel_processing = checkpoint_data.get('parallel_processing', True)
+            chunk_size = checkpoint_data.get('chunk_size', 1000)
+            batch_size = checkpoint_data.get('batch_size', 100)
+            max_workers = checkpoint_data.get('max_workers')
+            task_id = checkpoint_data.get('task_id')
+
+            # Use provided db_config if available, otherwise use the one from the checkpoint
+            if db_config is None:
+                db_config = checkpoint_db_config
+
+            # Create a new context with the checkpoint configuration
+            context = ETLContext(
+                db_config=db_config,
+                output_dir=output_dir,
+                memory_limit_mb=memory_limit_mb,
+                parallel_processing=parallel_processing,
+                chunk_size=chunk_size,
+                batch_size=batch_size,
+                max_workers=max_workers,
+                task_id=task_id
+            )
+
+            # Create a new pipeline with the context
             pipeline = cls(
-                db_config=context.db_config,
-                context=context
+                db_config=db_config,
+                context=context,
+                output_dir=output_dir,
+                memory_limit_mb=memory_limit_mb,
+                parallel_processing=parallel_processing,
+                chunk_size=chunk_size,
+                batch_size=batch_size,
+                max_workers=max_workers
             )
 
             logger.info(f"Pipeline loaded from checkpoint: {checkpoint_file}")
@@ -449,7 +510,7 @@ class ETLPipeline:
         """
         try:
             # Update context phase
-            self.context.set_phase('extract')
+            self.context.start_phase('extract')
 
             # Run extraction
             raw_data = self.extractor.extract(file_path=file_path, file_obj=file_obj)
@@ -484,7 +545,7 @@ class ETLPipeline:
         """
         try:
             # Update context phase
-            self.context.set_phase('transform')
+            self.context.start_phase('transform')
 
             # Run transformation
             transformed_data = self.transformer.transform(raw_data, user_display_name)
@@ -520,7 +581,7 @@ class ETLPipeline:
         """
         try:
             # Update context phase
-            self.context.set_phase('load')
+            self.context.start_phase('load')
 
             # Connect to database
             self.loader.connect_db()

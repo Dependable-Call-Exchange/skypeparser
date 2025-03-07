@@ -40,7 +40,7 @@ class ETLContext:
         'db_config', 'output_dir', 'memory_limit_mb', 'parallel_processing',
         'chunk_size', 'batch_size', 'max_workers', 'task_id', 'start_time',
         'current_phase', 'phase_results', 'checkpoints', 'errors', 'export_id',
-        'metrics'
+        'metrics', 'user_id', 'user_display_name', 'export_date'
     ]
 
     # Data attributes that need special handling for serialization
@@ -55,7 +55,10 @@ class ETLContext:
         chunk_size: int = 1000,
         batch_size: int = 100,
         max_workers: Optional[int] = None,
-        task_id: Optional[str] = None
+        task_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        user_display_name: Optional[str] = None,
+        export_date: Optional[str] = None
     ):
         """
         Initialize the ETL context.
@@ -69,6 +72,9 @@ class ETLContext:
             batch_size: Size of database batch operations
             max_workers: Maximum number of worker threads/processes
             task_id: Unique identifier for this ETL task (generated if not provided)
+            user_id: Unique identifier for the user whose data is being processed
+            user_display_name: Display name of the user
+            export_date: Date when the data was exported
         """
         # Validate configuration parameters
         self._validate_configuration(db_config, output_dir, memory_limit_mb,
@@ -88,6 +94,11 @@ class ETLContext:
         # Task identification
         self.task_id = task_id or str(uuid.uuid4())
         self.start_time = datetime.datetime.now()
+
+        # User information
+        self.user_id = user_id
+        self.user_display_name = user_display_name
+        self.export_date = export_date or datetime.datetime.now().isoformat()
 
         # Shared utilities
         self.progress_tracker = ProgressTracker()

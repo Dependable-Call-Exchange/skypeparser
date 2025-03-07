@@ -62,102 +62,63 @@ class Transformer(TransformerProtocol):
         """Transform raw Skype export data into a structured format.
 
         Args:
-            raw_data: Raw data from the extraction phase
-            user_display_name: Display name of the user
+            raw_data: Raw Skype export data
+            user_display_name: Optional display name of the user
 
         Returns:
-            Transformed data in a structured format
-
-        Raises:
-            ValueError: If raw_data is invalid
-            Exception: If an error occurs during transformation
+            Transformed data
         """
-        # Validate input data
-        self._validate_input_data(raw_data)
-
-        # Update context if available
         if self.context:
             self.context.set_phase('transform')
-            self.context.update_progress(0, "Starting transformation")
+            if user_display_name:
+                self.context.user_display_name = user_display_name
 
-        # Extract user information
-        user_id = raw_data.get('userId', '')
-        if not user_display_name and self.context:
-            user_display_name = self.context.user_display_name
+        logger.info("Starting transformation")
+        start_time = datetime.now()
 
         # Initialize result structure
         result = {
-            'user': {
-                'id': user_id,
-                'display_name': user_display_name or ''
-            },
-            'conversations': {},
             'metadata': {
                 'transformed_at': datetime.now().isoformat(),
-                'conversation_count': 0,
-                'message_count': 0
-            }
+                'conversations_count': 0,
+                'messages_count': 0
+            },
+            'conversations': {}
         }
 
-        # Get conversations from raw data
+        # Extract conversations
         conversations = raw_data.get('conversations', {})
-        total_conversations = len(conversations)
-
-        if total_conversations == 0:
-            logger.warning("No conversations found in raw data")
-            return result
-
-        # Process conversations
-        logger.info(f"Transforming {total_conversations} conversations")
-
-        # Track progress
-        processed_conversations = 0
-        total_messages = 0
+        result['metadata']['conversations_count'] = len(conversations)
 
         # Process each conversation
         for conversation_id, conversation_data in conversations.items():
             try:
                 # Transform conversation
-                transformed_conversation = self._transform_conversation(
-                    conversation_id,
-                    conversation_data,
-                    user_id,
-                    user_display_name
-                )
-
-                # Add to result
+                transformed_conversation = self._transform_conversation(conversation_id, conversation_data)
                 result['conversations'][conversation_id] = transformed_conversation
-
-                # Update counts
-                processed_conversations += 1
-                conversation_message_count = len(transformed_conversation.get('messages', []))
-                total_messages += conversation_message_count
-
-                # Update progress
-                if self.context:
-                    progress = (processed_conversations / total_conversations) * 100
-                    self.context.update_progress(
-                        progress,
-                        f"Processed {processed_conversations}/{total_conversations} conversations"
-                    )
-
-                logger.debug(f"Transformed conversation {conversation_id} with {conversation_message_count} messages")
-
+                result['metadata']['messages_count'] += len(transformed_conversation.get('messages', []))
             except Exception as e:
                 logger.error(f"Error transforming conversation {conversation_id}: {e}")
                 if self.context:
                     self.context.record_error('transform', f"Error transforming conversation {conversation_id}: {e}")
 
-        # Update metadata
-        result['metadata']['conversation_count'] = processed_conversations
-        result['metadata']['message_count'] = total_messages
+        # Add user information
+        if user_display_name:
+            result['user'] = {
+                'display_name': user_display_name,
+                'id': self.context.user_id if self.context and hasattr(self.context, 'user_id') else f"user_{hash(user_display_name) % 10000}"
+            }
 
-        # Update context
-        if self.context:
-            self.context.update_progress(100, f"Transformation complete: {processed_conversations} conversations, {total_messages} messages")
-            self.context.set_transformed_data(result)
+        # Add required keys for loader
+        result['user_id'] = self.context.user_id if self.context and hasattr(self.context, 'user_id') else result.get('user', {}).get('id', 'unknown_user')
+        result['export_date'] = self.context.export_date if self.context and hasattr(self.context, 'export_date') else result['metadata']['transformed_at']
 
-        logger.info(f"Transformation complete: {processed_conversations} conversations, {total_messages} messages")
+        # Log completion
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds()
+        logger.info(f"Transformation complete: {result['metadata']['conversations_count']} conversations, {result['metadata']['messages_count']} messages")
+        logger.debug(f"Transformation completed in {duration:.2f} seconds")
+
         return result
 
     def _validate_input_data(self, raw_data: Dict[str, Any]) -> None:
@@ -188,20 +149,34 @@ class Transformer(TransformerProtocol):
         self,
         conversation_id: str,
         conversation_data: Dict[str, Any],
-        user_id: str,
-        user_display_name: Optional[str]
+        user_id: Optional[str] = None,
+        user_display_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """Transform a single conversation.
 
         Args:
             conversation_id: ID of the conversation
             conversation_data: Raw conversation data
-            user_id: ID of the user
-            user_display_name: Display name of the user
+            user_id: Optional ID of the user
+            user_display_name: Optional display name of the user
 
         Returns:
             Transformed conversation data
         """
+        # Get user ID from context if not provided
+        if user_id is None and self.context and hasattr(self.context, 'user_id'):
+            user_id = self.context.user_id
+        elif user_id is None and self.context and hasattr(self.context, 'user_display_name'):
+            # Generate a user ID from the display name if available
+            user_id = f"user_{hash(self.context.user_display_name) % 10000}"
+        elif user_id is None:
+            # Default user ID if nothing else is available
+            user_id = "unknown_user"
+
+        # Get user display name from context if not provided
+        if user_display_name is None and self.context and hasattr(self.context, 'user_display_name'):
+            user_display_name = self.context.user_display_name
+
         # Extract conversation properties
         properties = conversation_data.get('Properties', {})
         message_list = conversation_data.get('MessageList', [])

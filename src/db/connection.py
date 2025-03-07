@@ -118,35 +118,50 @@ class DatabaseConnection(DatabaseConnectionProtocol):
                 self.connection.rollback()
             raise
 
-    def execute_batch(self, query: str, params_list: List[Tuple]) -> int:
-        """Execute a batch query with multiple parameter sets.
+    def execute_batch(self, query: str, params_list: List[Dict[str, Any]]) -> None:
+        """Execute a batch of database queries.
 
         Args:
             query: SQL query to execute
-            params_list: List of parameter tuples
-
-        Returns:
-            Number of rows affected
+            params_list: List of query parameters
 
         Raises:
-            Exception: If batch execution fails
+            Exception: If query execution fails
         """
-        self._ensure_connected()
-
-        if not params_list:
-            logger.warning("No parameters provided for batch execution")
-            return 0
+        if not self.connection:
+            self.connect()
 
         try:
             execute_values(self.cursor, query, params_list)
-            affected_rows = self.cursor.rowcount
-            logger.debug(f"Batch query executed successfully, affected {affected_rows} rows")
-            return affected_rows
+            logger.debug(f"Executed batch query with {len(params_list)} parameter sets")
         except Exception as e:
-            error_msg = f"Error executing batch query: {e}"
-            logger.error(error_msg)
-            if self.connection:
-                self.connection.rollback()
+            logger.error(f"Batch query execution failed: {e}")
+            raise
+
+    def fetch_one(self, query: str, params: Optional[Union[Tuple, Dict[str, Any]]] = None) -> Optional[Tuple]:
+        """
+        Execute a query and fetch one result.
+
+        Args:
+            query: SQL query to execute
+            params: Parameters for the query
+
+        Returns:
+            A single result row or None if no results
+
+        Raises:
+            Exception: If query execution fails
+        """
+        if not self.connection:
+            self.connect()
+
+        try:
+            self.cursor.execute(query, params)
+            result = self.cursor.fetchone()
+            logger.debug(f"Executed query and fetched one result: {result}")
+            return result
+        except Exception as e:
+            logger.error(f"Query execution failed: {e}")
             raise
 
     def commit(self) -> None:
@@ -322,3 +337,16 @@ class DatabaseConnection(DatabaseConnectionProtocol):
         CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
         CREATE INDEX IF NOT EXISTS idx_message_attachments_message_id ON message_attachments(message_id);
         """
+
+    def execute(self, query: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        """
+        Execute a database query.
+
+        Args:
+            query: SQL query to execute
+            params: Query parameters
+
+        Returns:
+            Query result
+        """
+        return self.execute_query(query, params)

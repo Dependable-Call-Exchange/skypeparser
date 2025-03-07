@@ -48,18 +48,12 @@ class ContentExtractor:
                 for mention in soup.find_all('at'):
                     mention_id = mention.get('id', '')
                     mention_name = mention.get_text(strip=True)
-                    mentions.append({"id": mention_id, "name": mention_name})
+                    mentions.append({
+                        'id': mention_id,
+                        'name': mention_name
+                    })
             except Exception as e:
-                logger.warning(f"Error extracting mentions with BeautifulSoup: {e}")
-                # Fall back to regex
-                mention_matches = re.findall(r'<at id=["\'](.*?)["\']>(.*?)</at>', content)
-                for mention_id, mention_name in mention_matches:
-                    mentions.append({"id": mention_id, "name": mention_name})
-        else:
-            # Use regex directly
-            mention_matches = re.findall(r'<at id=["\'](.*?)["\']>(.*?)</at>', content)
-            for mention_id, mention_name in mention_matches:
-                mentions.append({"id": mention_id, "name": mention_name})
+                logger.error(f"Error extracting mentions: {e}")
 
         return mentions
 
@@ -244,6 +238,49 @@ class ContentExtractor:
             structured_data['formatting'] = formatting
 
         return structured_data
+
+    def extract_cleaned_content(self, content_html: str) -> str:
+        """
+        Extract cleaned content from HTML content.
+
+        Args:
+            content_html: The HTML content
+
+        Returns:
+            Cleaned text content
+        """
+        if not content_html:
+            return ""
+
+        # Remove HTML tags if BeautifulSoup is available
+        if BEAUTIFULSOUP:
+            try:
+                soup = BeautifulSoup(content_html, BS_PARSER)
+                # Replace <at> tags with their text content
+                for mention in soup.find_all('at'):
+                    mention_text = mention.get_text(strip=True)
+                    mention.replace_with(f"@{mention_text}")
+
+                # Get text content
+                text = soup.get_text(strip=True)
+                # Unescape HTML entities
+                text = html.unescape(text)
+                return text
+            except Exception as e:
+                logger.error(f"Error cleaning content with BeautifulSoup: {e}")
+
+        # Fallback: basic HTML tag removal with regex
+        try:
+            # Remove HTML tags
+            text = re.sub(r'<[^>]+>', ' ', content_html)
+            # Unescape HTML entities
+            text = html.unescape(text)
+            # Normalize whitespace
+            text = re.sub(r'\s+', ' ', text).strip()
+            return text
+        except Exception as e:
+            logger.error(f"Error cleaning content with regex: {e}")
+            return content_html
 
 
 def extract_content_data(content: str) -> Dict[str, Any]:

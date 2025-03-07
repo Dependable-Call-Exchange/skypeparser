@@ -54,8 +54,7 @@ def register_core_services(provider: Optional[ServiceProvider] = None) -> Servic
     provider.register_singleton_class(ContentExtractorProtocol, ContentExtractor)
 
     # Register message handler factory
-    provider.register_factory(MessageHandlerFactoryProtocol,
-                             lambda: get_handler_for_message_type)
+    provider.register_singleton_class(MessageHandlerFactoryProtocol, SkypeMessageHandlerFactory)
 
     # Register file handler
     provider.register_singleton_class(FileHandlerProtocol, FileHandler)

@@ -88,7 +88,7 @@ class MessageHandlerProtocol(Protocol):
 class MessageHandlerFactoryProtocol(Protocol):
     """Protocol for factories that create message handlers."""
 
-    def get_handler_for_message_type(self, message_type: str) -> MessageHandlerProtocol:
+    def get_handler(self, message_type: str) -> MessageHandlerProtocol:
         """
         Get a handler for the specified message type.
 

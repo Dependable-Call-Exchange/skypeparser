@@ -46,17 +46,16 @@ class Extractor(ExtractorProtocol):
         """Extract data from a Skype export file.
 
         Args:
-            file_path: Path to the file to extract from
-            file_obj: File-like object to extract from
+            file_path: Path to the Skype export file
+            file_obj: File-like object containing the Skype export
 
         Returns:
             Dict containing the extracted data
 
         Raises:
-            ValueError: If neither file_path nor file_obj is provided
-            ValueError: If the file is not a valid Skype export
+            ValueError: If the input parameters are invalid
+            Exception: If an error occurs during extraction
         """
-        # Validate input parameters
         self._validate_input_parameters(file_path, file_obj)
 
         # Extract data from source
@@ -71,8 +70,14 @@ class Extractor(ExtractorProtocol):
 
         # Update context if available
         if self.context:
-            self.context.set_raw_data(raw_data)
-            self.context.set_phase_status('extract', 'completed')
+            # Set raw_data directly on the context object
+            self.context.raw_data = raw_data
+
+            # Update phase status if the method exists
+            if hasattr(self.context, 'set_phase_status'):
+                self.context.set_phase_status('extract', 'completed')
+            elif hasattr(self.context, 'end_phase'):
+                self.context.end_phase('extract')
 
         return raw_data
 
@@ -106,17 +111,45 @@ class Extractor(ExtractorProtocol):
                 raise ValueError(f"Invalid file object: {e}")
 
     def _validate_extracted_data(self, raw_data: Dict[str, Any]) -> None:
-        """Validate extracted data.
+        """Validate the extracted data.
 
         Args:
-            raw_data: Extracted data to validate
+            raw_data: Raw data to validate
 
         Raises:
-            ValueError: If the data is not a valid Skype export
+            ValueError: If the data is invalid
         """
+        # Basic validation
+        if not isinstance(raw_data, dict):
+            raise ValueError("Extracted data must be a dictionary")
+
+        # Check for required fields
         try:
-            # Validate that the data is a valid Skype export
-            validate_skype_data(raw_data)
+            # Check if conversations is present
+            if 'conversations' not in raw_data:
+                raise ValueError("Missing 'conversations' field in extracted data")
+
+            # Handle both list and dictionary formats for conversations
+            conversations = raw_data['conversations']
+            if isinstance(conversations, dict):
+                # Dictionary format - validate each conversation
+                for conv_id, conv_data in conversations.items():
+                    if not isinstance(conv_data, dict):
+                        raise ValueError(f"Conversation data for {conv_id} must be a dictionary")
+                    if 'MessageList' not in conv_data:
+                        logger.warning(f"Missing 'MessageList' in conversation {conv_id}")
+            elif isinstance(conversations, list):
+                # List format - convert to expected dictionary format
+                logger.info("Converting conversations from list to dictionary format")
+                # Create a dictionary with a default conversation containing all messages
+                raw_data['conversations'] = {
+                    'default': {
+                        'MessageList': conversations
+                    }
+                }
+            else:
+                raise ValueError("'conversations' field must be a dictionary or a list")
+
         except Exception as e:
             logger.error(f"Invalid Skype export data: {e}")
             raise ValueError(f"Invalid Skype export data: {e}")

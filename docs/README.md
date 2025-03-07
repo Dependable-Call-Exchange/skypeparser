@@ -1,3 +1,51 @@
+# Skype Parser Documentation
+
+This directory contains documentation for the Skype Parser project.
+
+## Documentation Structure
+
+### User Guide
+- [Skype Data Analysis](user_guide/skype_data_analysis.md) - Information about Skype data structure and analysis
+- [Configuration](user_guide/CONFIGURATION.md) - Configuration options and settings
+- [PostgreSQL Setup](user_guide/README_POSTGRES.md) - PostgreSQL database setup instructions
+- [Supabase Integration](user_guide/SUPABASE_INTEGRATION.md) - Supabase integration guide
+- [Checkpoint Resumption](user_guide/CHECKPOINT_RESUMPTION.md) - How to resume processing from checkpoints
+- [Non-Interactive Mode](user_guide/NON_INTERACTIVE.md) - Running in non-interactive mode
+- [Content Extraction](user_guide/content_extraction.md) - Details on content extraction features
+- [Message Types](user_guide/message_types.md) - Information about supported message types
+
+### Implementation
+- [Path to MVP](implementation/path_to_mvp.md) - Implementation plan for the Minimum Viable Product
+- [Refactoring Summary](implementation/REFACTORING_SUMMARY.md) - Summary of refactoring efforts
+- [Improvements](implementation/IMPROVEMENTS.md) - Planned improvements for the project
+- [Improvement Plan](implementation/skype_parser_improvement_plan.md) - Detailed improvement plan
+- [ETL Migration Decisions](implementation/ETL_MIGRATION_DECISIONS.md) - Decisions made during ETL migration
+- [ETL Migration Plan](implementation/ETL_MIGRATION_PLAN.md) - Plan for ETL migration
+- [ETL Validation](implementation/ETL_VALIDATION.md) - Validation approach for ETL processes
+- [Migration](implementation/MIGRATION.md) - General migration guidelines
+- [Refactoring](implementation/refactoring.md) - Refactoring guidelines and approaches
+
+### Development
+- [Dependency Handling](development/DEPENDENCY_HANDLING.md) - Information about dependency injection and handling
+- [Error Handling](development/ERROR_HANDLING.md) - Guidelines for error handling in the project
+- [Consolidation Summary](development/CONSOLIDATION_SUMMARY.md) - Summary of code consolidation efforts
+- [API Documentation](development/API.md) - API documentation and specifications
+- [API Usage](development/API_USAGE.md) - Examples of API usage
+- [Factory Implementation](development/FACTORY_IMPLEMENTATION.md) - Details on factory pattern implementation
+- [Modularization Strategy](development/Modularization_Strategy.md) - Strategy for code modularization
+- [Test Factories](development/TEST_FACTORIES.md) - Information about test factory implementations
+- [Input Validation](development/INPUT_VALIDATION.md) - Guidelines for input validation
+- [Performance](development/performance.md) - Performance considerations and optimizations
+- [Test Fixes](development/test_fixes.md) - Information about test fixes and improvements
+- [Test Infrastructure](development/test_infrastructure.md) - Details on test infrastructure
+- [Contributing](development/CONTRIBUTING.md) - Guidelines for contributing to the project
+
+## Project Summary
+- [Summary](SUMMARY.md) - Overall project summary
+
+## Main README
+The main [README.md](../README.md) in the root directory provides an overview of the project, setup instructions, and basic usage information.
+
 # Skype History Parser
 
 `skype-parser` is a simple script to create pretty text files from your Skype chat history. This tool can either take in the `.tar` file or the `.json` file given to you by Skype and give you back your entire chat history in `.txt` format (beautifully formatted, too!).
@@ -12,7 +60,7 @@ Download `parser.py` and invoke it like so:
 python3 parser.py -t your_skype_username_export.tar
 ```
 
-where `your_skype_username_export.tar` is the `.tar` file your recieved from Skype upon requesting a conversation export.  
+where `your_skype_username_export.tar` is the `.tar` file your recieved from Skype upon requesting a conversation export.
 
 - If you have a `.json` file:
 
@@ -20,7 +68,7 @@ where `your_skype_username_export.tar` is the `.tar` file your recieved from Sky
 python3 parser.py messages.json
 ```
 
-where `messages.json` is the extracted `.json` file you that contains your conversation history.  
+where `messages.json` is the extracted `.json` file you that contains your conversation history.
 
 If you are not sure how you can get your export from Skype, read the [this section](#how-do-i-export-my-skype-chat-history).
 

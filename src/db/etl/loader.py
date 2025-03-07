@@ -8,6 +8,7 @@ including raw exports, conversations, and messages.
 import logging
 import json
 from typing import Dict, List, Any, Optional, Tuple
+import datetime
 
 from src.utils.interfaces import LoaderProtocol, DatabaseConnectionProtocol
 from src.utils.di import get_service
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 # Database schema definitions
 RAW_EXPORTS_TABLE = """
-CREATE TABLE IF NOT EXISTS skype_raw_exports (
+CREATE TABLE IF NOT EXISTS public.skype_raw_exports (
     export_id SERIAL PRIMARY KEY,
     user_id TEXT NOT NULL,
     export_date TIMESTAMP NOT NULL,
@@ -29,10 +30,10 @@ CREATE TABLE IF NOT EXISTS skype_raw_exports (
 """
 
 CONVERSATIONS_TABLE = """
-CREATE TABLE IF NOT EXISTS skype_conversations (
+CREATE TABLE IF NOT EXISTS public.skype_conversations (
     conversation_id TEXT PRIMARY KEY,
     display_name TEXT,
-    export_id INTEGER REFERENCES skype_raw_exports(export_id),
+    export_id INTEGER REFERENCES public.skype_raw_exports(export_id),
     first_message_time TIMESTAMP,
     last_message_time TIMESTAMP,
     message_count INTEGER,
@@ -42,9 +43,9 @@ CREATE TABLE IF NOT EXISTS skype_conversations (
 """
 
 MESSAGES_TABLE = """
-CREATE TABLE IF NOT EXISTS skype_messages (
+CREATE TABLE IF NOT EXISTS public.skype_messages (
     message_id SERIAL PRIMARY KEY,
-    conversation_id TEXT REFERENCES skype_conversations(conversation_id),
+    conversation_id TEXT REFERENCES public.skype_conversations(conversation_id),
     timestamp TIMESTAMP NOT NULL,
     sender_id TEXT NOT NULL,
     sender_name TEXT,
@@ -235,12 +236,12 @@ class Loader(LoaderProtocol):
         logger.info("Storing raw export data")
 
         # Get user ID and export date from context or use defaults
-        user_id = self.context.user_id if self.context else "unknown"
-        export_date = self.context.export_date if self.context else "NOW()"
+        user_id = self.context.user_id if self.context and hasattr(self.context, 'user_id') and self.context.user_id is not None else "unknown_user"
+        export_date = self.context.export_date if self.context and hasattr(self.context, 'export_date') and self.context.export_date is not None else datetime.datetime.now().isoformat()
 
         # Insert raw export data
         query = """
-        INSERT INTO skype_raw_exports (user_id, export_date, raw_data, file_source)
+        INSERT INTO public.skype_raw_exports (user_id, export_date, raw_data, file_source)
         VALUES (%s, %s, %s, %s)
         RETURNING export_id
         """
@@ -291,7 +292,7 @@ class Loader(LoaderProtocol):
 
         # Insert conversation
         query = """
-        INSERT INTO skype_conversations
+        INSERT INTO public.skype_conversations
         (conversation_id, display_name, export_id, first_message_time, last_message_time, message_count)
         VALUES (%s, %s, %s, %s, %s, %s)
         ON CONFLICT (conversation_id)
@@ -352,9 +353,16 @@ class Loader(LoaderProtocol):
             # Prepare parameters for batch insert
             params_list = []
             for msg in batch:
+                # Get timestamp or use a default value
+                timestamp = msg.get('timestamp')
+                if not timestamp:
+                    # Skip messages with empty timestamps
+                    logger.warning(f"Skipping message with empty timestamp: {msg}")
+                    continue
+
                 params_list.append((
                     conv_id,
-                    msg.get('timestamp'),
+                    timestamp,
                     msg.get('sender_id', ''),
                     msg.get('sender_name', ''),
                     msg.get('content', ''),
@@ -368,14 +376,15 @@ class Loader(LoaderProtocol):
 
             # Insert batch
             query = """
-            INSERT INTO skype_messages
+            INSERT INTO public.skype_messages
             (conversation_id, timestamp, sender_id, sender_name, content, html_content,
              message_type, is_edited, is_deleted, reactions, attachments)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES %s
             """
 
-            # Execute batch insert
-            self.db_connection.execute_many(query, params_list)
+            # Execute batch insert using execute_values
+            from psycopg2.extras import execute_values
+            execute_values(self.db_connection.cursor, query, params_list, template=None, page_size=self.batch_size)
 
     def _begin_transaction(self) -> None:
         """Begin a database transaction."""
