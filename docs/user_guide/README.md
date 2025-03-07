@@ -58,6 +58,20 @@ This will:
 2. Transform the data into a structured format
 3. Load the data into the configured PostgreSQL database
 
+### Example with Attachment Handling
+
+```bash
+python scripts/run_etl_pipeline.py --file path/to/skype_export.tar --user "Your Name" --download-attachments --attachments-dir ./attachments
+```
+
+This will:
+1. Extract data from the Skype export file
+2. Transform the data into a structured format
+3. Download attachments to the specified directory
+4. Generate thumbnails for image attachments
+5. Extract metadata from attachments
+6. Load the data into the configured PostgreSQL database
+
 ### Options
 
 - `--file`: Path to the Skype export file (required)
@@ -68,6 +82,10 @@ This will:
 - `--checkpoint`: Path to specific checkpoint file (optional)
 - `--batch-size`: Number of records to insert in a single batch (optional)
 - `--memory-limit`: Memory limit in MB before forcing garbage collection (optional)
+- `--download-attachments`: Download attachments from URLs (optional)
+- `--attachments-dir`: Directory to store downloaded attachments (optional)
+- `--no-thumbnails`: Disable thumbnail generation for image attachments (optional)
+- `--no-metadata`: Disable metadata extraction from attachments (optional)
 
 ## Configuration
 
@@ -93,6 +111,42 @@ The Skype Parser ETL pipeline uses configuration files to manage database connec
    }
    ```
 
+## Advanced Features
+
+The Skype Parser tool includes several advanced features:
+
+### Extended Message Type Support
+
+The tool supports a wide range of message types, including:
+
+- Text messages
+- Media messages (images, videos, audio)
+- Poll messages
+- Call events
+- Scheduled call invitations
+- Location messages
+- Contact messages
+
+For more information, see [Message Types](message_types.md).
+
+### Attachment Handling
+
+The tool can download attachments from URLs, generate thumbnails for image attachments, and extract metadata from attachments. For more information, see [Usage Examples](USAGE_EXAMPLES.md).
+
+### Analysis and Reporting
+
+The tool includes functionality for analyzing and reporting on Skype data. This includes:
+
+- Basic reporting functionality
+- Data visualization options
+- Example queries for common analytics
+
+For more information, see [Analysis and Reporting](ANALYSIS_REPORTING.md).
+
+### Enhanced CLI
+
+The tool includes an enhanced command-line interface with additional options, progress reporting, and improved logging. For more information, see [Enhanced CLI](ENHANCED_CLI.md).
+
 ## Advanced Usage
 
 For advanced usage scenarios, refer to the following guides:
@@ -103,6 +157,7 @@ For advanced usage scenarios, refer to the following guides:
 - [Content Extraction](content_extraction.md): Understand how content is extracted and processed
 - [Message Types](message_types.md): Learn about different message types and how they're handled
 - [Data Analysis](skype_data_analysis.md): Analyze the processed data
+- [Large Datasets](LARGE_DATASETS.md): Process very large datasets (millions of messages)
 
 ## Examples
 

@@ -84,6 +84,78 @@ This is useful for:
 - CI/CD pipelines
 - Batch processing
 
+## Attachment Handling
+
+The Skype Parser now supports downloading and processing attachments from Skype messages. This feature allows you to:
+
+- Download attachments from URLs to local storage
+- Organize attachments by content type (images, videos, audio, documents, etc.)
+- Generate thumbnails for image attachments
+- Extract metadata from image files
+
+### Enabling Attachment Handling
+
+To enable attachment handling, use the `--download-attachments` flag when running the ETL pipeline:
+
+```bash
+python scripts/run_etl_pipeline.py -f path/to/skype_export.tar -u "Your Name" --download-attachments
+```
+
+By default, attachments will be stored in the `output/attachments` directory. You can specify a different directory using the `--attachments-dir` option:
+
+```bash
+python scripts/run_etl_pipeline.py -f path/to/skype_export.tar -u "Your Name" --download-attachments --attachments-dir /path/to/attachments
+```
+
+### Customizing Attachment Processing
+
+You can customize attachment processing with the following options:
+
+- `--no-thumbnails`: Disable thumbnail generation for image attachments
+- `--no-metadata`: Disable metadata extraction from attachments
+
+Example:
+
+```bash
+python scripts/run_etl_pipeline.py -f path/to/skype_export.tar -u "Your Name" --download-attachments --no-thumbnails
+```
+
+### Attachment Storage Structure
+
+Attachments are automatically organized in subdirectories based on their content type:
+
+- `images/`: Image files (JPEG, PNG, GIF, etc.)
+- `videos/`: Video files (MP4, MOV, etc.)
+- `audio/`: Audio files (MP3, WAV, etc.)
+- `documents/`: Document files (PDF, DOC, etc.)
+- `other/`: Other file types
+- `thumbnails/`: Thumbnails for image attachments
+
+### Accessing Attachment Data
+
+After processing, attachment data is available in the database with additional fields:
+
+- `local_path`: Path to the downloaded file
+- `thumbnail_path`: Path to the thumbnail (for images)
+- `metadata`: Additional metadata extracted from the file (for images)
+
+You can query this data using SQL:
+
+```sql
+SELECT
+    m.id,
+    m.content,
+    a.name,
+    a.local_path,
+    a.thumbnail_path
+FROM
+    skype_messages m
+JOIN
+    message_attachments a ON m.id = a.message_id
+WHERE
+    m.conversation_id = 'your_conversation_id';
+```
+
 ## Programmatic Usage Examples
 
 ### 1. Basic ETL Pipeline

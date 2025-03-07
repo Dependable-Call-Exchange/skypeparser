@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
 """
-Skype Parser ETL Pipeline CLI
+Streaming ETL Pipeline Script
 
-This script provides a command-line interface for running the Skype Parser ETL pipeline.
-It allows users to extract, transform, and load Skype export data into a PostgreSQL database.
-
-Usage:
-    python scripts/run_etl_pipeline.py -f path/to/skype_export.tar -u "Your Name"
-    python scripts/run_etl_pipeline.py -f path/to/skype_export.tar -u "Your Name" --resume
-    python scripts/run_etl_pipeline.py -f path/to/skype_export.tar -u "Your Name" --parallel
+This script provides a command-line interface for running the Skype Parser ETL pipeline
+with streaming processing, optimized for very large datasets (millions of messages).
 """
 
 import os
@@ -16,28 +11,30 @@ import sys
 import argparse
 import logging
 import json
+import time
 from typing import Dict, Any, Optional
-from pathlib import Path
+from datetime import datetime
 
 # Add the parent directory to the path so we can import the src module
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.db.etl import ETLPipeline
+from src.db.etl import ETLContext
+from src.db.etl.streaming_processor import StreamingProcessor
 from src.utils.config import load_config, get_db_config
-from src.utils.validation import validate_skype_data
+from src.utils.di import get_service
+from src.utils.interfaces import DatabaseConnectionProtocol
 
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('etl_pipeline.log')
+        logging.FileHandler('streaming_etl.log')
     ]
 )
 logger = logging.getLogger(__name__)
-
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments.
@@ -46,7 +43,7 @@ def parse_args() -> argparse.Namespace:
         Parsed arguments
     """
     parser = argparse.ArgumentParser(
-        description='Run the Skype Parser ETL pipeline to process Skype export data',
+        description='Run the Skype Parser ETL pipeline with streaming processing for very large datasets',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
@@ -77,33 +74,10 @@ def parse_args() -> argparse.Namespace:
     # Performance options
     parser.add_argument('-m', '--memory', type=int, default=1024,
                         help='Memory limit in MB')
-    parser.add_argument('-p', '--parallel', action='store_true',
-                        help='Enable parallel processing')
-    parser.add_argument('-s', '--chunk-size', type=int, default=1000,
-                        help='Chunk size for batch processing')
-    parser.add_argument('-b', '--batch-size', type=int, default=100,
-                        help='Batch size for database operations')
-    parser.add_argument('-w', '--workers', type=int,
-                        help='Maximum number of worker threads/processes')
-
-    # Checkpoint options
-    parser.add_argument('-r', '--resume', action='store_true',
-                        help='Resume from the latest checkpoint')
-    parser.add_argument('--checkpoint',
-                        help='Resume from a specific checkpoint file')
-    parser.add_argument('--list-checkpoints', action='store_true',
-                        help='List available checkpoints and exit')
-
-    # Attachment options
-    attachment_group = parser.add_argument_group('Attachment Options')
-    attachment_group.add_argument('--download-attachments', action='store_true',
-                        help='Download attachments from URLs')
-    attachment_group.add_argument('--attachments-dir',
-                        help='Directory to store downloaded attachments (defaults to output_dir/attachments)')
-    attachment_group.add_argument('--no-thumbnails', action='store_true',
-                        help='Disable thumbnail generation for image attachments')
-    attachment_group.add_argument('--no-metadata', action='store_true',
-                        help='Disable metadata extraction from attachments')
+    parser.add_argument('-b', '--batch-size', type=int, default=1000,
+                        help='Batch size for processing and database operations')
+    parser.add_argument('--checkpoint-interval', type=int, default=10000,
+                        help='Number of messages to process before creating a checkpoint')
 
     # Debug options
     parser.add_argument('-v', '--verbose', action='store_true',
@@ -112,7 +86,6 @@ def parse_args() -> argparse.Namespace:
                         help='Enable debug logging')
 
     return parser.parse_args()
-
 
 def setup_logging(args: argparse.Namespace) -> None:
     """Set up logging based on command line arguments.
@@ -128,7 +101,6 @@ def setup_logging(args: argparse.Namespace) -> None:
 
     logging.getLogger().setLevel(log_level)
     logger.info(f"Log level set to: {logging.getLevelName(log_level)}")
-
 
 def get_config(args: argparse.Namespace) -> Dict[str, Any]:
     """Load configuration from file and override with command line arguments.
@@ -174,16 +146,9 @@ def get_config(args: argparse.Namespace) -> Dict[str, Any]:
         'db_config': db_config,
         'output_dir': args.output,
         'memory_limit_mb': args.memory,
-        'parallel_processing': args.parallel,
-        'chunk_size': args.chunk_size,
         'batch_size': args.batch_size,
-        'max_workers': args.workers,
-        'download_attachments': args.download_attachments,
-        'attachments_dir': args.attachments_dir,
-        'generate_thumbnails': not args.no_thumbnails,
-        'extract_metadata': not args.no_metadata
+        'checkpoint_interval': args.checkpoint_interval
     }
-
 
 def validate_input_file(file_path: str) -> None:
     """Validate that the input file exists and is a valid Skype export file.
@@ -204,29 +169,14 @@ def validate_input_file(file_path: str) -> None:
     if file_ext not in ['.tar', '.json']:
         logger.warning(f"Unexpected file extension: {file_ext}. Expected .tar or .json")
 
+    # Check file size
+    file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    logger.info(f"Input file size: {file_size_mb:.2f} MB")
+
     logger.info(f"Input file validated: {file_path}")
 
-
-def list_available_checkpoints(pipeline: ETLPipeline) -> None:
-    """List available checkpoints and exit.
-
-    Args:
-        pipeline: ETL pipeline instance
-    """
-    checkpoints = pipeline.get_available_checkpoints()
-
-    if not checkpoints:
-        logger.info("No checkpoints available")
-        return
-
-    logger.info(f"Available checkpoints ({len(checkpoints)}):")
-    for i, checkpoint in enumerate(checkpoints, 1):
-        checkpoint_path = Path(checkpoint)
-        logger.info(f"{i}. {checkpoint_path.name} - {checkpoint_path.parent}")
-
-
-def run_etl_pipeline(args: argparse.Namespace, config: Dict[str, Any]) -> Dict[str, Any]:
-    """Run the ETL pipeline with the given arguments and configuration.
+def run_streaming_etl(args: argparse.Namespace, config: Dict[str, Any]) -> Dict[str, Any]:
+    """Run the streaming ETL pipeline.
 
     Args:
         args: Command line arguments
@@ -235,44 +185,39 @@ def run_etl_pipeline(args: argparse.Namespace, config: Dict[str, Any]) -> Dict[s
     Returns:
         Dict containing the results of the ETL pipeline
     """
-    # Create the ETL pipeline
-    pipeline = ETLPipeline(**config)
+    logger.info("Starting streaming ETL pipeline")
+    start_time = time.time()
 
-    # List checkpoints if requested
-    if args.list_checkpoints:
-        list_available_checkpoints(pipeline)
-        sys.exit(0)
-
-    # Resume from checkpoint if requested
-    if args.checkpoint:
-        logger.info(f"Resuming from checkpoint: {args.checkpoint}")
-        pipeline = ETLPipeline.load_from_checkpoint(
-            checkpoint_file=args.checkpoint,
-            db_config=config['db_config']
-        )
-    elif args.resume:
-        # Get the latest checkpoint
-        checkpoints = pipeline.get_available_checkpoints()
-        if checkpoints:
-            latest_checkpoint = checkpoints[-1]
-            logger.info(f"Resuming from latest checkpoint: {latest_checkpoint}")
-            pipeline = ETLPipeline.load_from_checkpoint(
-                checkpoint_file=latest_checkpoint,
-                db_config=config['db_config']
-            )
-        else:
-            logger.warning("No checkpoints available to resume from")
-
-    # Run the pipeline
-    logger.info(f"Running ETL pipeline with file: {args.file}")
-    result = pipeline.run_pipeline(
-        file_path=args.file,
-        user_display_name=args.user,
-        resume_from_checkpoint=args.resume or args.checkpoint is not None
+    # Create ETL context
+    context = ETLContext(
+        db_config=config['db_config'],
+        output_dir=config['output_dir'],
+        memory_limit_mb=config['memory_limit_mb'],
+        user_display_name=args.user
     )
 
-    return result
+    # Get database connection
+    db_connection = get_service(DatabaseConnectionProtocol)
 
+    # Create streaming processor
+    processor = StreamingProcessor(context=context, db_connection=db_connection)
+
+    # Stream extract
+    conversation_iterator = processor.stream_extract(args.file)
+
+    # Stream transform and load
+    result = processor.stream_transform_load(
+        conversation_iterator=conversation_iterator,
+        batch_size=config['batch_size']
+    )
+
+    # Add execution time to result
+    end_time = time.time()
+    execution_time = end_time - start_time
+    result['execution_time_seconds'] = execution_time
+    result['execution_time_formatted'] = str(datetime.timedelta(seconds=int(execution_time)))
+
+    return result
 
 def print_results(result: Dict[str, Any]) -> None:
     """Print the results of the ETL pipeline.
@@ -280,35 +225,11 @@ def print_results(result: Dict[str, Any]) -> None:
     Args:
         result: Results from the ETL pipeline
     """
-    # Check if the pipeline completed successfully
-    if result.get('status') == 'completed':
-        logger.info("ETL pipeline completed successfully")
-        logger.info(f"Export ID: {result.get('export_id')}")
-        logger.info(f"Task ID: {result.get('task_id')}")
-
-        # Print conversation and message counts
-        logger.info(f"Processed {result.get('conversation_count', 0)} conversations")
-        logger.info(f"Processed {result.get('message_count', 0)} messages")
-
-        # Print phase statistics
-        for phase_name, phase_data in result.get('phases', {}).items():
-            logger.info(f"{phase_name.capitalize()} phase: {phase_data.get('status', 'unknown')}")
-
-            # Print phase-specific statistics
-            if phase_name == 'extract':
-                logger.info(f"  Extracted {phase_data.get('conversation_count', 0)} conversations")
-            elif phase_name == 'transform':
-                logger.info(f"  Transformed {phase_data.get('processed_conversations', 0)} conversations")
-                logger.info(f"  Transformed {phase_data.get('processed_messages', 0)} messages")
-            elif phase_name == 'load':
-                logger.info(f"  Export ID: {phase_data.get('export_id', 'unknown')}")
-    else:
-        logger.error(f"ETL pipeline failed: {result.get('error', 'Unknown error')}")
-
-        # Print phase statuses
-        for phase_name, phase_data in result.get('phases', {}).items():
-            logger.info(f"{phase_name.capitalize()} phase: {phase_data.get('status', 'unknown')}")
-
+    logger.info("Streaming ETL pipeline completed successfully")
+    logger.info(f"Execution time: {result.get('execution_time_formatted')}")
+    logger.info(f"Processed {result.get('conversations_processed', 0)} conversations")
+    logger.info(f"Processed {result.get('messages_processed', 0)} messages")
+    logger.info(f"Processing rate: {result.get('messages_processed', 0) / result.get('duration_seconds', 1):.2f} messages per second")
 
 def save_results(result: Dict[str, Any], output_dir: str) -> None:
     """Save the results of the ETL pipeline to a file.
@@ -321,19 +242,19 @@ def save_results(result: Dict[str, Any], output_dir: str) -> None:
     os.makedirs(output_dir, exist_ok=True)
 
     # Generate output file path
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     output_file = os.path.join(
         output_dir,
-        f"etl_result_{result.get('task_id', 'unknown')}.json"
+        f"streaming_etl_result_{timestamp}.json"
     )
 
     # Save results to file
     try:
         with open(output_file, 'w') as f:
-            json.dump(result, f, indent=2)
+            json.dump(result, f, indent=2, default=str)
         logger.info(f"Results saved to: {output_file}")
     except Exception as e:
         logger.error(f"Failed to save results to {output_file}: {e}")
-
 
 def main():
     """Main function."""
@@ -350,8 +271,8 @@ def main():
         # Get configuration
         config = get_config(args)
 
-        # Run the ETL pipeline
-        result = run_etl_pipeline(args, config)
+        # Run the streaming ETL pipeline
+        result = run_streaming_etl(args, config)
 
         # Print the results
         print_results(result)
@@ -368,9 +289,8 @@ def main():
         logger.error(f"Invalid input: {e}")
         sys.exit(1)
     except Exception as e:
-        logger.exception(f"Error running ETL pipeline: {e}")
+        logger.exception(f"Error running streaming ETL pipeline: {e}")
         sys.exit(1)
-
 
 if __name__ == '__main__':
     main()

@@ -416,3 +416,216 @@ For specialized storage, the clean storage module also includes dedicated tables
 - `clean_skype_message_locations`: Stores location data
 
 This dual approach provides both flexibility (through the JSONB column) and structured querying capabilities (through the specialized tables).
+
+## Enhanced Attachment Handling
+
+The latest version includes enhanced attachment handling capabilities for media and file attachments in Skype messages.
+
+### Attachment Handler
+
+The new `AttachmentHandler` class provides functionality for handling attachments in Skype messages, including:
+
+- Downloading attachments to local storage
+- Organizing attachments by content type (images, videos, audio, documents, etc.)
+- Generating thumbnails for image attachments
+- Extracting metadata from image files
+- Enriching attachment data with local paths and additional information
+
+### Using the Attachment Handler
+
+To process attachments in your application:
+
+```python
+from src.utils.attachment_handler import AttachmentHandler
+
+# Initialize attachment handler with a storage directory
+handler = AttachmentHandler(storage_dir="path/to/attachments")
+
+# Process a message with attachments
+message = {
+    "id": "msg123",
+    "content": "Sent you a file",
+    "attachments": [
+        {
+            "type": "file",
+            "name": "document.pdf",
+            "url": "https://example.com/document.pdf",
+            "content_type": "application/pdf",
+            "size": 1024000
+        }
+    ]
+}
+
+# Process all attachments in the message
+processed_message = handler.process_message_attachments(message)
+
+# Access the enriched attachment data
+attachment = processed_message["attachments"][0]
+local_path = attachment.get("local_path")
+print(f"Downloaded to: {local_path}")
+```
+
+### Enriched Attachment Data
+
+The attachment handler enriches attachment data with additional information:
+
+```json
+{
+  "type": "file",
+  "name": "document.pdf",
+  "url": "https://example.com/document.pdf",
+  "content_type": "application/pdf",
+  "size": 1024000,
+  "local_path": "/path/to/attachments/documents/document.pdf"
+}
+```
+
+For image attachments, additional metadata and a thumbnail path are included:
+
+```json
+{
+  "type": "image",
+  "name": "photo.jpg",
+  "url": "https://example.com/photo.jpg",
+  "content_type": "image/jpeg",
+  "size": 512000,
+  "local_path": "/path/to/attachments/images/photo.jpg",
+  "thumbnail_path": "/path/to/attachments/thumbnails/thumb_photo.jpg",
+  "metadata": {
+    "format": "JPEG",
+    "mode": "RGB",
+    "width": 1920,
+    "height": 1080,
+    "exif": {
+      "tag_271": "Camera Manufacturer",
+      "tag_272": "Camera Model"
+    }
+  }
+}
+```
+
+### Storage Organization
+
+Attachments are automatically organized in subdirectories based on their content type:
+
+- `images/`: Image files (JPEG, PNG, GIF, etc.)
+- `videos/`: Video files (MP4, MOV, etc.)
+- `audio/`: Audio files (MP3, WAV, etc.)
+- `documents/`: Document files (PDF, DOC, etc.)
+- `other/`: Other file types
+- `thumbnails/`: Thumbnails for image files
+
+## Advanced Message Type Handling
+
+### Poll Messages
+
+Enhanced support for poll messages now includes detailed extraction of:
+
+- Poll title
+- Poll options with vote counts
+- Selected options (by the current user)
+- Total vote count
+- Poll status (open/closed)
+- Vote visibility (public/private)
+- Poll creator
+
+Example of extracted poll data:
+
+```json
+{
+  "poll_title": "What's your favorite programming language?",
+  "poll_options": [
+    {
+      "text": "Python",
+      "vote_count": 5,
+      "is_selected": false
+    },
+    {
+      "text": "JavaScript",
+      "vote_count": 3,
+      "is_selected": true
+    },
+    {
+      "text": "Java",
+      "vote_count": 2,
+      "is_selected": false
+    }
+  ],
+  "poll_metadata": {
+    "status": "open",
+    "vote_visibility": "public",
+    "creator": "John Doe",
+    "total_votes": 10,
+    "created_at": "2023-06-15T14:30:00Z"
+  }
+}
+```
+
+### Scheduled Call Messages
+
+Enhanced support for scheduled call messages now includes detailed extraction of:
+
+- Call title
+- Start time and date
+- End time or duration
+- Organizer
+- Participants
+- Description
+- Meeting link (Teams, Zoom, Google Meet, etc.)
+- Call ID or meeting ID
+
+Example of extracted scheduled call data:
+
+```json
+{
+  "scheduled_call": {
+    "title": "Weekly Team Meeting",
+    "start_time": "2023-06-20T10:00:00",
+    "duration_minutes": 60,
+    "organizer": "Meeting Organizer",
+    "participants": ["John Doe", "Jane Smith"],
+    "description": "Discuss project progress and next steps",
+    "meeting_link": "https://teams.microsoft.com/l/meetup-join/...",
+    "call_id": "meeting_id"
+  }
+}
+```
+
+### Adding Support for More Message Types
+
+To add support for additional message types, follow these steps:
+
+1. Identify the structure of the new message type
+2. Create a new handler class in `src.utils.message_type_handlers.py`
+3. Register the new handler in `SkypeMessageHandlerFactory`
+4. Update the `message_types.json` configuration if needed
+5. Write tests for the new handler
+
+Example of a custom message type handler:
+
+```python
+class MyNewTypeHandler(MessageTypeHandler):
+    def can_handle(self, message_type: str) -> bool:
+        return message_type == 'CustomType'
+
+    def extract_structured_data(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        data = super().extract_structured_data(message)
+
+        # Extract your custom data
+        data['custom_field'] = 'value'
+
+        return data
+```
+
+Then register your handler in the factory:
+
+```python
+class SkypeMessageHandlerFactory(MessageHandlerFactoryProtocol):
+    def __init__(self):
+        self.handlers = [
+            # ... existing handlers
+            MyNewTypeHandler(),
+            # Keep UnknownMessageHandler last
+            UnknownMessageHandler()
+        ]
+```

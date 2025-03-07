@@ -20,11 +20,12 @@ def get_test_db_config() -> Dict[str, Any]:
         Dict[str, Any]: Database configuration dictionary
     """
     return {
-        "host": os.environ.get("POSTGRES_TEST_HOST", "localhost"),
-        "port": os.environ.get("POSTGRES_TEST_PORT", 5432),
-        "database": os.environ.get("POSTGRES_TEST_DB", "test_skype_parser"),
-        "user": os.environ.get("POSTGRES_TEST_USER", "postgres"),
-        "password": os.environ.get("POSTGRES_TEST_PASSWORD", "postgres"),
+        "host": os.environ.get("POSTGRES_HOST", "localhost"),
+        "port": int(os.environ.get("POSTGRES_PORT", 5432)),
+        "database": os.environ.get("POSTGRES_DB", "test_skype_parser"),
+        "user": os.environ.get("POSTGRES_USER", "postgres"),
+        "password": os.environ.get("POSTGRES_PASSWORD", "postgres"),
+        "sslmode": os.environ.get("POSTGRES_SSL_MODE", "prefer")
     }
 
 
@@ -51,7 +52,8 @@ def test_db_connection(config: Optional[Dict[str, Any]] = None) -> Generator[psy
         port=config["port"],
         database=config["database"],
         user=config["user"],
-        password=config["password"]
+        password=config["password"],
+        sslmode=config["sslmode"]
     )
     conn.autocommit = True
 
@@ -120,6 +122,10 @@ def is_db_available(config: Optional[Dict[str, Any]] = None) -> bool:
     Returns:
         bool: True if database is available, False otherwise
     """
+    # Check if testing is enabled via environment variable
+    if os.environ.get("POSTGRES_TEST_DB") != "true":
+        return False
+
     if config is None:
         config = get_test_db_config()
 
@@ -130,9 +136,11 @@ def is_db_available(config: Optional[Dict[str, Any]] = None) -> bool:
             database=config["database"],
             user=config["user"],
             password=config["password"],
+            sslmode=config["sslmode"],
             connect_timeout=3  # Short timeout for quick check
         )
         conn.close()
         return True
-    except Exception:
+    except Exception as e:
+        print(f"Database connection failed: {e}")
         return False

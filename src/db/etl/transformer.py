@@ -7,6 +7,7 @@ into a structured format suitable for database loading.
 
 import logging
 import json
+import os
 from typing import Dict, Any, Optional, List, Callable, Union
 import concurrent.futures
 from datetime import datetime
@@ -18,6 +19,7 @@ from src.utils.interfaces import (
     StructuredDataExtractorProtocol
 )
 from src.utils.di import get_service
+from src.utils.attachment_handler import AttachmentHandler
 from .context import ETLContext
 
 logger = logging.getLogger(__name__)
@@ -307,6 +309,19 @@ class Transformer(TransformerProtocol):
         """
         transformed_messages = []
 
+        # Initialize attachment handler if needed
+        attachment_handler = None
+        if self.context and self.context.download_attachments:
+            # Create attachments directory if it doesn't exist
+            if self.context.attachments_dir and not os.path.exists(self.context.attachments_dir):
+                os.makedirs(self.context.attachments_dir, exist_ok=True)
+
+            # Initialize attachment handler
+            attachment_handler = AttachmentHandler(
+                storage_dir=self.context.attachments_dir,
+            )
+            logger.info(f"Initialized attachment handler with storage directory: {self.context.attachments_dir}")
+
         for message in messages:
             try:
                 # Get message type
@@ -326,6 +341,18 @@ class Transformer(TransformerProtocol):
                     # Add extracted content
                     transformed_message['content_html'] = content_html
                     transformed_message['content_text'] = content_text
+
+                    # Process attachments if enabled
+                    if attachment_handler and 'attachments' in transformed_message:
+                        try:
+                            # Process attachments
+                            processed_message = attachment_handler.process_message_attachments(transformed_message)
+                            transformed_message = processed_message
+                            logger.debug(f"Processed {len(transformed_message.get('attachments', []))} attachments for message in conversation {conversation_id}")
+                        except Exception as e:
+                            logger.warning(f"Error processing attachments for message in conversation {conversation_id}: {e}")
+                            if self.context:
+                                self.context.record_error('transform', f"Error processing attachments for message in conversation {conversation_id}: {e}")
 
                     # Add to result
                     transformed_messages.append(transformed_message)

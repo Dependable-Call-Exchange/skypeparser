@@ -9,7 +9,7 @@ import logging
 import json
 import os
 from typing import Dict, Any, Optional, BinaryIO, List
-import datetime
+from datetime import datetime
 
 from src.utils.interfaces import (
     ExtractorProtocol,
@@ -20,10 +20,14 @@ from src.utils.interfaces import (
 from src.utils.di import get_service, get_service_provider
 from .context import ETLContext
 
+# Configure logger
 logger = logging.getLogger(__name__)
 
 class ETLPipeline:
-    """Main ETL pipeline class that orchestrates the ETL process."""
+    """
+    Main ETL pipeline class that orchestrates the extraction, transformation,
+    and loading of Skype export data.
+    """
 
     def __init__(
         self,
@@ -41,18 +45,29 @@ class ETLPipeline:
         """Initialize the ETL pipeline.
 
         Args:
-            db_config: Database configuration dictionary
-            output_dir: Optional directory to save intermediate files
-            memory_limit_mb: Memory limit in MB before forcing garbage collection
-            parallel_processing: Whether to use parallel processing for transformations
-            chunk_size: Size of message chunks for batch processing
-            batch_size: Size of database batch operations
-            max_workers: Maximum number of worker threads/processes
-            task_id: Unique identifier for this ETL task (generated if not provided)
-            context: Optional existing ETLContext to use (for resuming from checkpoints)
-            use_di: Whether to use dependency injection for resolving dependencies
+            db_config: Database configuration
+            output_dir: Directory to store output files
+            memory_limit_mb: Memory limit in MB
+            parallel_processing: Whether to use parallel processing
+            chunk_size: Size of chunks for processing
+            batch_size: Size of batches for database operations
+            max_workers: Maximum number of workers for parallel processing
+            task_id: Task ID for the pipeline
+            context: Optional ETL context to use
+            use_di: Whether to use dependency injection
         """
-        # Use provided context or create a new one
+        self.db_config = db_config
+        self.output_dir = output_dir
+        self.memory_limit_mb = memory_limit_mb
+        self.parallel_processing = parallel_processing
+        self.chunk_size = chunk_size
+        self.batch_size = batch_size
+        self.max_workers = max_workers
+        self.task_id = task_id
+        self.use_di = use_di
+        self.logger = logger
+
+        # Initialize context
         if context:
             self.context = context
         else:
@@ -67,28 +82,20 @@ class ETLPipeline:
                 task_id=task_id
             )
 
-        # Register services with the dependency injection container if using DI
-        self.use_di = use_di
+        # Initialize services
         if use_di:
-            # Import here to avoid circular import
-            from src.utils.service_registry import register_all_services
-            register_all_services(db_config=db_config, output_dir=output_dir)
-
-            # Get services from the container
             self.extractor = get_service(ExtractorProtocol)
             self.transformer = get_service(TransformerProtocol)
             self.loader = get_service(LoaderProtocol)
+            self.db_connection = get_service(DatabaseConnectionProtocol)
         else:
-            # Create components directly
-            from .extractor import Extractor
-            from .transformer import Transformer
-            from .loader import Loader
+            # For testing, allow services to be injected
+            self.extractor = None
+            self.transformer = None
+            self.loader = None
+            self.db_connection = None
 
-            self.extractor = Extractor(context=self.context)
-            self.transformer = Transformer(context=self.context)
-            self.loader = Loader(context=self.context)
-
-        logger.info("ETL pipeline initialized")
+        self.logger.info("ETL pipeline initialized")
 
     def run_pipeline(
         self,
@@ -112,25 +119,27 @@ class ETLPipeline:
             ValueError: If input parameters are invalid
             Exception: If an error occurs during pipeline execution
         """
+        # Resume from checkpoint if requested
+        if resume_from_checkpoint:
+            return self._resume_pipeline(file_path, file_obj, user_display_name)
+
         # Validate input parameters
         self._validate_pipeline_input(file_path, file_obj, user_display_name)
 
         # Set user display name in context
         if user_display_name:
             self.context.user_display_name = user_display_name
-            # Always set user_id based on user_display_name
-            self.context.user_id = f"user_{hash(user_display_name) % 10000}"
+            # Only set user_id if it's not already set
+            if not hasattr(self.context, 'user_id') or self.context.user_id is None:
+                self.context.user_id = f"user_{hash(user_display_name) % 10000}"
         else:
-            # Set a default user_id if user_display_name is not provided
-            self.context.user_id = "unknown_user"
+            # Set a default user_id if user_display_name is not provided and user_id is not set
+            if not hasattr(self.context, 'user_id') or self.context.user_id is None:
+                self.context.user_id = "unknown_user"
 
         # Set export_date if not already set
         if not hasattr(self.context, 'export_date') or self.context.export_date is None:
             self.context.export_date = datetime.datetime.now().isoformat()
-
-        # Resume from checkpoint if requested
-        if resume_from_checkpoint:
-            return self._resume_pipeline(file_path, file_obj, user_display_name)
 
         # Initialize results dictionary
         results = {
@@ -383,101 +392,143 @@ class ETLPipeline:
             # Re-raise exception
             raise
 
-    def save_checkpoint(self, checkpoint_dir: Optional[str] = None) -> str:
-        """Save the current pipeline state to a checkpoint file.
+    def save_checkpoint(self, checkpoint_dir=None):
+        """
+        Save the current pipeline state to a checkpoint file.
 
         Args:
-            checkpoint_dir: Directory to save the checkpoint file
+            checkpoint_dir (str, optional): Directory to save the checkpoint file.
+                Defaults to output_dir.
 
         Returns:
-            Path to the saved checkpoint file
+            str: Path to the created checkpoint file.
 
         Raises:
-            ValueError: If checkpoint directory is not writable
-            Exception: If an error occurs during checkpoint saving
+            IOError: If the checkpoint file cannot be created.
         """
         try:
-            # Use provided checkpoint directory or default to output directory
+            # Use output_dir if checkpoint_dir is not provided
             checkpoint_dir = checkpoint_dir or self.context.output_dir
 
-            # If no output directory is available, skip checkpoint
-            if not checkpoint_dir:
-                logger.warning("No checkpoint directory available, skipping checkpoint")
-                return ""
+            # Create checkpoint directory if it doesn't exist
+            os.makedirs(checkpoint_dir, exist_ok=True)
 
-            # Ensure checkpoint directory exists
-            if not os.path.exists(checkpoint_dir):
-                os.makedirs(checkpoint_dir, exist_ok=True)
-
-            # Create checkpoint file path
-            checkpoint_file = os.path.join(checkpoint_dir, f"checkpoint_{self.context.task_id}.json")
+            # Construct checkpoint file path
+            checkpoint_file = os.path.join(
+                checkpoint_dir,
+                f"etl_checkpoint_{self.context.task_id}.json"
+            )
 
             # Create a serializable representation of the context
             checkpoint_data = {
-                'task_id': self.context.task_id,
-                'start_time': self.context.start_time.isoformat() if hasattr(self.context, 'start_time') else None,
-                'current_phase': self.context.current_phase if hasattr(self.context, 'current_phase') else None,
-                'db_config': self.context.db_config,
-                'output_dir': self.context.output_dir,
-                'memory_limit_mb': self.context.memory_limit_mb,
-                'parallel_processing': self.context.parallel_processing,
-                'chunk_size': self.context.chunk_size,
-                'batch_size': self.context.batch_size,
-                'max_workers': self.context.max_workers
+                "task_id": self.context.task_id,
+                "start_time": self._format_datetime(self.context.start_time),
+                "current_phase": self.context.current_phase,
+                "db_config": self.context.db_config,
+                "output_dir": self.context.output_dir,
+                "memory_limit_mb": self.context.memory_limit_mb,
+                "parallel_processing": self.context.parallel_processing,
+                "chunk_size": self.context.chunk_size,
+                "batch_size": self.context.batch_size,
+                "max_workers": self.context.max_workers,
+                "phase_statuses": self.context.phase_statuses,
+                "phase_results": self.context.phase_results,
+                "checkpoints": self.context.checkpoints,
+                "errors": self.context.errors,
+                "export_id": self.context.export_id,
+                "metrics": {
+                    "start_time": self._format_datetime(self.context.metrics.get("start_time")),
+                    "memory_usage": self.context.metrics.get("memory_usage", []),
+                    "duration": {
+                        phase: {
+                            "start": self._format_datetime(times.get("start")),
+                            "end": self._format_datetime(times.get("end")),
+                            "duration": times.get("duration")
+                        } if times else {}
+                        for phase, times in self.context.metrics.get("duration", {}).items()
+                    }
+                }
             }
+
+            # Add all serializable attributes from the context
+            for attr in self.context.SERIALIZABLE_ATTRIBUTES:
+                if hasattr(self.context, attr) and attr not in checkpoint_data:
+                    value = getattr(self.context, attr)
+                    checkpoint_data[attr] = self._format_datetime(value) if isinstance(value, datetime) else value
 
             # Save checkpoint data to file
             with open(checkpoint_file, 'w') as f:
                 json.dump(checkpoint_data, f, indent=2)
 
-            logger.info(f"Checkpoint saved to {checkpoint_file}")
+            self.logger.info(f"Saved checkpoint to {checkpoint_file}")
             return checkpoint_file
         except Exception as e:
-            logger.error(f"Error saving checkpoint: {e}")
-            # Don't raise the exception, just log it and continue
-            return ""
+            self.logger.error(f"Error saving checkpoint: {str(e)}")
+            raise
+
+    def _format_datetime(self, dt_value):
+        """
+        Format a datetime object as an ISO string for JSON serialization.
+
+        Args:
+            dt_value: The datetime value to format
+
+        Returns:
+            str or None: ISO formatted string or None if input is None
+        """
+        if dt_value is None:
+            return None
+        if isinstance(dt_value, datetime):
+            return dt_value.isoformat()
+        return dt_value
 
     @classmethod
     def load_from_checkpoint(cls, checkpoint_file: str, db_config: Optional[Dict[str, Any]] = None) -> 'ETLPipeline':
-        """Load a pipeline from a checkpoint file.
+        """
+        Load a pipeline from a checkpoint file.
 
         Args:
             checkpoint_file: Path to the checkpoint file
-            db_config: Optional database configuration to override the one in the checkpoint
+            db_config: Optional database configuration to use instead of the one in the checkpoint
 
         Returns:
             A new ETLPipeline instance initialized from the checkpoint
 
         Raises:
-            ValueError: If checkpoint file is invalid or not found
-            Exception: If an error occurs during checkpoint loading
+            ValueError: If the checkpoint file does not exist or is invalid
+            Exception: If an error occurs during pipeline initialization
         """
-        try:
-            # Validate checkpoint file
-            if not os.path.exists(checkpoint_file):
-                error_msg = f"Checkpoint file not found: {checkpoint_file}"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
+        if not os.path.exists(checkpoint_file):
+            raise ValueError(f"Checkpoint file {checkpoint_file} does not exist")
 
+        try:
             # Load checkpoint data from file
             with open(checkpoint_file, 'r') as f:
                 checkpoint_data = json.load(f)
 
-            # Extract configuration from checkpoint
-            checkpoint_db_config = checkpoint_data.get('db_config', {})
-            output_dir = checkpoint_data.get('output_dir')
-            memory_limit_mb = checkpoint_data.get('memory_limit_mb', 1024)
-            parallel_processing = checkpoint_data.get('parallel_processing', True)
-            chunk_size = checkpoint_data.get('chunk_size', 1000)
-            batch_size = checkpoint_data.get('batch_size', 100)
-            max_workers = checkpoint_data.get('max_workers')
-            task_id = checkpoint_data.get('task_id')
+            # Extract context data
+            context_data = checkpoint_data
+
+            # Log warning if db_config is empty
+            if not context_data.get('db_config'):
+                logger.warning("No database configuration found in checkpoint")
 
             # Use provided db_config if available, otherwise use the one from the checkpoint
-            if db_config is None:
-                db_config = checkpoint_db_config
+            db_config = db_config or context_data.get('db_config', {})
 
-            # Create a new context with the checkpoint configuration
+            # Initialize parameters from checkpoint
+            output_dir = context_data.get('output_dir')
+            memory_limit_mb = context_data.get('memory_limit_mb', 1024)
+            parallel_processing = context_data.get('parallel_processing', True)
+            chunk_size = context_data.get('chunk_size', 1000)
+            batch_size = context_data.get('batch_size', 100)
+            max_workers = context_data.get('max_workers')
+            task_id = context_data.get('task_id')
+            user_id = context_data.get('user_id')
+            user_display_name = context_data.get('user_display_name')
+            export_date = context_data.get('export_date')
+
+            # Create a new context with the extracted parameters
             context = ETLContext(
                 db_config=db_config,
                 output_dir=output_dir,
@@ -486,26 +537,77 @@ class ETLPipeline:
                 chunk_size=chunk_size,
                 batch_size=batch_size,
                 max_workers=max_workers,
-                task_id=task_id
+                task_id=task_id,
+                user_id=user_id,
+                user_display_name=user_display_name,
+                export_date=export_date
             )
 
-            # Create a new pipeline with the context
+            # Parse datetime strings back to datetime objects
+            if 'start_time' in context_data and context_data['start_time']:
+                context.start_time = cls._parse_datetime(context_data['start_time'])
+
+            # Restore other serializable attributes from checkpoint
+            for attr in context.SERIALIZABLE_ATTRIBUTES:
+                if attr in context_data and attr not in ['db_config', 'output_dir', 'memory_limit_mb',
+                                                        'parallel_processing', 'chunk_size', 'batch_size',
+                                                        'max_workers', 'task_id', 'start_time', 'user_id',
+                                                        'user_display_name', 'export_date']:
+                    value = context_data[attr]
+                    setattr(context, attr, value)
+
+            # Restore metrics with datetime parsing
+            if 'metrics' in context_data:
+                metrics = context_data.get('metrics', {})
+                if 'start_time' in metrics and metrics['start_time']:
+                    metrics['start_time'] = cls._parse_datetime(metrics['start_time'])
+
+                # Parse datetime values in duration data
+                if 'duration' in metrics:
+                    for phase, times in metrics['duration'].items():
+                        if 'start' in times and times['start']:
+                            times['start'] = cls._parse_datetime(times['start'])
+                        if 'end' in times and times['end']:
+                            times['end'] = cls._parse_datetime(times['end'])
+
+                context.metrics = metrics
+
+            # Restore current phase, phase results, errors, and custom metadata
+            context.current_phase = context_data.get('current_phase')
+            context.phase_statuses = context_data.get('phase_statuses', {})
+            context.phase_results = context_data.get('phase_results', {})
+            context.errors = context_data.get('errors', [])
+            context.custom_metadata = context_data.get('custom_metadata', {})
+
+            # Create a new pipeline with the restored context
             pipeline = cls(
                 db_config=db_config,
-                context=context,
-                output_dir=output_dir,
-                memory_limit_mb=memory_limit_mb,
-                parallel_processing=parallel_processing,
-                chunk_size=chunk_size,
-                batch_size=batch_size,
-                max_workers=max_workers
+                context=context
             )
 
             logger.info(f"Pipeline loaded from checkpoint: {checkpoint_file}")
             return pipeline
         except Exception as e:
-            logger.error(f"Error loading checkpoint: {e}")
+            logger.error(f"Error loading checkpoint: {str(e)}")
             raise
+
+    @classmethod
+    def _parse_datetime(cls, dt_str):
+        """
+        Parse an ISO format datetime string back to a datetime object.
+
+        Args:
+            dt_str: ISO formatted datetime string
+
+        Returns:
+            datetime object or None if input is None
+        """
+        if dt_str is None:
+            return None
+        try:
+            return datetime.datetime.fromisoformat(dt_str)
+        except (ValueError, TypeError):
+            return dt_str
 
     def get_available_checkpoints(self) -> List[str]:
         """Get a list of available checkpoint files.
@@ -514,12 +616,12 @@ class ETLPipeline:
             List of paths to available checkpoint files
         """
         checkpoint_dir = self.context.output_dir
-        if not os.path.exists(checkpoint_dir):
+        if not checkpoint_dir or not os.path.exists(checkpoint_dir):
             return []
 
-        # Find all checkpoint files
+        # Find all checkpoint files (both old "checkpoint_" and new "etl_checkpoint_" format)
         checkpoint_files = [os.path.join(checkpoint_dir, f) for f in os.listdir(checkpoint_dir)
-                           if f.startswith("checkpoint_") and f.endswith(".json")]
+                           if (f.startswith("etl_checkpoint_") or f.startswith("checkpoint_")) and f.endswith(".json")]
 
         return checkpoint_files
 

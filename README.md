@@ -14,6 +14,8 @@ This tool parses Skype export data (from the "Export Chat History" feature in Sk
 - Analyze message patterns, frequencies, and content
 - Generate visualizations of chat activity
 - Support for various message types (text, media, calls, etc.)
+- Enhanced message type handling for polls, scheduled calls, and more
+- Attachment handling with download, organization, and metadata extraction
 - Modular architecture with dependency injection for testability
 
 ## Installation
@@ -83,7 +85,12 @@ pipeline = ETLPipeline(
         'user': 'postgres',
         'password': 'password'
     },
-    output_dir='output'
+    output_dir='output',
+    # Enable attachment handling
+    download_attachments=True,
+    attachments_dir='output/attachments',
+    generate_thumbnails=True,
+    extract_metadata=True
 )
 
 # Run the pipeline
