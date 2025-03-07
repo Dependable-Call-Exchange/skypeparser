@@ -18,6 +18,11 @@ The unit tests are organized by module:
 - `test_validation.py`: Tests for validation functions
 - `test_file_handler.py`: Tests for file handling functions
 - `test_parser_module.py`: Tests for parsing functions
+- `test_content_extractor.py`: Tests for content extraction functionality, including HTML cleaning
+- `test_message_type_handlers.py`: Tests for message type handlers, including edge cases
+- `test_db_connection.py`: Tests for database connection methods and batch operations
+- `test_etl_context.py`: Tests for ETL context initialization and attribute handling
+- `test_etl_di_integration.py`: Tests for DI-specific service resolution with ETL components
 - etc.
 
 ## Running Unit Tests
@@ -58,6 +63,26 @@ result = pipeline.run_pipeline(file_path='test.json')
 assert result['extraction']['success']
 ```
 
+## Dependency Injection Testing
+
+The `test_etl_di_integration.py` file demonstrates how to test the dependency injection framework with ETL components:
+
+```python
+from src.utils.di import get_service_provider, get_service
+from src.utils.service_registry import register_all_services
+from src.utils.interfaces import ContentExtractorProtocol, LoaderProtocol
+
+# Register all services
+register_all_services(db_config, output_dir=output_dir)
+
+# Resolve services
+content_extractor = get_service(ContentExtractorProtocol)
+loader = get_service(LoaderProtocol)
+
+# Verify dependencies
+assert loader.db_connection is not None
+```
+
 ## Best Practices
 
 1. **Use Fixtures**: Import test data and mock objects from `tests.fixtures`
@@ -65,3 +90,5 @@ assert result['extraction']['success']
 3. **Test Edge Cases**: Include tests for error conditions and edge cases
 4. **Avoid Side Effects**: Tests should not affect each other or leave behind artifacts
 5. **Clear Setup/Teardown**: Use setUp and tearDown methods to manage test state
+6. **Test Interface Implementations**: Ensure all interface methods are properly tested
+7. **Test Error Handling**: Verify that components handle errors gracefully

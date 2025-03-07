@@ -85,6 +85,22 @@ class DatabaseConnection(DatabaseConnectionProtocol):
             self.connection = None
             logger.info("Disconnected from database")
 
+    def execute(self, query: str, params: Optional[Dict[str, Any]] = None) -> Any:
+        """Execute a database query.
+
+        Args:
+            query: SQL query to execute
+            params: Query parameters
+
+        Returns:
+            Query result
+
+        Raises:
+            Exception: If query execution fails
+        """
+        logger.debug(f"Executing query: {query}")
+        return self.execute_query(query, params)
+
     def execute_query(self, query: str, params: Optional[Union[Tuple, Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
         """Execute a query and return the results.
 
@@ -337,16 +353,3 @@ class DatabaseConnection(DatabaseConnectionProtocol):
         CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
         CREATE INDEX IF NOT EXISTS idx_message_attachments_message_id ON message_attachments(message_id);
         """
-
-    def execute(self, query: str, params: Optional[Dict[str, Any]] = None) -> Any:
-        """
-        Execute a database query.
-
-        Args:
-            query: SQL query to execute
-            params: Query parameters
-
-        Returns:
-            Query result
-        """
-        return self.execute_query(query, params)

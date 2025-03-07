@@ -282,6 +282,35 @@ class ContentExtractor:
             logger.error(f"Error cleaning content with regex: {e}")
             return content_html
 
+    def extract_content(self, message: Dict[str, Any]) -> str:
+        """
+        Extract cleaned content from a message.
+
+        Args:
+            message: The message data
+
+        Returns:
+            Cleaned content as a string
+        """
+        # Get the content from the message
+        content_html = message.get('content', '')
+
+        # Use the existing method to clean the content
+        return self.extract_cleaned_content(content_html)
+
+    def extract_html_content(self, message: Dict[str, Any]) -> str:
+        """
+        Extract HTML content from a message.
+
+        Args:
+            message: The message data
+
+        Returns:
+            HTML content as a string
+        """
+        # Simply return the raw HTML content
+        return message.get('content', '')
+
 
 def extract_content_data(content: str) -> Dict[str, Any]:
     """

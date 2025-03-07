@@ -151,6 +151,65 @@ class TestContentExtractor(unittest.TestCase):
         self.assertIn('links', data)
         self.assertIn('quotes', data)
 
+    def test_extract_content(self):
+        """Test the extract_content method."""
+        # Create a ContentExtractor instance
+        extractor = ContentExtractor()
+
+        # Test with a message containing HTML content
+        message = {'content': self.sample_content_with_mentions}
+        content = extractor.extract_content(message)
+        self.assertIsInstance(content, str)
+        self.assertIn('@John Doe', content)
+        self.assertNotIn('<at', content)
+
+        # Test with a message containing mixed content
+        message = {'content': self.sample_content_with_mixed}
+        content = extractor.extract_content(message)
+        self.assertIsInstance(content, str)
+        self.assertIn('@Jane Smith', content)
+        self.assertNotIn('<at', content)
+        self.assertNotIn('<quote', content)
+        self.assertNotIn('<a href', content)
+        self.assertNotIn('<b>', content)
+
+        # Test with a message containing no content
+        message = {'content': ''}
+        content = extractor.extract_content(message)
+        self.assertEqual(content, '')
+
+        # Test with a message missing the content field
+        message = {}
+        content = extractor.extract_content(message)
+        self.assertEqual(content, '')
+
+    def test_extract_html_content(self):
+        """Test the extract_html_content method."""
+        # Create a ContentExtractor instance
+        extractor = ContentExtractor()
+
+        # Test with a message containing HTML content
+        message = {'content': self.sample_content_with_mentions}
+        html_content = extractor.extract_html_content(message)
+        self.assertIsInstance(html_content, str)
+        self.assertEqual(html_content, self.sample_content_with_mentions)
+
+        # Test with a message containing mixed content
+        message = {'content': self.sample_content_with_mixed}
+        html_content = extractor.extract_html_content(message)
+        self.assertIsInstance(html_content, str)
+        self.assertEqual(html_content, self.sample_content_with_mixed)
+
+        # Test with a message containing no content
+        message = {'content': ''}
+        html_content = extractor.extract_html_content(message)
+        self.assertEqual(html_content, '')
+
+        # Test with a message missing the content field
+        message = {}
+        html_content = extractor.extract_html_content(message)
+        self.assertEqual(html_content, '')
+
 
 if __name__ == '__main__':
     unittest.main()

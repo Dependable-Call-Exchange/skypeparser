@@ -24,7 +24,7 @@ from src.utils.interfaces import (
 
 # Import concrete implementations
 from src.parser.content_extractor import ContentExtractor
-from src.utils.message_type_handlers import get_handler_for_message_type, SkypeMessageHandlerFactory
+from src.utils.message_type_handlers import SkypeMessageHandlerFactory
 from src.utils.file_handler import FileHandler
 from src.utils.structured_data_extractor import StructuredDataExtractor
 from src.db.connection import DatabaseConnection

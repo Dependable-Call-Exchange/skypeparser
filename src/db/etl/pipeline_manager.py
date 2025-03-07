@@ -186,6 +186,20 @@ class ETLPipeline:
             # Update results with error
             results['status'] = 'failed'
             results['error'] = str(e)
+            results['error_details'] = self._generate_error_report(e)
+
+            # Record error in context
+            if hasattr(self.context, 'current_phase') and self.context.current_phase:
+                self.context.record_error(self.context.current_phase, str(e))
+
+            # Create checkpoint for potential resumption
+            if hasattr(self.context, 'current_phase') and self.context.current_phase:
+                try:
+                    checkpoint_path = self.context.save_checkpoint_to_file()
+                    results['checkpoint_path'] = checkpoint_path
+                    logger.info(f"Created checkpoint at {checkpoint_path} for potential resumption")
+                except Exception as checkpoint_error:
+                    logger.error(f"Failed to create checkpoint: {checkpoint_error}")
 
             # Re-raise exception
             raise
@@ -351,6 +365,20 @@ class ETLPipeline:
             # Update results with error
             results['status'] = 'failed'
             results['error'] = str(e)
+            results['error_details'] = self._generate_error_report(e)
+
+            # Record error in context
+            if hasattr(self.context, 'current_phase') and self.context.current_phase:
+                self.context.record_error(self.context.current_phase, str(e))
+
+            # Create checkpoint for potential resumption
+            if hasattr(self.context, 'current_phase') and self.context.current_phase:
+                try:
+                    checkpoint_path = self.context.save_checkpoint_to_file()
+                    results['checkpoint_path'] = checkpoint_path
+                    logger.info(f"Created checkpoint at {checkpoint_path} for potential resumption")
+                except Exception as checkpoint_error:
+                    logger.error(f"Failed to create checkpoint: {checkpoint_error}")
 
             # Re-raise exception
             raise
@@ -615,3 +643,46 @@ class ETLPipeline:
             The ETL context
         """
         return self.context
+
+    def _generate_error_report(self, error: Exception) -> Dict[str, Any]:
+        """Generate a detailed error report.
+
+        Args:
+            error: The exception that occurred
+
+        Returns:
+            Dictionary containing detailed error information
+        """
+        import traceback
+        import sys
+
+        error_report = {
+            'error_type': type(error).__name__,
+            'error_message': str(error),
+            'traceback': traceback.format_exc(),
+            'phase': getattr(self.context, 'current_phase', 'unknown'),
+            'timestamp': datetime.datetime.now().isoformat(),
+            'context': {}
+        }
+
+        # Add relevant context information
+        if hasattr(self.context, 'user_id'):
+            error_report['context']['user_id'] = self.context.user_id
+        if hasattr(self.context, 'user_display_name'):
+            error_report['context']['user_display_name'] = self.context.user_display_name
+        if hasattr(self.context, 'task_id'):
+            error_report['context']['task_id'] = self.context.task_id
+        if hasattr(self.context, 'file_source'):
+            error_report['context']['file_source'] = self.context.file_source
+
+        # Add phase-specific information
+        if hasattr(self.context, 'current_phase'):
+            phase = self.context.current_phase
+            if phase == 'extract':
+                error_report['context']['extract_progress'] = getattr(self.context.progress_tracker, 'extract_progress', {})
+            elif phase == 'transform':
+                error_report['context']['transform_progress'] = getattr(self.context.progress_tracker, 'transform_progress', {})
+            elif phase == 'load':
+                error_report['context']['load_progress'] = getattr(self.context.progress_tracker, 'load_progress', {})
+
+        return error_report

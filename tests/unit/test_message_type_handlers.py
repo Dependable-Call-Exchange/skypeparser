@@ -262,6 +262,116 @@ class TestMessageTypeHandlers(unittest.TestCase):
         self.assertEqual(result['activity_value'], 'New Topic Name')
         self.assertEqual(result['activity_initiator'], 'Jane Smith')
 
+    def test_empty_content_handling(self):
+        """Test handling of messages with empty content."""
+        # Test with empty content
+        empty_content_message = {
+            'messagetype': 'Poll',
+            'content': ''
+        }
+        result = PollHandler.extract_data(empty_content_message)
+        self.assertEqual(result['poll_question'], '')
+        self.assertEqual(result['poll_options'], [])
+
+        # Test with None content
+        none_content_message = {
+            'messagetype': 'Call',
+            'content': None
+        }
+        result = CallHandler.extract_data(none_content_message)
+        self.assertEqual(result['call_duration'], '')
+        self.assertEqual(result['call_participants'], [])
+
+        # Test with missing content field
+        missing_content_message = {
+            'messagetype': 'RichText/Location'
+        }
+        result = LocationHandler.extract_data(missing_content_message)
+        self.assertEqual(result['location_latitude'], '')
+        self.assertEqual(result['location_longitude'], '')
+        self.assertEqual(result['location_address'], '')
+
+    def test_malformed_content_handling(self):
+        """Test handling of messages with malformed content."""
+        # Test with malformed XML
+        malformed_xml_message = {
+            'messagetype': 'RichText/Media_Video',
+            'content': '<uriobject filename="video.mp4" filesize="1024000" filetype="video/mp4" url="https://example.com/video.mp4" width="1920" height="1080" duration="00:02:30" description="Vacation video"'  # Missing closing tag
+        }
+        result = MediaHandler.extract_data(malformed_xml_message)
+        # Should not raise an exception and should return default values
+        self.assertIn('media_filename', result)
+
+        # Test with invalid attributes
+        invalid_attributes_message = {
+            'messagetype': 'RichText/Media_Card',
+            'content': '<card invalid="attribute" title="Article Title"></card>'
+        }
+        result = MediaCardHandler.extract_data(invalid_attributes_message)
+        self.assertEqual(result['card_title'], 'Article Title')
+        self.assertEqual(result['card_description'], '')
+
+        # Test with nested malformed content
+        nested_malformed_message = {
+            'messagetype': 'ThreadActivity/AddMember',
+            'content': '<member id="user3" name="Bob Johnson"><invalid></member><initiator name="John Doe"></initiator>'
+        }
+        result = ThreadActivityHandler.extract_data(nested_malformed_message)
+        self.assertEqual(result['activity_type'], 'AddMember')
+        self.assertEqual(len(result['activity_members']), 1)
+
+    def test_unexpected_message_type_handling(self):
+        """Test handling of unexpected message types."""
+        # Test with completely unknown message type
+        unknown_message = {
+            'messagetype': 'CompletelyUnknownType',
+            'content': 'Some content'
+        }
+        # Should not raise an exception when no handler is found
+        result = extract_structured_data(unknown_message)
+        self.assertEqual(result, {})
+
+        # Test with similar but not exact message type
+        similar_message = {
+            'messagetype': 'RichText/Media_Unknown',
+            'content': '<uriobject filename="file.txt"></uriobject>'
+        }
+        # Should use MediaHandler as fallback for similar types
+        result = extract_structured_data(similar_message)
+        self.assertIn('media_filename', result)
+
+        # Test with empty message type
+        empty_type_message = {
+            'messagetype': '',
+            'content': 'Some content'
+        }
+        result = extract_structured_data(empty_type_message)
+        self.assertEqual(result, {})
+
+    def test_message_handler_factory(self):
+        """Test the SkypeMessageHandlerFactory class."""
+        from src.utils.message_type_handlers import SkypeMessageHandlerFactory
+
+        # Create a factory instance
+        factory = SkypeMessageHandlerFactory()
+
+        # Test getting handlers for various message types
+        poll_handler = factory.get_handler('Poll')
+        self.assertIsNotNone(poll_handler)
+        self.assertTrue(poll_handler.can_handle('Poll'))
+
+        media_handler = factory.get_handler('RichText/Media_Video')
+        self.assertIsNotNone(media_handler)
+        self.assertTrue(media_handler.can_handle('RichText/Media_Video'))
+
+        # Test with unknown message type
+        unknown_handler = factory.get_handler('Unknown')
+        self.assertIsNotNone(unknown_handler)  # Should return the fallback handler
+
+        # Test that the same handler instance is returned for the same message type
+        poll_handler2 = factory.get_handler('Poll')
+        self.assertIs(poll_handler, poll_handler2)
+
 
 if __name__ == '__main__':
     unittest.main()

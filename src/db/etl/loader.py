@@ -382,9 +382,8 @@ class Loader(LoaderProtocol):
             VALUES %s
             """
 
-            # Execute batch insert using execute_values
-            from psycopg2.extras import execute_values
-            execute_values(self.db_connection.cursor, query, params_list, template=None, page_size=self.batch_size)
+            # Execute batch insert using execute_batch
+            self.db_connection.execute_batch(query, params_list)
 
     def _begin_transaction(self) -> None:
         """Begin a database transaction."""

@@ -96,7 +96,7 @@ class ETLContext:
         self.start_time = datetime.datetime.now()
 
         # User information
-        self.user_id = user_id
+        self.user_id = user_id or f"user_{hash(user_display_name or 'unknown') % 10000}"
         self.user_display_name = user_display_name
         self.export_date = export_date or datetime.datetime.now().isoformat()
 
