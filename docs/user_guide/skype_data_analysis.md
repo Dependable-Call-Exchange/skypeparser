@@ -70,12 +70,43 @@ Each message object has this structure:
 }
 ```
 
+## File Format Challenges
+
+### Single-Line JSON Files
+
+Skype export files often come as a single-line JSON file, which presents several challenges:
+
+1. **Parsing Complexity**: Standard JSON pretty-printing tools may fail due to the single-line format and large file size.
+2. **Memory Usage**: Loading the entire file into memory can cause out-of-memory errors for large exports.
+3. **Debugging Difficulty**: Examining the structure is difficult without proper formatting.
+
+**Solution Approaches**:
+- Use streaming JSON parsers like `ijson` for memory-efficient processing
+- Implement chunked reading to process portions of the file at a time
+- Add the `--skip-raw` flag to avoid saving the raw JSON when processing large files
+- Use Python's built-in `json` module with context managers to ensure proper resource cleanup
+
+### ContentExtractor Compatibility Issues
+
+We've identified several issues with the `ContentExtractor` class:
+
+1. **Missing Methods**: The `format_content_with_markup` method may be missing from the `ContentExtractor` class.
+2. **Error Handling**: Inadequate error handling when processing message content.
+3. **Type Safety**: Lack of type checking when dealing with content that may not be a string.
+
+**Solutions Implemented**:
+- Enhanced monkey patching to ensure the `format_content_with_markup` method exists
+- Added robust error handling in the content processing functions
+- Implemented type checking and conversion to handle non-string content
+- Added comprehensive logging for debugging content processing issues
+
 ## Data Volume
 
 The sample file contains:
 - 1,138 conversations
 - One conversation has 6,052 messages
 - This indicates a large dataset that requires efficient processing
+- The `messages.json` file can be over 100MB in size, often as a single line of JSON
 
 ## Message Types
 
@@ -125,6 +156,16 @@ The extraction phase:
 4. Validates the data structure
 5. Returns the raw data for transformation
 
+#### Handling Large JSON Files
+
+For large export files, we recommend:
+1. Using the `--skip-raw` flag to avoid saving the entire raw JSON to disk
+2. Ensuring adequate memory is available for processing
+3. Using a step-by-step approach for extremely large files:
+   - Extract the tar file to a temporary directory
+   - Process the `messages.json` file directly with streaming parsers if needed
+   - Clean up temporary files after processing
+
 ### Transformation Process
 
 The transformation phase:
@@ -158,6 +199,21 @@ The `content_parser` function:
 2. Falls back to regex-based tag stripping if BeautifulSoup is not available
 3. Formats quoted messages for better readability
 4. Replaces straight quotes with curly quotes
+
+#### Content Parsing Challenges
+
+We've identified several challenges with content parsing:
+
+1. **HTML/XML Tags**: Messages often contain complex HTML tags that require careful parsing.
+2. **Monkey Patching**: The `format_content_with_markup` method needs to be added to the `ContentExtractor` class.
+3. **Type Safety**: Content may not always be a string, requiring type checking and conversion.
+4. **Error Handling**: Robust error handling is needed to prevent crashes during parsing.
+
+**Improved Implementation**:
+- Enhanced the monkey patching to include better error handling and logging
+- Added type checking to ensure content is always processed as a string
+- Implemented fallback mechanisms when content formatting fails
+- Added comprehensive testing of the patched methods
 
 ### Loading Process
 
@@ -203,20 +259,33 @@ The clean storage database has two main tables:
 ## Observations and Recommendations
 
 1. **Data Volume**: The large number of conversations and messages requires efficient processing and storage.
+   - **New**: Implement chunked processing for extremely large files
+   - **New**: Add support for memory-efficient streaming parsers
 
 2. **Message Types**: The system should handle all message types present in the data, including those not in the default configuration.
 
 3. **Content Formatting**: Message content includes HTML tags, mentions, and links that need proper parsing.
+   - **New**: Enhanced error handling for content formatting failures
+   - **New**: Improved type safety for non-string content
 
 4. **Timestamp Handling**: The timestamps in the data are in ISO format with timezone information, which our parser handles correctly.
 
 5. **Special Properties**: Messages have properties like reactions ("emotions") that could be extracted for additional insights.
 
 6. **Performance Considerations**: Given the large volume of data, batch processing and efficient database operations are important.
+   - **New**: Added the `--skip-raw` flag to avoid saving large raw JSON files
+   - **New**: Enhanced memory management for processing large files
 
 7. **Error Handling**: The pipeline should handle edge cases like missing fields, invalid timestamps, and malformed content.
+   - **New**: Comprehensive error handling in content processing
+   - **New**: Improved logging for debugging issues
 
 8. **Validation**: Thorough validation of the data structure is essential to ensure reliable processing.
+   - **New**: Added type checking throughout the processing pipeline
+
+9. **Monkey Patching**: The dependency on monkey patching requires careful implementation and testing.
+   - **New**: Enhanced monkey patching with better error handling and logging
+   - **New**: Added unit testing for patched methods
 
 ## Next Steps
 
@@ -225,11 +294,23 @@ The clean storage database has two main tables:
 2. **Enhance Message Type Handling**: Update the message type configuration to handle all types present in the data.
 
 3. **Optimize Performance**: Implement batch processing and other optimizations for handling large datasets.
+   - **New**: Consider implementing streaming JSON parsing for very large files
+   - **New**: Add incremental processing options for extremely large datasets
 
 4. **Extract Additional Insights**: Consider extracting and storing additional data like reactions and URL previews.
 
 5. **Improve Error Handling**: Enhance error handling to gracefully handle edge cases and malformed data.
+   - **New**: Continue refining error handling in content processing
+   - **New**: Add more comprehensive recovery mechanisms
 
 6. **Add Comprehensive Logging**: Implement detailed logging to track the processing of each conversation and message.
+   - **New**: Expand logging to include performance metrics
+   - **New**: Add structured logging for easier analysis
 
 7. **Implement Data Validation**: Add validation checks to ensure the integrity of the processed data.
+   - **New**: Add schema validation for processed data
+   - **New**: Implement consistency checks between raw and processed data
+
+8. **Reduce Dependency on Monkey Patching**: Consider refactoring the code to reduce or eliminate the need for monkey patching.
+   - **New**: Design a more flexible content processing architecture
+   - **New**: Implement proper inheritance and composition instead of monkey patching

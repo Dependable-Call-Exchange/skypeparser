@@ -31,6 +31,7 @@ This directory contains documentation for the Skype Parser project.
 - [Consolidation Summary](development/CONSOLIDATION_SUMMARY.md) - Summary of code consolidation efforts
 - [API Documentation](development/API.md) - API documentation and specifications
 - [API Usage](development/API_USAGE.md) - Examples of API usage
+- [ETLContext API](development/ETL_CONTEXT_API.md) - Documentation for the ETLContext phase management API
 - [Factory Implementation](development/FACTORY_IMPLEMENTATION.md) - Details on factory pattern implementation
 - [Modularization Strategy](development/Modularization_Strategy.md) - Strategy for code modularization
 - [Test Factories](development/TEST_FACTORIES.md) - Information about test factory implementations

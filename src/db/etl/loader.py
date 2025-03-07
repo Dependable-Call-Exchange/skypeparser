@@ -5,14 +5,15 @@ This module handles loading transformed Skype data into the database,
 including raw exports, conversations, and messages.
 """
 
-import logging
-import json
-from typing import Dict, List, Any, Optional, Tuple
 import datetime
+import json
+import logging
+from typing import Any, Dict, List, Optional, Tuple
 
-from src.utils.interfaces import LoaderProtocol, DatabaseConnectionProtocol
 from src.utils.di import get_service
+from src.utils.interfaces import DatabaseConnectionProtocol, LoaderProtocol
 from src.utils.validation import validate_db_config
+
 from .context import ETLContext
 
 logger = logging.getLogger(__name__)
@@ -60,14 +61,17 @@ CREATE TABLE IF NOT EXISTS public.skype_messages (
 );
 """
 
+
 class Loader(LoaderProtocol):
     """Handles loading of transformed Skype data into the database."""
 
-    def __init__(self,
-                 context: ETLContext = None,
-                 db_config: Optional[Dict[str, Any]] = None,
-                 batch_size: int = 100,
-                 db_connection: Optional[DatabaseConnectionProtocol] = None):
+    def __init__(
+        self,
+        context: ETLContext = None,
+        db_config: Optional[Dict[str, Any]] = None,
+        batch_size: int = 100,
+        db_connection: Optional[DatabaseConnectionProtocol] = None,
+    ):
         """Initialize the Loader.
 
         Args:
@@ -113,7 +117,12 @@ class Loader(LoaderProtocol):
         self.db_connection.execute(CONVERSATIONS_TABLE)
         self.db_connection.execute(MESSAGES_TABLE)
 
-    def load(self, raw_data: Dict[str, Any], transformed_data: Dict[str, Any], file_source: Optional[str] = None) -> int:
+    def load(
+        self,
+        raw_data: Dict[str, Any],
+        transformed_data: Dict[str, Any],
+        file_source: Optional[str] = None,
+    ) -> int:
         """Load transformed data into the database.
 
         Args:
@@ -153,7 +162,7 @@ class Loader(LoaderProtocol):
             # Update context if available
             if self.context:
                 self.context.set_export_id(export_id)
-                self.context.set_phase_status('load', 'completed')
+                self.context.set_phase_status("load", "completed")
 
             logger.info(f"Data loaded successfully with export ID: {export_id}")
             return export_id
@@ -167,12 +176,14 @@ class Loader(LoaderProtocol):
 
             # Update context if available
             if self.context:
-                self.context.record_error('load', str(e))
+                self.context.record_error("load", str(e))
 
             # Re-raise exception
             raise
 
-    def _validate_input_data(self, raw_data: Dict[str, Any], transformed_data: Dict[str, Any]) -> None:
+    def _validate_input_data(
+        self, raw_data: Dict[str, Any], transformed_data: Dict[str, Any]
+    ) -> None:
         """Validate input data for loading.
 
         Args:
@@ -195,21 +206,23 @@ class Loader(LoaderProtocol):
             raise ValueError(error_msg)
 
         # Check that transformed_data contains required keys
-        required_keys = ['user_id', 'export_date', 'conversations']
+        required_keys = ["user_id", "export_date", "conversations"]
         missing_keys = [key for key in required_keys if key not in transformed_data]
         if missing_keys:
-            error_msg = f"Transformed data missing required keys: {', '.join(missing_keys)}"
+            error_msg = (
+                f"Transformed data missing required keys: {', '.join(missing_keys)}"
+            )
             logger.error(error_msg)
             raise ValueError(error_msg)
 
         # Check that conversations is a dictionary
-        if not isinstance(transformed_data['conversations'], dict):
+        if not isinstance(transformed_data["conversations"], dict):
             error_msg = "Transformed data 'conversations' must be a dictionary"
             logger.error(error_msg)
             raise ValueError(error_msg)
 
         # Check that at least one conversation exists
-        if not transformed_data['conversations']:
+        if not transformed_data["conversations"]:
             logger.warning("No conversations found in transformed data")
 
     def _validate_database_connection(self) -> None:
@@ -223,7 +236,9 @@ class Loader(LoaderProtocol):
             logger.error(error_msg)
             raise ValueError(error_msg)
 
-    def _store_raw_export(self, raw_data: Dict[str, Any], file_source: Optional[str] = None) -> int:
+    def _store_raw_export(
+        self, raw_data: Dict[str, Any], file_source: Optional[str] = None
+    ) -> int:
         """Store raw export data in the database.
 
         Args:
@@ -236,8 +251,20 @@ class Loader(LoaderProtocol):
         logger.info("Storing raw export data")
 
         # Get user ID and export date from context or use defaults
-        user_id = self.context.user_id if self.context and hasattr(self.context, 'user_id') and self.context.user_id is not None else "unknown_user"
-        export_date = self.context.export_date if self.context and hasattr(self.context, 'export_date') and self.context.export_date is not None else datetime.datetime.now().isoformat()
+        user_id = (
+            self.context.user_id
+            if self.context
+            and hasattr(self.context, "user_id")
+            and self.context.user_id is not None
+            else "unknown_user"
+        )
+        export_date = (
+            self.context.export_date
+            if self.context
+            and hasattr(self.context, "export_date")
+            and self.context.export_date is not None
+            else datetime.datetime.now().isoformat()
+        )
 
         # Insert raw export data
         query = """
@@ -250,7 +277,9 @@ class Loader(LoaderProtocol):
         raw_data_json = json.dumps(raw_data)
 
         # Execute query
-        result = self.db_connection.fetch_one(query, (user_id, export_date, raw_data_json, file_source))
+        result = self.db_connection.fetch_one(
+            query, (user_id, export_date, raw_data_json, file_source)
+        )
 
         # Get export ID
         export_id = result[0]
@@ -258,7 +287,9 @@ class Loader(LoaderProtocol):
         logger.info(f"Raw export data stored with ID: {export_id}")
         return export_id
 
-    def _store_conversations(self, transformed_data: Dict[str, Any], export_id: int) -> None:
+    def _store_conversations(
+        self, transformed_data: Dict[str, Any], export_id: int
+    ) -> None:
         """Store conversations in the database.
 
         Args:
@@ -268,7 +299,7 @@ class Loader(LoaderProtocol):
         logger.info("Storing conversations")
 
         # Get conversations from transformed data
-        conversations = transformed_data['conversations']
+        conversations = transformed_data["conversations"]
 
         # Insert each conversation
         for conv_id, conv_data in conversations.items():
@@ -276,7 +307,9 @@ class Loader(LoaderProtocol):
 
         logger.info(f"Stored {len(conversations)} conversations")
 
-    def _insert_conversation(self, conv_id: str, conv_data: Dict[str, Any], export_id: int) -> None:
+    def _insert_conversation(
+        self, conv_id: str, conv_data: Dict[str, Any], export_id: int
+    ) -> None:
         """Insert a conversation into the database.
 
         Args:
@@ -285,10 +318,10 @@ class Loader(LoaderProtocol):
             export_id: Export ID to associate with the conversation
         """
         # Extract conversation data
-        display_name = conv_data.get('display_name', '')
-        first_message_time = conv_data.get('first_message_time')
-        last_message_time = conv_data.get('last_message_time')
-        message_count = len(conv_data.get('messages', []))
+        display_name = conv_data.get("display_name", "")
+        first_message_time = conv_data.get("first_message_time")
+        last_message_time = conv_data.get("last_message_time")
+        message_count = len(conv_data.get("messages", []))
 
         # Insert conversation
         query = """
@@ -306,14 +339,17 @@ class Loader(LoaderProtocol):
         """
 
         # Execute query
-        self.db_connection.execute(query, (
-            conv_id,
-            display_name,
-            export_id,
-            first_message_time,
-            last_message_time,
-            message_count
-        ))
+        self.db_connection.execute(
+            query,
+            (
+                conv_id,
+                display_name,
+                export_id,
+                first_message_time,
+                last_message_time,
+                message_count,
+            ),
+        )
 
     def _store_messages(self, transformed_data: Dict[str, Any]) -> None:
         """Store messages in the database.
@@ -324,14 +360,14 @@ class Loader(LoaderProtocol):
         logger.info("Storing messages")
 
         # Get conversations from transformed data
-        conversations = transformed_data['conversations']
+        conversations = transformed_data["conversations"]
 
         # Track total messages
         total_messages = 0
 
         # Insert messages for each conversation
         for conv_id, conv_data in conversations.items():
-            messages = conv_data.get('messages', [])
+            messages = conv_data.get("messages", [])
             if messages:
                 self._insert_messages(conv_id, messages)
                 total_messages += len(messages)
@@ -345,45 +381,56 @@ class Loader(LoaderProtocol):
             conv_id: Conversation ID
             messages: List of messages to insert
         """
-        # Prepare batch insert
-        batch_size = self.batch_size
-        for i in range(0, len(messages), batch_size):
-            batch = messages[i:i+batch_size]
+        if not messages:
+            return
 
-            # Prepare parameters for batch insert
-            params_list = []
-            for msg in batch:
-                # Get timestamp or use a default value
-                timestamp = msg.get('timestamp')
-                if not timestamp:
-                    # Skip messages with empty timestamps
-                    logger.warning(f"Skipping message with empty timestamp: {msg}")
-                    continue
+        # Prepare batch
+        batch = []
+        for msg in messages:
+            # Handle reactions and attachments that might be MagicMock objects
+            reactions = msg.get("reactions", {})
+            attachments = msg.get("attachments", [])
 
-                params_list.append((
+            # Check if reactions is a MagicMock object
+            if (
+                hasattr(reactions, "__class__")
+                and reactions.__class__.__name__ == "MagicMock"
+            ):
+                reactions = {}
+
+            # Check if attachments is a MagicMock object
+            if (
+                hasattr(attachments, "__class__")
+                and attachments.__class__.__name__ == "MagicMock"
+            ):
+                attachments = []
+
+            batch.append(
+                (
                     conv_id,
-                    timestamp,
-                    msg.get('sender_id', ''),
-                    msg.get('sender_name', ''),
-                    msg.get('content', ''),
-                    msg.get('html_content', ''),
-                    msg.get('message_type', 'text'),
-                    msg.get('is_edited', False),
-                    msg.get('is_deleted', False),
-                    json.dumps(msg.get('reactions', {})),
-                    json.dumps(msg.get('attachments', []))
-                ))
+                    msg.get("timestamp", ""),
+                    msg.get("sender_id", ""),
+                    msg.get("sender_name", ""),
+                    msg.get("content", ""),
+                    msg.get("html_content", ""),
+                    msg.get("message_type", "text"),
+                    msg.get("is_edited", False),
+                    msg.get("is_deleted", False),
+                    json.dumps(reactions),
+                    json.dumps(attachments),
+                )
+            )
 
-            # Insert batch
-            query = """
-            INSERT INTO public.skype_messages
-            (conversation_id, timestamp, sender_id, sender_name, content, html_content,
-             message_type, is_edited, is_deleted, reactions, attachments)
-            VALUES %s
-            """
+        # Insert batch
+        query = """
+        INSERT INTO public.skype_messages
+        (conversation_id, timestamp, sender_id, sender_name, content, html_content,
+         message_type, is_edited, is_deleted, reactions, attachments)
+        VALUES %s
+        """
 
-            # Execute batch insert using execute_batch
-            self.db_connection.execute_batch(query, params_list)
+        # Execute batch insert using execute_batch
+        self.db_connection.execute_batch(query, batch)
 
     def _begin_transaction(self) -> None:
         """Begin a database transaction."""

@@ -6,25 +6,31 @@ used throughout the Skype Parser project. It centralizes validation logic
 to ensure consistency and robustness.
 """
 
-import os
-import re
 import json
 import logging
-import tarfile
+import os
 import pathlib
-from typing import Dict, List, Any, Optional, BinaryIO
+import re
+import tarfile
 from datetime import datetime
+from typing import Any, BinaryIO, Dict, List, Optional, Protocol
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
+
 class ValidationError(Exception):
     """Exception raised for validation errors."""
+
     pass
 
-def validate_path_safety(file_path: str, base_dir: Optional[str] = None,
-                        allow_absolute: bool = False,
-                        allow_symlinks: bool = False) -> str:
+
+def validate_path_safety(
+    file_path: str,
+    base_dir: Optional[str] = None,
+    allow_absolute: bool = False,
+    allow_symlinks: bool = False,
+) -> str:
     """
     Perform strict validation on a file path to prevent security issues.
 
@@ -77,7 +83,7 @@ def validate_path_safety(file_path: str, base_dir: Optional[str] = None,
 
     # Check for common path traversal patterns
     path_str = str(normalized_path)
-    if re.search(r'\.\./', file_path) or '..' in file_path.split(os.sep):
+    if re.search(r"\.\./", file_path) or ".." in file_path.split(os.sep):
         # Double-check that the normalized path is safe
         if not base_dir:
             logger.warning(f"Path contains parent directory references: {file_path}")
@@ -85,9 +91,13 @@ def validate_path_safety(file_path: str, base_dir: Optional[str] = None,
 
     return str(normalized_path)
 
-def validate_file_exists(file_path: str, base_dir: Optional[str] = None,
-                        allow_absolute: bool = False,
-                        allow_symlinks: bool = False) -> bool:
+
+def validate_file_exists(
+    file_path: str,
+    base_dir: Optional[str] = None,
+    allow_absolute: bool = False,
+    allow_symlinks: bool = False,
+) -> bool:
     """
     Validate that a file exists, is accessible, and passes path safety checks.
 
@@ -111,7 +121,7 @@ def validate_file_exists(file_path: str, base_dir: Optional[str] = None,
         file_path,
         base_dir=base_dir,
         allow_absolute=allow_absolute,
-        allow_symlinks=allow_symlinks
+        allow_symlinks=allow_symlinks,
     )
 
     # Now check if the file exists and is accessible
@@ -126,10 +136,14 @@ def validate_file_exists(file_path: str, base_dir: Optional[str] = None,
 
     return True
 
-def validate_directory(directory: str, create_if_missing: bool = False,
-                      base_dir: Optional[str] = None,
-                      allow_absolute: bool = False,
-                      allow_symlinks: bool = False) -> bool:
+
+def validate_directory(
+    directory: str,
+    create_if_missing: bool = False,
+    base_dir: Optional[str] = None,
+    allow_absolute: bool = False,
+    allow_symlinks: bool = False,
+) -> bool:
     """
     Validate that a directory exists, is accessible, and passes path safety checks.
 
@@ -154,7 +168,7 @@ def validate_directory(directory: str, create_if_missing: bool = False,
         directory,
         base_dir=base_dir,
         allow_absolute=allow_absolute,
-        allow_symlinks=allow_symlinks
+        allow_symlinks=allow_symlinks,
     )
 
     # Check if the directory exists
@@ -178,10 +192,14 @@ def validate_directory(directory: str, create_if_missing: bool = False,
 
     return True
 
-def validate_file_type(file_path: str, allowed_extensions: List[str],
-                      base_dir: Optional[str] = None,
-                      allow_absolute: bool = False,
-                      allow_symlinks: bool = False) -> bool:
+
+def validate_file_type(
+    file_path: str,
+    allowed_extensions: List[str],
+    base_dir: Optional[str] = None,
+    allow_absolute: bool = False,
+    allow_symlinks: bool = False,
+) -> bool:
     """
     Validate that a file has an allowed extension and passes path safety checks.
 
@@ -206,7 +224,7 @@ def validate_file_type(file_path: str, allowed_extensions: List[str],
         file_path,
         base_dir=base_dir,
         allow_absolute=allow_absolute,
-        allow_symlinks=allow_symlinks
+        allow_symlinks=allow_symlinks,
     )
 
     # Check file extension
@@ -218,9 +236,13 @@ def validate_file_type(file_path: str, allowed_extensions: List[str],
 
     return True
 
-def validate_json_file(file_path: str, base_dir: Optional[str] = None,
-                      allow_absolute: bool = False,
-                      allow_symlinks: bool = False) -> Dict[str, Any]:
+
+def validate_json_file(
+    file_path: str,
+    base_dir: Optional[str] = None,
+    allow_absolute: bool = False,
+    allow_symlinks: bool = False,
+) -> Dict[str, Any]:
     """
     Validate and parse a JSON file, ensuring it passes path safety checks.
 
@@ -238,16 +260,23 @@ def validate_json_file(file_path: str, base_dir: Optional[str] = None,
         json.JSONDecodeError: If the file is not valid JSON
     """
     # Validate file exists and is a JSON file
-    validate_file_exists(file_path, base_dir=base_dir,
-                        allow_absolute=allow_absolute,
-                        allow_symlinks=allow_symlinks)
-    validate_file_type(file_path, ['.json'], base_dir=base_dir,
-                      allow_absolute=allow_absolute,
-                      allow_symlinks=allow_symlinks)
+    validate_file_exists(
+        file_path,
+        base_dir=base_dir,
+        allow_absolute=allow_absolute,
+        allow_symlinks=allow_symlinks,
+    )
+    validate_file_type(
+        file_path,
+        [".json"],
+        base_dir=base_dir,
+        allow_absolute=allow_absolute,
+        allow_symlinks=allow_symlinks,
+    )
 
     # Parse the JSON file
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return data
     except json.JSONDecodeError as e:
@@ -255,9 +284,13 @@ def validate_json_file(file_path: str, base_dir: Optional[str] = None,
     except Exception as e:
         raise ValidationError(f"Error reading JSON file: {e}")
 
-def validate_tar_file(file_path: str, base_dir: Optional[str] = None,
-                     allow_absolute: bool = False,
-                     allow_symlinks: bool = False) -> bool:
+
+def validate_tar_file(
+    file_path: str,
+    base_dir: Optional[str] = None,
+    allow_absolute: bool = False,
+    allow_symlinks: bool = False,
+) -> bool:
     """
     Validate that a file is a valid TAR archive and passes path safety checks.
 
@@ -274,12 +307,19 @@ def validate_tar_file(file_path: str, base_dir: Optional[str] = None,
         ValidationError: If the file is not a valid TAR archive or fails safety checks
     """
     # Validate file exists and is a TAR file
-    validate_file_exists(file_path, base_dir=base_dir,
-                        allow_absolute=allow_absolute,
-                        allow_symlinks=allow_symlinks)
-    validate_file_type(file_path, ['.tar'], base_dir=base_dir,
-                      allow_absolute=allow_absolute,
-                      allow_symlinks=allow_symlinks)
+    validate_file_exists(
+        file_path,
+        base_dir=base_dir,
+        allow_absolute=allow_absolute,
+        allow_symlinks=allow_symlinks,
+    )
+    validate_file_type(
+        file_path,
+        [".tar"],
+        base_dir=base_dir,
+        allow_absolute=allow_absolute,
+        allow_symlinks=allow_symlinks,
+    )
 
     # Check if it's a valid TAR file
     try:
@@ -292,7 +332,10 @@ def validate_tar_file(file_path: str, base_dir: Optional[str] = None,
     except Exception as e:
         raise ValidationError(f"Error reading TAR file: {e}")
 
-def validate_file_object(file_obj: BinaryIO, allowed_extensions: Optional[List[str]] = None) -> bool:
+
+def validate_file_object(
+    file_obj: BinaryIO, allowed_extensions: Optional[List[str]] = None
+) -> bool:
     """
     Validate a file-like object.
 
@@ -309,10 +352,10 @@ def validate_file_object(file_obj: BinaryIO, allowed_extensions: Optional[List[s
     if file_obj is None:
         raise ValidationError("File object cannot be None")
 
-    if not hasattr(file_obj, 'read') or not callable(file_obj.read):
+    if not hasattr(file_obj, "read") or not callable(file_obj.read):
         raise ValidationError("Object does not have a 'read' method")
 
-    if allowed_extensions and hasattr(file_obj, 'name'):
+    if allowed_extensions and hasattr(file_obj, "name"):
         _, ext = os.path.splitext(file_obj.name.lower())
         if ext not in allowed_extensions:
             raise ValidationError(
@@ -320,6 +363,7 @@ def validate_file_object(file_obj: BinaryIO, allowed_extensions: Optional[List[s
             )
 
     return True
+
 
 def validate_skype_data(data: Dict[str, Any]) -> bool:
     """
@@ -338,53 +382,62 @@ def validate_skype_data(data: Dict[str, Any]) -> bool:
         raise ValidationError("Data must be a dictionary")
 
     # Check required top-level fields
-    required_fields = ['userId', 'exportDate', 'conversations']
+    required_fields = ["userId", "exportDate", "conversations"]
     missing_fields = [f for f in required_fields if f not in data]
     if missing_fields:
         raise ValidationError(f"Missing required fields: {missing_fields}")
 
     # Validate userId
-    if not isinstance(data['userId'], str) or not data['userId'].strip():
+    if not isinstance(data["userId"], str) or not data["userId"].strip():
         raise ValidationError("userId must be a non-empty string")
 
     # Validate exportDate
-    if not isinstance(data['exportDate'], str) or not data['exportDate'].strip():
+    if not isinstance(data["exportDate"], str) or not data["exportDate"].strip():
         raise ValidationError("exportDate must be a non-empty string")
 
     # Try to parse the exportDate
     try:
         # Check if it's in ISO format
-        datetime.fromisoformat(data['exportDate'].replace('Z', '+00:00'))
+        datetime.fromisoformat(data["exportDate"].replace("Z", "+00:00"))
     except ValueError:
         logger.warning(f"exportDate is not in ISO format: {data['exportDate']}")
 
     # Validate conversations
-    if not isinstance(data['conversations'], list):
+    if not isinstance(data["conversations"], list):
         raise ValidationError("conversations must be a list")
 
     # Validate each conversation
-    for i, conv in enumerate(data['conversations']):
+    for i, conv in enumerate(data["conversations"]):
         if not isinstance(conv, dict):
             raise ValidationError(f"Conversation at index {i} must be a dictionary")
 
-        if 'id' not in conv:
+        if "id" not in conv:
             raise ValidationError(f"Conversation at index {i} is missing 'id' field")
 
-        if not isinstance(conv['id'], str) or not conv['id'].strip():
-            raise ValidationError(f"Conversation id at index {i} must be a non-empty string")
+        if not isinstance(conv["id"], str) or not conv["id"].strip():
+            raise ValidationError(
+                f"Conversation id at index {i} must be a non-empty string"
+            )
 
-        if 'MessageList' not in conv:
-            raise ValidationError(f"Conversation at index {i} is missing 'MessageList' field")
+        if "MessageList" not in conv:
+            raise ValidationError(
+                f"Conversation at index {i} is missing 'MessageList' field"
+            )
 
-        if not isinstance(conv['MessageList'], list):
-            raise ValidationError(f"MessageList for conversation {conv['id']} must be a list")
+        if not isinstance(conv["MessageList"], list):
+            raise ValidationError(
+                f"MessageList for conversation {conv['id']} must be a list"
+            )
 
         # Validate each message (basic structure only)
-        for j, msg in enumerate(conv['MessageList']):
+        for j, msg in enumerate(conv["MessageList"]):
             if not isinstance(msg, dict):
-                raise ValidationError(f"Message at index {j} in conversation {conv['id']} must be a dictionary")
+                raise ValidationError(
+                    f"Message at index {j} in conversation {conv['id']} must be a dictionary"
+                )
 
     return True
+
 
 def validate_user_display_name(name: str) -> str:
     """
@@ -409,9 +462,10 @@ def validate_user_display_name(name: str) -> str:
         raise ValidationError("User display name cannot be empty")
 
     # Remove any potentially dangerous characters
-    sanitized = re.sub(r'[<>:"/\\|?*]', '_', name)
+    sanitized = re.sub(r'[<>:"/\\|?*]', "_", name)
 
     return sanitized
+
 
 def validate_db_config(config: Dict[str, Any]) -> bool:
     """
@@ -430,46 +484,58 @@ def validate_db_config(config: Dict[str, Any]) -> bool:
         raise ValidationError("Database configuration must be a dictionary")
 
     # Check required fields
-    required_fields = ['dbname', 'user']
+    required_fields = ["dbname", "user"]
     missing_fields = [f for f in required_fields if f not in config]
     if missing_fields:
-        raise ValidationError(f"Missing required database configuration fields: {missing_fields}")
+        raise ValidationError(
+            f"Missing required database configuration fields: {missing_fields}"
+        )
 
     # Validate field types
-    if not isinstance(config['dbname'], str) or not config['dbname'].strip():
+    if not isinstance(config["dbname"], str) or not config["dbname"].strip():
         raise ValidationError("Database name must be a non-empty string")
 
-    if not isinstance(config['user'], str) or not config['user'].strip():
+    if not isinstance(config["user"], str) or not config["user"].strip():
         raise ValidationError("Database user must be a non-empty string")
 
     # Validate optional fields if present
-    if 'password' in config and not isinstance(config['password'], str):
+    if "password" in config and not isinstance(config["password"], str):
         raise ValidationError("Database password must be a string")
 
-    if 'host' in config and not isinstance(config['host'], str):
+    if "host" in config and not isinstance(config["host"], str):
         raise ValidationError("Database host must be a string")
 
-    if 'port' in config:
-        if not isinstance(config['port'], int):
+    if "port" in config:
+        if not isinstance(config["port"], int):
             try:
                 # Try to convert to int if it's a string
-                config['port'] = int(config['port'])
+                config["port"] = int(config["port"])
             except (ValueError, TypeError):
                 raise ValidationError("Database port must be an integer")
 
-        if config['port'] < 1 or config['port'] > 65535:
+        if config["port"] < 1 or config["port"] > 65535:
             raise ValidationError("Database port must be between 1 and 65535")
 
     # Validate SSL mode if present
-    if 'sslmode' in config:
-        if not isinstance(config['sslmode'], str):
+    if "sslmode" in config:
+        if not isinstance(config["sslmode"], str):
             raise ValidationError("SSL mode must be a string")
 
-        valid_ssl_modes = ['disable', 'allow', 'prefer', 'require', 'verify-ca', 'verify-full']
-        if config['sslmode'] not in valid_ssl_modes:
-            raise ValidationError(f"Invalid SSL mode: {config['sslmode']}. Valid modes are: {', '.join(valid_ssl_modes)}")
+        valid_ssl_modes = [
+            "disable",
+            "allow",
+            "prefer",
+            "require",
+            "verify-ca",
+            "verify-full",
+        ]
+        if config["sslmode"] not in valid_ssl_modes:
+            raise ValidationError(
+                f"Invalid SSL mode: {config['sslmode']}. Valid modes are: {', '.join(valid_ssl_modes)}"
+            )
 
     return True
+
 
 def validate_config(config: Dict[str, Any]) -> bool:
     """
@@ -488,44 +554,124 @@ def validate_config(config: Dict[str, Any]) -> bool:
         raise ValidationError("Configuration must be a dictionary")
 
     # Validate database configuration if present
-    if 'database' in config:
-        if not isinstance(config['database'], dict):
+    if "database" in config:
+        if not isinstance(config["database"], dict):
             raise ValidationError("Database configuration must be a dictionary")
         try:
-            validate_db_config(config['database'])
+            validate_db_config(config["database"])
         except ValidationError as e:
             raise ValidationError(f"Invalid database configuration: {e}")
 
     # Validate output configuration if present
-    if 'output' in config:
-        if not isinstance(config['output'], dict):
+    if "output" in config:
+        if not isinstance(config["output"], dict):
             raise ValidationError("Output configuration must be a dictionary")
 
-        if 'directory' in config['output']:
-            if not isinstance(config['output']['directory'], str):
+        if "directory" in config["output"]:
+            if not isinstance(config["output"]["directory"], str):
                 raise ValidationError("Output directory must be a string")
 
-        if 'overwrite' in config['output']:
-            if not isinstance(config['output']['overwrite'], bool):
+        if "overwrite" in config["output"]:
+            if not isinstance(config["output"]["overwrite"], bool):
                 try:
                     # Try to convert to bool if it's a string
-                    config['output']['overwrite'] = config['output']['overwrite'].lower() in ('true', 'yes', '1')
+                    config["output"]["overwrite"] = config["output"][
+                        "overwrite"
+                    ].lower() in ("true", "yes", "1")
                 except (AttributeError, ValueError):
                     raise ValidationError("Output overwrite flag must be a boolean")
 
     # Validate logging configuration if present
-    if 'logging' in config:
-        if not isinstance(config['logging'], dict):
+    if "logging" in config:
+        if not isinstance(config["logging"], dict):
             raise ValidationError("Logging configuration must be a dictionary")
 
-        if 'level' in config['logging']:
-            valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
-            level = config['logging']['level']
+        if "level" in config["logging"]:
+            valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+            level = config["logging"]["level"]
             if not isinstance(level, str) or level.upper() not in valid_levels:
-                raise ValidationError(f"Invalid logging level: {level}. Must be one of {valid_levels}")
+                raise ValidationError(
+                    f"Invalid logging level: {level}. Must be one of {valid_levels}"
+                )
 
-        if 'file' in config['logging']:
-            if not isinstance(config['logging']['file'], str):
+        if "file" in config["logging"]:
+            if not isinstance(config["logging"]["file"], str):
                 raise ValidationError("Logging file must be a string")
 
     return True
+
+
+from .interfaces import ValidationServiceProtocol
+
+
+class ValidationService(ValidationServiceProtocol):
+    """
+    Implementation of the ValidationServiceProtocol.
+
+    This class wraps the module-level validation functions to provide a consistent
+    interface for validation services.
+    """
+
+    def validate_file_exists(
+        self,
+        path: str,
+        base_dir: Optional[str] = None,
+        allow_absolute: bool = False,
+        allow_symlinks: bool = False,
+    ) -> bool:
+        """
+        Validate that a file exists and passes path safety checks.
+
+        Args:
+            path (str): Path to validate
+            base_dir (str, optional): Base directory that all paths should be within
+            allow_absolute (bool): Whether to allow absolute paths
+            allow_symlinks (bool): Whether to allow symbolic links
+
+        Returns:
+            bool: True if the file exists and passes safety checks
+
+        Raises:
+            ValidationError: If the file does not exist or fails safety checks
+        """
+        return validate_file_exists(path, base_dir, allow_absolute, allow_symlinks)
+
+    def validate_json_file(
+        self,
+        file_path: str,
+        base_dir: Optional[str] = None,
+        allow_absolute: bool = False,
+        allow_symlinks: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Validate and parse a JSON file, ensuring it passes path safety checks.
+
+        Args:
+            file_path (str): Path to the JSON file to validate
+            base_dir (str, optional): Base directory that all paths should be within
+            allow_absolute (bool): Whether to allow absolute paths
+            allow_symlinks (bool): Whether to allow symbolic links
+
+        Returns:
+            dict: Parsed JSON data
+
+        Raises:
+            ValidationError: If the file is not a valid JSON file or fails safety checks
+            json.JSONDecodeError: If the file is not valid JSON
+        """
+        return validate_json_file(file_path, base_dir, allow_absolute, allow_symlinks)
+
+    def validate_user_display_name(self, name: str) -> str:
+        """
+        Validate and sanitize a user display name.
+
+        Args:
+            name (str): User display name to validate
+
+        Returns:
+            str: Sanitized user display name
+
+        Raises:
+            ValidationError: If the name is invalid
+        """
+        return validate_user_display_name(name)

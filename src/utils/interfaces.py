@@ -7,7 +7,19 @@ in the Skype Parser project. These protocols establish clear contracts that
 implementations must fulfill, improving type safety and testability.
 """
 
-from typing import Protocol, Dict, Any, List, Optional, Callable, BinaryIO, TypeVar, Generic
+from typing import (
+    Any,
+    BinaryIO,
+    Callable,
+    Dict,
+    Generic,
+    Iterator,
+    List,
+    Optional,
+    Protocol,
+    Tuple,
+    TypeVar,
+)
 
 
 # Content extraction interfaces
@@ -142,6 +154,24 @@ class FileHandlerProtocol(Protocol):
         """
         ...
 
+    def read_tarfile_streaming(
+        self, file_path: str, auto_select: bool = False
+    ) -> Iterator[Tuple[str, Any]]:
+        """
+        Read data from a tar file using streaming JSON processing.
+
+        This method uses ijson for memory-efficient processing of large JSON files.
+        It yields (path, item) tuples for each item in the JSON file.
+
+        Args:
+            file_path: Path to the tar file
+            auto_select: Whether to automatically select the main data file
+
+        Yields:
+            Tuples of (path, item) where path is the JSON path and item is the value
+        """
+        ...
+
 
 # Database interfaces
 class DatabaseConnectionProtocol(Protocol):
@@ -185,7 +215,8 @@ class DatabaseConnectionProtocol(Protocol):
 
 
 # Repository interfaces
-T = TypeVar('T')
+T = TypeVar("T")
+
 
 class RepositoryProtocol(Protocol, Generic[T]):
     """Protocol for repositories that store and retrieve data."""
@@ -252,7 +283,9 @@ class RepositoryProtocol(Protocol, Generic[T]):
 class ExtractorProtocol(Protocol):
     """Protocol for extractors that extract data from sources."""
 
-    def extract(self, file_path: Optional[str] = None, file_obj: Optional[BinaryIO] = None) -> Dict[str, Any]:
+    def extract(
+        self, file_path: Optional[str] = None, file_obj: Optional[BinaryIO] = None
+    ) -> Dict[str, Any]:
         """
         Extract data from a source.
 
@@ -269,7 +302,9 @@ class ExtractorProtocol(Protocol):
 class TransformerProtocol(Protocol):
     """Protocol for transformers that transform raw data."""
 
-    def transform(self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None) -> Dict[str, Any]:
+    def transform(
+        self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Transform raw data into structured format.
 
@@ -286,7 +321,12 @@ class TransformerProtocol(Protocol):
 class LoaderProtocol(Protocol):
     """Protocol for loaders that load data into a destination."""
 
-    def load(self, raw_data: Dict[str, Any], transformed_data: Dict[str, Any], file_source: Optional[str] = None) -> int:
+    def load(
+        self,
+        raw_data: Dict[str, Any],
+        transformed_data: Dict[str, Any],
+        file_source: Optional[str] = None,
+    ) -> int:
         """
         Load data into a destination.
 
@@ -306,4 +346,88 @@ class LoaderProtocol(Protocol):
 
     def close_db(self) -> None:
         """Close the database connection."""
+        ...
+
+
+# Validation interfaces
+class ValidationServiceProtocol(Protocol):
+    """Protocol for validation services that validate input data."""
+
+    def validate_file_exists(
+        self,
+        path: str,
+        base_dir: Optional[str] = None,
+        allow_absolute: bool = False,
+        allow_symlinks: bool = False,
+    ) -> bool:
+        """
+        Validate that a file exists and passes path safety checks.
+
+        Args:
+            path (str): Path to validate
+            base_dir (str, optional): Base directory that all paths should be within
+            allow_absolute (bool): Whether to allow absolute paths
+            allow_symlinks (bool): Whether to allow symbolic links
+
+        Returns:
+            bool: True if the file exists and passes safety checks
+
+        Raises:
+            ValidationError: If the file does not exist or fails safety checks
+        """
+        ...
+
+    def validate_json_file(
+        self,
+        file_path: str,
+        base_dir: Optional[str] = None,
+        allow_absolute: bool = False,
+        allow_symlinks: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Validate and parse a JSON file, ensuring it passes path safety checks.
+
+        Args:
+            file_path (str): Path to the JSON file to validate
+            base_dir (str, optional): Base directory that all paths should be within
+            allow_absolute (bool): Whether to allow absolute paths
+            allow_symlinks (bool): Whether to allow symbolic links
+
+        Returns:
+            dict: Parsed JSON data
+
+        Raises:
+            ValidationError: If the file is not a valid JSON file or fails safety checks
+            json.JSONDecodeError: If the file is not valid JSON
+        """
+        ...
+
+    def validate_file_object(self, file_obj: BinaryIO) -> bool:
+        """
+        Validate that a file object is valid and readable.
+
+        Args:
+            file_obj: File object to validate
+
+        Returns:
+            bool: True if the file object is valid and readable
+
+        Raises:
+            ValidationError: If the file object is not valid or readable
+        """
+        ...
+
+    def validate_user_display_name(self, name: str) -> str:
+        """
+        Validate and sanitize a user display name.
+
+        Args:
+            name (str): User display name to validate
+
+        Returns:
+            str: Sanitized user display name
+
+        Raises:
+            ValidationError: If the user display name is not valid
+        """
         ...

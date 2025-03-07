@@ -7,111 +7,528 @@ support for easier testing. It allows injecting mock objects for file reading,
 database connections, and other dependencies.
 """
 
-import logging
 import json
+import logging
 import os
-from typing import Dict, Any, Optional, Callable, BinaryIO, List, Union
-from unittest.mock import patch, MagicMock
+import warnings
+from typing import Any, BinaryIO, Callable, Dict, List, Optional, Union
+from unittest.mock import MagicMock, patch
 
 # Import from the modular ETL pipeline instead of the deprecated one
 from src.db.etl import ETLPipeline
 from src.db.etl.context import ETLContext
 from src.db.etl.extractor import Extractor
-from src.db.etl.transformer import Transformer
 from src.db.etl.loader import Loader
-
-# Import necessary protocols and implementation
-from src.utils.interfaces import (
-    FileHandlerProtocol,
-    ContentExtractorProtocol,
-    StructuredDataExtractorProtocol,
-    MessageHandlerFactoryProtocol,
-    DatabaseConnectionProtocol
-)
-from src.utils.di import get_service_provider, get_service
-
-# Import from service registry
-from src.utils.service_registry import register_core_services, register_database_connection, register_etl_services
+from src.db.etl.transformer import Transformer
+from src.parser.content_extractor import ContentExtractor
 
 # Import additional modules
 from src.utils.db_connection import DatabaseConnection
-from src.parser.content_extractor import ContentExtractor
+from src.utils.di import get_service, get_service_provider
+
+# Import necessary protocols and implementation
+from src.utils.interfaces import (
+    ContentExtractorProtocol,
+    DatabaseConnectionProtocol,
+    FileHandlerProtocol,
+    MessageHandlerFactoryProtocol,
+    StructuredDataExtractorProtocol,
+    ValidationServiceProtocol,
+)
 from src.utils.message_type_handlers import SkypeMessageHandlerFactory
+
+# Import from service registry
+from src.utils.service_registry import (
+    register_core_services,
+    register_database_connection,
+    register_etl_services,
+)
 from src.utils.structured_data_extractor import StructuredDataExtractor
+from src.utils.validation import ValidationService
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
 
 # Create a mock file handler class that wraps the read_file_func
 class MockFileHandler(FileHandlerProtocol):
     """Mock file handler for testing that wraps the provided read_file_func."""
 
-    def __init__(self,
-                 read_file_func: Optional[Callable[[str, Optional[str]], str]] = None,
-                 tar_extract_func: Optional[Callable[[str, Optional[str]], Dict[str, Any]]] = None):
+    def __init__(
+        self,
+        read_file_func: Optional[Callable[[str, Optional[str]], Dict[str, Any]]] = None,
+        read_file_object_func: Optional[
+            Callable[[BinaryIO, Optional[str]], Dict[str, Any]]
+        ] = None,
+        tar_extract_func: Optional[
+            Callable[[str, Optional[str]], Dict[str, Any]]
+        ] = None,
+    ):
+        """Initialize the mock file handler.
+
+        Args:
+            read_file_func: Function to read files
+            read_file_object_func: Function to read file objects
+            tar_extract_func: Function to extract tar files
+        """
         self.read_file_func = read_file_func
+        self.read_file_object_func = read_file_object_func
         self.tar_extract_func = tar_extract_func
-        logger.debug("MockFileHandler initialized")
 
     def read_file(self, file_path: str) -> Dict[str, Any]:
-        """Read file using the provided read_file_func or return empty dict."""
-        logger.debug(f"MockFileHandler.read_file called with {file_path}")
+        """Read a file using the provided read_file_func.
+
+        Args:
+            file_path: Path to the file
+
+        Returns:
+            Dict[str, Any]: The file contents
+        """
         if self.read_file_func:
-            try:
-                # Handle both patch objects and regular functions
-                if hasattr(self.read_file_func, 'side_effect') and self.read_file_func.side_effect:
-                    # If it's a patch with side_effect, call the side_effect directly
-                    logger.debug("Calling patch side_effect function")
-                    return self.read_file_func.side_effect(file_path)
-                else:
-                    # Otherwise call the function directly
-                    logger.debug("Calling read_file_func directly")
-                    return self.read_file_func(file_path)
-            except Exception as e:
-                logger.error(f"Error in read_file: {str(e)}", exc_info=True)
-                return {}
-        logger.warning("No read_file_func provided, returning empty dict")
-        return {}
+            logger.debug(f"Using mock read_file_func for {file_path}")
+            return self.read_file_func(file_path)
+        else:
+            logger.debug(
+                f"No mock read_file_func provided, returning empty dict for {file_path}"
+            )
+            return {}
 
     def read_file_object(self, file_obj: BinaryIO) -> Dict[str, Any]:
-        """Read file object."""
-        logger.debug("MockFileHandler.read_file_object called")
-        try:
-            # Simple implementation that reads the file object and returns parsed JSON
-            content = file_obj.read()
-            if isinstance(content, bytes):
-                content = content.decode('utf-8')
-            return json.loads(content)
-        except Exception as e:
-            logger.error(f"Error in read_file_object: {str(e)}", exc_info=True)
+        """Read a file object using the provided read_file_object_func.
+
+        Args:
+            file_obj: File object to read
+
+        Returns:
+            Dict[str, Any]: The file contents
+        """
+        if self.read_file_object_func:
+            logger.debug("Using mock read_file_object_func")
+            return self.read_file_object_func(file_obj)
+        else:
+            logger.debug("No mock read_file_object_func provided, returning empty dict")
             return {}
 
     def read_tarfile(self, file_path: str, auto_select: bool = False) -> Dict[str, Any]:
-        """Read tarfile using the provided tar_extract_func or return empty dict."""
-        logger.debug(f"MockFileHandler.read_tarfile called with {file_path}")
-        if self.tar_extract_func:
-            try:
-                # Handle both patch objects and regular functions
-                if hasattr(self.tar_extract_func, 'side_effect') and self.tar_extract_func.side_effect:
-                    # If it's a patch with side_effect, call the side_effect directly
-                    logger.debug("Calling tar_extract_func side_effect")
-                    return self.tar_extract_func.side_effect(file_path, None if not auto_select else "auto")
-                else:
-                    # Otherwise call the function directly
-                    logger.debug("Calling tar_extract_func directly")
-                    return self.tar_extract_func(file_path, None if not auto_select else "auto")
-            except Exception as e:
-                logger.error(f"Error in read_tarfile: {str(e)}", exc_info=True)
-                return {}
-        logger.warning("No tar_extract_func provided, returning empty dict")
-        return {}
+        """Extract a tar file using the provided tar_extract_func.
 
+        Args:
+            file_path: Path to the tar file
+            auto_select: Whether to automatically select the first file
+
+        Returns:
+            Dict[str, Any]: The extracted file contents
+        """
+        if self.tar_extract_func:
+            logger.debug(f"Using mock tar_extract_func for {file_path}")
+            return self.tar_extract_func(file_path)
+        else:
+            logger.debug(
+                f"No mock tar_extract_func provided, returning empty dict for {file_path}"
+            )
+            return {}
+
+
+class MockValidationService(ValidationServiceProtocol):
+    """Mock validation service for testing."""
+
+    def __init__(
+        self,
+        validate_file_exists_func: Optional[Callable[[str], bool]] = None,
+        validate_file_object_func: Optional[Callable[[BinaryIO], bool]] = None,
+        validate_json_file_func: Optional[Callable[[str], Dict[str, Any]]] = None,
+        validate_user_display_name_func: Optional[Callable[[str], str]] = None,
+    ):
+        """Initialize the mock validation service.
+
+        Args:
+            validate_file_exists_func: Function to validate file existence
+            validate_file_object_func: Function to validate file objects
+            validate_json_file_func: Function to validate JSON files
+            validate_user_display_name_func: Function to validate user display name
+        """
+        self.validate_file_exists_func = validate_file_exists_func
+        self.validate_file_object_func = validate_file_object_func
+        self.validate_json_file_func = validate_json_file_func
+        self.validate_user_display_name_func = validate_user_display_name_func
+
+        # Create mock methods for testing
+        self.validate_file_exists_mock = MagicMock(
+            side_effect=self.validate_file_exists
+        )
+        self.validate_file_object_mock = MagicMock(
+            side_effect=self.validate_file_object
+        )
+        self.validate_user_display_name_mock = MagicMock(
+            side_effect=self.validate_user_display_name
+        )
+
+    def validate_file_exists(
+        self,
+        path: str,
+        base_dir: Optional[str] = None,
+        allow_absolute: bool = False,
+        allow_symlinks: bool = False,
+    ) -> bool:
+        """Validate that a file exists using the provided validate_file_exists_func.
+
+        Args:
+            path: Path to validate
+            base_dir: Base directory for relative paths
+            allow_absolute: Whether to allow absolute paths
+            allow_symlinks: Whether to allow symlinks
+
+        Returns:
+            bool: Whether the file exists
+        """
+        if self.validate_file_exists_func:
+            logger.debug(f"Using mock validate_file_exists_func for {path}")
+            return self.validate_file_exists_func(path)
+        else:
+            logger.debug(
+                f"No mock validate_file_exists_func provided, returning True for {path}"
+            )
+            return True
+
+    def validate_file_object(self, file_obj: BinaryIO) -> bool:
+        """Validate a file object using the provided validate_file_object_func.
+
+        Args:
+            file_obj: File object to validate
+
+        Returns:
+            bool: Whether the file object is valid
+        """
+        if self.validate_file_object_func:
+            logger.debug("Using mock validate_file_object_func")
+            return self.validate_file_object_func(file_obj)
+        else:
+            logger.debug("No mock validate_file_object_func provided, returning True")
+            return True
+
+    def validate_json_file(
+        self,
+        file_path: str,
+        base_dir: Optional[str] = None,
+        allow_absolute: bool = False,
+        allow_symlinks: bool = False,
+    ) -> Dict[str, Any]:
+        """Validate a JSON file using the provided validate_json_file_func.
+
+        Args:
+            file_path: Path to the JSON file
+            base_dir: Base directory for relative paths
+            allow_absolute: Whether to allow absolute paths
+            allow_symlinks: Whether to allow symlinks
+
+        Returns:
+            Dict[str, Any]: The validated JSON data
+        """
+        if self.validate_json_file_func:
+            logger.debug(f"Using mock validate_json_file_func for {file_path}")
+            return self.validate_json_file_func(file_path)
+        else:
+            logger.debug(
+                f"No mock validate_json_file_func provided, returning empty dict for {file_path}"
+            )
+            return {}
+
+    def validate_user_display_name(self, name: str) -> str:
+        """Validate a user display name using the provided validate_user_display_name_func.
+
+        Args:
+            name: User display name to validate
+
+        Returns:
+            str: The validated user display name
+        """
+        if self.validate_user_display_name_func:
+            logger.debug(f"Using mock validate_user_display_name_func for {name}")
+            return self.validate_user_display_name_func(name)
+        else:
+            logger.debug(
+                f"No mock validate_user_display_name_func provided, returning {name}"
+            )
+            return name
+
+
+class ImprovedTestableETLPipeline:
+    """
+    An improved testable version of the ETL pipeline with dependency injection support.
+
+    This class follows the same pattern as SOLIDSkypeETLPipeline, making it easier to
+    test the ETL pipeline in isolation by injecting mock objects for all dependencies.
+    """
+
+    def __init__(
+        self,
+        db_config: Dict[str, Any],
+        file_handler: FileHandlerProtocol,
+        validation_service: ValidationServiceProtocol,
+        db_connection: DatabaseConnectionProtocol,
+        content_extractor: ContentExtractorProtocol,
+        structured_data_extractor: StructuredDataExtractorProtocol,
+        message_handler_factory: MessageHandlerFactoryProtocol,
+    ) -> None:
+        """
+        Initialize the ImprovedTestableETLPipeline with all required dependencies.
+
+        Args:
+            db_config: Database configuration dictionary
+            file_handler: File handler for reading Skype export files
+            validation_service: Service for validating input data
+            db_connection: Database connection for loading data
+            content_extractor: Extractor for message content
+            structured_data_extractor: Extractor for structured data
+            message_handler_factory: Factory for message handlers
+        """
+        # Create the ETL context
+        self.context: ETLContext = ETLContext(db_config=db_config)
+
+        # Create the pipeline components
+        self.extractor: Extractor = Extractor(
+            context=self.context,
+            file_handler=file_handler,
+            validation_service=validation_service,
+        )
+        self.transformer: Transformer = Transformer(
+            context=self.context,
+            content_extractor=content_extractor,
+            structured_data_extractor=structured_data_extractor,
+            message_handler_factory=message_handler_factory,
+        )
+        self.loader: Loader = Loader(context=self.context, db_connection=db_connection)
+
+        # Store dependencies for later use
+        self.file_handler: FileHandlerProtocol = file_handler
+        self.validation_service: ValidationServiceProtocol = validation_service
+        self.db_connection: DatabaseConnectionProtocol = db_connection
+        self.db_config: Dict[str, Any] = db_config
+
+    def run_pipeline(
+        self,
+        file_path: Optional[str] = None,
+        file_obj: Optional[BinaryIO] = None,
+        user_display_name: Optional[str] = None,
+        resume_from_checkpoint: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Run the complete ETL pipeline.
+
+        Args:
+            file_path: Path to the Skype export file
+            file_obj: File-like object containing Skype export data
+            user_display_name: Display name of the user
+            resume_from_checkpoint: Whether to resume from a checkpoint
+
+        Returns:
+            Dict[str, Any]: Results of the pipeline run with extraction, transformation, and loading sections
+        """
+        # Validate input parameters
+        if file_path is None and file_obj is None:
+            raise ValueError("Either file_path or file_obj must be provided")
+
+        # Check if we need to use the mock validation methods
+        if hasattr(self.validation_service, "validate_file_exists_mock"):
+            # Use the mock method for file validation
+            if file_path is not None:
+                self.validation_service.validate_file_exists_mock(file_path)
+
+        if hasattr(self.validation_service, "validate_user_display_name_mock"):
+            # Use the mock method for user display name validation
+            if user_display_name is not None:
+                self.validation_service.validate_user_display_name_mock(
+                    user_display_name
+                )
+
+        # Extract data
+        raw_data = self.extract(file_path=file_path, file_obj=file_obj)
+
+        # Transform data
+        transformed_data = self.transform(
+            raw_data=raw_data, user_display_name=user_display_name
+        )
+
+        # Load data
+        load_id = self.load(
+            raw_data=raw_data, transformed_data=transformed_data, file_path=file_path
+        )
+
+        # Return results
+        return {
+            "extraction": {"success": True, "data": raw_data},
+            "transformation": {"success": True, "data": transformed_data},
+            "loading": {"success": True, "id": load_id},
+        }
+
+    def extract(
+        self, file_path: Optional[str] = None, file_obj: Optional[BinaryIO] = None
+    ) -> Dict[str, Any]:
+        """
+        Extract data from a Skype export file.
+
+        Args:
+            file_path: Path to the Skype export file
+            file_obj: File-like object containing Skype export data
+
+        Returns:
+            Dict[str, Any]: The extracted data
+        """
+        return self.extractor.extract(file_path=file_path, file_obj=file_obj)
+
+    def transform(
+        self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Transform raw Skype export data into a structured format.
+
+        Args:
+            raw_data: Raw Skype export data
+            user_display_name: Display name of the user
+
+        Returns:
+            Dict[str, Any]: The transformed data
+        """
+        return self.transformer.transform(
+            raw_data=raw_data, user_display_name=user_display_name
+        )
+
+    def load(
+        self,
+        raw_data: Dict[str, Any],
+        transformed_data: Dict[str, Any],
+        file_path: Optional[str] = None,
+    ) -> int:
+        """
+        Load transformed data into the database.
+
+        Args:
+            raw_data: Raw Skype export data
+            transformed_data: Transformed data
+            file_path: Path to the Skype export file (for reference)
+
+        Returns:
+            int: ID of the loaded data
+        """
+        return self.loader.load(
+            raw_data=raw_data, transformed_data=transformed_data, file_source=file_path
+        )
+
+    def connect_db(self) -> None:
+        """Connect to the database."""
+        if hasattr(self.db_connection, "connect"):
+            self.db_connection.connect()
+
+    def close_db(self) -> None:
+        """Close the database connection."""
+        if hasattr(self.db_connection, "close"):
+            self.db_connection.close()
+
+
+def create_testable_etl_pipeline(
+    db_config: Dict[str, Any],
+    file_handler: Optional[FileHandlerProtocol] = None,
+    validation_service: Optional[ValidationServiceProtocol] = None,
+    db_connection: Optional[DatabaseConnectionProtocol] = None,
+    content_extractor: Optional[ContentExtractorProtocol] = None,
+    structured_data_extractor: Optional[StructuredDataExtractorProtocol] = None,
+    message_handler_factory: Optional[MessageHandlerFactoryProtocol] = None,
+    read_file_func: Optional[Callable[[str], Dict[str, Any]]] = None,
+    read_file_object_func: Optional[Callable[[BinaryIO], Dict[str, Any]]] = None,
+    tar_extract_func: Optional[Callable[[str], Dict[str, Any]]] = None,
+    validate_file_exists_func: Optional[Callable[[str], bool]] = None,
+    validate_file_object_func: Optional[Callable[[BinaryIO], bool]] = None,
+    validate_json_file_func: Optional[Callable[[str], Dict[str, Any]]] = None,
+    validate_user_display_name_func: Optional[Callable[[str], str]] = None,
+) -> ImprovedTestableETLPipeline:
+    """
+    Create an ImprovedTestableETLPipeline with all the necessary dependencies.
+
+    This factory function creates an ImprovedTestableETLPipeline with either the provided
+    dependencies or default implementations. It also allows providing mock functions
+    for specific operations.
+
+    Args:
+        db_config: Database configuration dictionary
+        file_handler: File handler for reading Skype export files
+        validation_service: Service for validating input data
+        db_connection: Database connection for loading data
+        content_extractor: Extractor for message content
+        structured_data_extractor: Extractor for structured data
+        message_handler_factory: Factory for message handlers
+        read_file_func: Function to read files
+        read_file_object_func: Function to read file objects
+        tar_extract_func: Function to extract tar files
+        validate_file_exists_func: Function to validate file existence
+        validate_file_object_func: Function to validate file objects
+        validate_json_file_func: Function to validate JSON files
+        validate_user_display_name_func: Function to validate user display name
+
+    Returns:
+        ImprovedTestableETLPipeline: A fully configured testable ETL pipeline
+    """
+    # Create mock file handler if specific mock functions are provided
+    if file_handler is None and (
+        read_file_func or read_file_object_func or tar_extract_func
+    ):
+        file_handler = MockFileHandler(
+            read_file_func=read_file_func,
+            read_file_object_func=read_file_object_func,
+            tar_extract_func=tar_extract_func,
+        )
+    elif file_handler is None:
+        file_handler = FileHandlerProtocol()
+
+    # Create mock validation service if specific mock functions are provided
+    if validation_service is None and (
+        validate_file_exists_func
+        or validate_file_object_func
+        or validate_json_file_func
+        or validate_user_display_name_func
+    ):
+        validation_service = MockValidationService(
+            validate_file_exists_func=validate_file_exists_func,
+            validate_file_object_func=validate_file_object_func,
+            validate_json_file_func=validate_json_file_func,
+            validate_user_display_name_func=validate_user_display_name_func,
+        )
+    elif validation_service is None:
+        validation_service = ValidationService()
+
+    # Create default implementations if not provided
+    if db_connection is None:
+        db_connection = DatabaseConnection(db_config)
+
+    if content_extractor is None:
+        content_extractor = ContentExtractor()
+
+    if structured_data_extractor is None:
+        structured_data_extractor = StructuredDataExtractor()
+
+    if message_handler_factory is None:
+        message_handler_factory = SkypeMessageHandlerFactory()
+
+    # Create and return the pipeline
+    return ImprovedTestableETLPipeline(
+        db_config=db_config,
+        file_handler=file_handler,
+        validation_service=validation_service,
+        db_connection=db_connection,
+        content_extractor=content_extractor,
+        structured_data_extractor=structured_data_extractor,
+        message_handler_factory=message_handler_factory,
+    )
+
+
+# Keep the original TestableETLPipeline for backward compatibility
 class TestableETLPipeline:
     """
     A testable version of the ETL pipeline with dependency injection support.
 
     This class allows injecting mock objects for file reading, database connections,
     and other dependencies, making it easier to test the ETL pipeline in isolation.
+
+    Note: This class is deprecated. Please use ImprovedTestableETLPipeline instead.
     """
 
     def __init__(
@@ -119,14 +536,16 @@ class TestableETLPipeline:
         db_config: Dict[str, Any],
         use_di: bool = False,
         read_file_func: Optional[Callable[[str, Optional[str]], str]] = None,
-        tar_extract_func: Optional[Callable[[str, Optional[str]], Dict[str, Any]]] = None,
+        tar_extract_func: Optional[
+            Callable[[str, Optional[str]], Dict[str, Any]]
+        ] = None,
         validate_file_exists_func: Optional[Callable[[str], bool]] = None,
         validate_json_file_func: Optional[Callable[[str], bool]] = None,
         validate_user_display_name_func: Optional[Callable[[str], str]] = None,
         db_connection: Optional[Any] = None,
         content_extractor: Optional[ContentExtractorProtocol] = None,
         structured_data_extractor: Optional[StructuredDataExtractorProtocol] = None,
-        message_handler_factory: Optional[MessageHandlerFactoryProtocol] = None
+        message_handler_factory: Optional[MessageHandlerFactoryProtocol] = None,
     ) -> None:
         """Initialize the TestableETLPipeline.
 
@@ -143,377 +562,172 @@ class TestableETLPipeline:
             structured_data_extractor: Structured data extractor
             message_handler_factory: Message handler factory
         """
-        self.db_config = db_config
-        self.use_di = use_di
-
-        # Create the ETL context first
-        self.context = ETLContext(db_config=self.db_config)
-
-        # Extract side_effects from any patch objects that were passed
-        self.read_file_func = self._extract_mock_function(read_file_func)
-        self.tar_extract_func = self._extract_mock_function(tar_extract_func)
-        self.validate_file_exists_func = self._extract_mock_function(validate_file_exists_func)
-        self.validate_json_file_func = self._extract_mock_function(validate_json_file_func)
-        self.validate_user_display_name_func = self._extract_mock_function(validate_user_display_name_func)
-
-        logger.debug(f"Initializing TestableETLPipeline with use_di={use_di}")
-
-        # Initialize the file handler
-        self.file_handler = MockFileHandler(
-            read_file_func=self.read_file_func,
-            tar_extract_func=self.tar_extract_func
+        warnings.warn(
+            "TestableETLPipeline is deprecated. Please use ImprovedTestableETLPipeline instead.",
+            DeprecationWarning,
+            stacklevel=2,
         )
-        logger.debug("MockFileHandler initialized")
 
-        # Initialize pipeline
-        if use_di:
-            self.pipeline = self._create_pipeline_with_di(
+        # Create an ImprovedTestableETLPipeline instead
+        if not use_di:
+            # Create a mock file handler
+            file_handler = MockFileHandler(
+                read_file_func=read_file_func, tar_extract_func=tar_extract_func
+            )
+
+            # Create a mock validation service
+            validation_service = MockValidationService(
+                validate_file_exists_func=validate_file_exists_func,
+                validate_json_file_func=validate_json_file_func,
+                validate_user_display_name_func=validate_user_display_name_func,
+            )
+
+            # Create the improved pipeline
+            self._pipeline = create_testable_etl_pipeline(
+                db_config=db_config,
+                file_handler=file_handler,
+                validation_service=validation_service,
                 db_connection=db_connection,
                 content_extractor=content_extractor,
                 structured_data_extractor=structured_data_extractor,
-                message_handler_factory=message_handler_factory
+                message_handler_factory=message_handler_factory,
             )
         else:
-            self.pipeline = self._create_pipeline_without_di(
-                db_connection=db_connection,
-                content_extractor=content_extractor,
-                structured_data_extractor=structured_data_extractor,
-                message_handler_factory=message_handler_factory
-            )
+            # Use dependency injection
+            from src.utils.di import ServiceProvider
 
-    def _extract_mock_function(self, mock_obj):
-        """Extract the actual function from a mock object if necessary.
+            provider = ServiceProvider()
 
-        Args:
-            mock_obj: Either a function, a mock, or a patch object
+            # Register services
+            register_core_services(provider=provider)
+            register_database_connection(db_config=db_config, provider=provider)
+            register_etl_services(db_config=db_config, provider=provider)
 
-        Returns:
-            The actual function to use
-        """
-        if mock_obj is None:
-            return None
+            # Create the pipeline
+            self._pipeline = ETLPipeline(db_config=db_config, use_di=True)
 
-        # If it's a patch object that hasn't been started
-        if hasattr(mock_obj, 'start') and callable(mock_obj.start):
-            try:
-                # Try to get the side_effect
-                if hasattr(mock_obj, 'side_effect') and mock_obj.side_effect is not None:
-                    return mock_obj.side_effect
-                # If no side_effect, start the mock and return the mock itself
-                started_mock = mock_obj.start()
-                return started_mock
-            except Exception as e:
-                logger.error(f"Error extracting function from mock: {str(e)}")
-                return mock_obj
+        # Store the context for backward compatibility
+        self.context = self._pipeline.context
 
-        # If it's a MagicMock with a side_effect
-        if hasattr(mock_obj, 'side_effect') and mock_obj.side_effect is not None:
-            return mock_obj.side_effect
+        # Store the components for backward compatibility
+        self.extractor = self._pipeline.extractor
+        self.transformer = self._pipeline.transformer
+        self.loader = self._pipeline.loader
 
-        # Otherwise, assume it's a callable and return it directly
-        return mock_obj
-
-    def _create_pipeline_with_di(self, db_connection, content_extractor, structured_data_extractor, message_handler_factory):
-        # Use the dependency injection container
-        from src.utils.di import ServiceProvider
-        provider = ServiceProvider()
-
-        # Register database connection
-        register_database_connection(db_config=self.db_config, provider=provider)
-
-        # Register the context we created
-        provider.register_singleton(ETLContext, self.context)
-
-        # Register the file handler with our mock functions
-        if self.file_handler:
-            provider.register_singleton(FileHandlerProtocol, self.file_handler)
-
-        # Register dependencies if provided
-        if content_extractor:
-            provider.register_singleton(ContentExtractorProtocol, content_extractor)
-        if structured_data_extractor:
-            provider.register_singleton(StructuredDataExtractorProtocol, structured_data_extractor)
-        if message_handler_factory:
-            provider.register_singleton(MessageHandlerFactoryProtocol, message_handler_factory)
-        if db_connection:
-            provider.register_singleton("db_connection", db_connection)
-
-        # Register ETL services with our context
-        register_etl_services(db_config=self.db_config, provider=provider)
-
-        logger.debug("Creating ETLPipeline with dependency injection")
-        self.pipeline = ETLPipeline(db_config=self.db_config, context=self.context, use_di=True)
-        return self.pipeline
-
-    def _create_pipeline_without_di(self, db_connection, content_extractor, structured_data_extractor, message_handler_factory):
-        # Create manually without DI
-        logger.debug("Creating ETLPipeline without dependency injection")
-        self.pipeline = ETLPipeline(db_config=self.db_config, context=self.context, use_di=False)
-
-        # Create the extractor with our file handler explicitly
-        logger.debug("Creating Extractor with explicit file handler")
-        self.pipeline.extractor = Extractor(context=self.context, file_handler=self.file_handler)
-
-        # Create a transformer with our mock dependencies
-        logger.debug("Creating custom Transformer for testing")
-        self.pipeline.transformer = MockTransformer(
-            context=self.context,
-            content_extractor=content_extractor,
-            message_handler_factory=message_handler_factory,
-            structured_data_extractor=structured_data_extractor
-        )
-
-        self.pipeline.loader = Loader(context=self.context, db_connection=db_connection)
-
-        # Inject dependencies if provided
-        if self.read_file_func:
-            logger.debug("Injecting read_file_func")
-            self.pipeline.extractor.read_file = self.read_file_func
-
-        if self.tar_extract_func:
-            logger.debug("Injecting tar_extract_func")
-            self.pipeline.extractor.extract_tar = self.tar_extract_func
-
-        # Directly patch the extract method to use validate_json_file
-        if self.validate_json_file_func:
-            logger.debug("Patching extract method to use validate_json_file")
-            self._patch_extract_method(self.pipeline.extractor)
-
-        # Directly assign the validation function to the extractor
-        if self.validate_file_exists_func:
-            logger.debug("Patching validate_file_exists")
-            # Replace the validate_file_exists function in the extractor
-            import types
-            from src.utils.validation import validate_file_exists as original_validate
-
-            # Create a function that replaces the original with our mock
-            def patched_validate(file_path, *args, **kwargs):
-                return self.validate_file_exists_func(file_path)
-
-            # Replace the validate_file_exists in the module namespace
-            import src.utils.validation
-            self._original_validate = src.utils.validation.validate_file_exists
-            src.utils.validation.validate_file_exists = patched_validate
-
-        if self.validate_user_display_name_func:
-            self.pipeline.extractor.validate_user_display_name = self.validate_user_display_name_func
-
-        return self.pipeline
+        # Store the original functions for cleanup
+        self._original_validate = None
+        self._original_user_validate = None
 
     def __del__(self):
-        """Restore original validate function when object is deleted."""
-        if hasattr(self, '_original_validate'):
+        """Clean up any patched functions."""
+        # Restore original functions if they were patched
+        if self._original_validate:
             import src.utils.validation
+
             src.utils.validation.validate_file_exists = self._original_validate
+
+        if self._original_user_validate:
+            import src.utils.validation
+
+            src.utils.validation.validate_user_display_name = (
+                self._original_user_validate
+            )
 
     def run_pipeline(
         self,
         file_path: Optional[str] = None,
         file_obj: Optional[BinaryIO] = None,
-        is_tar: bool = False,
         user_display_name: Optional[str] = None,
         resume_from_checkpoint: bool = False,
-        checkpoint_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Run the ETL pipeline with the injected dependencies.
+        Run the complete ETL pipeline.
 
         Args:
             file_path: Path to the Skype export file
-            file_obj: File object (alternative to file_path)
-            is_tar: Whether the file is a tar file
+            file_obj: File-like object containing Skype export data
             user_display_name: Display name of the user
             resume_from_checkpoint: Whether to resume from a checkpoint
-            checkpoint_id: ID of the checkpoint to resume from
 
         Returns:
-            Dictionary with the results of the pipeline run
+            Dict[str, Any]: Results of the pipeline run
         """
-        # Use a patch context manager to override os.path.exists and os.path.isfile
-        with patch('os.path.exists', return_value=True), patch('os.path.isfile', return_value=True):
-            return self.pipeline.run_pipeline(
-                file_path=file_path,
-                file_obj=file_obj,
-                user_display_name=user_display_name,
-                resume_from_checkpoint=resume_from_checkpoint
-            )
+        return self._pipeline.run_pipeline(
+            file_path=file_path,
+            file_obj=file_obj,
+            user_display_name=user_display_name,
+            resume_from_checkpoint=resume_from_checkpoint,
+        )
 
     def extract(
-        self,
-        file_path: Optional[str] = None,
-        file_obj: Optional[BinaryIO] = None
+        self, file_path: Optional[str] = None, file_obj: Optional[BinaryIO] = None
     ) -> Dict[str, Any]:
         """
         Extract data from a Skype export file.
 
         Args:
             file_path: Path to the Skype export file
-            file_obj: File object (alternative to file_path)
+            file_obj: File-like object containing Skype export data
 
         Returns:
-            Dictionary with the extracted data
+            Dict[str, Any]: The extracted data
         """
-        # Use a patch context manager to override os.path.exists
-        with patch('os.path.exists', return_value=True), patch('os.path.isfile', return_value=True):
-            return self.pipeline.extractor.extract(
-                file_path=file_path,
-                file_obj=file_obj
-            )
+        return self._pipeline.extract(file_path=file_path, file_obj=file_obj)
 
     def transform(
-        self,
-        raw_data: Dict[str, Any],
-        user_display_name: Optional[str] = None
+        self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Transform raw Skype data into a structured format.
+        Transform raw Skype export data into a structured format.
 
         Args:
-            raw_data: Raw Skype data
+            raw_data: Raw Skype export data
             user_display_name: Display name of the user
 
         Returns:
-            Dictionary with the transformed data
+            Dict[str, Any]: The transformed data
         """
-        return self.pipeline.transformer.transform(
-            raw_data=raw_data,
-            user_display_name=user_display_name
+        return self._pipeline.transform(
+            raw_data=raw_data, user_display_name=user_display_name
         )
 
     def load(
         self,
         raw_data: Dict[str, Any],
         transformed_data: Dict[str, Any],
-        file_path: Optional[str] = None
-    ) -> str:
+        file_path: Optional[str] = None,
+    ) -> int:
         """
-        Load transformed Skype data into the database.
+        Load transformed data into the database.
 
         Args:
-            raw_data: Raw Skype data
-            transformed_data: Transformed Skype data
-            file_path: Path to the Skype export file
+            raw_data: Raw Skype export data
+            transformed_data: Transformed data
+            file_path: Path to the Skype export file (for reference)
 
         Returns:
-            Export ID
+            int: ID of the loaded data
         """
-        return self.pipeline.loader.load(
-            raw_data=raw_data,
-            transformed_data=transformed_data,
-            file_path=file_path
+        return self._pipeline.load(
+            raw_data=raw_data, transformed_data=transformed_data, file_path=file_path
         )
 
-    def save_checkpoint(
-        self,
-        phase: str,
-        data: Dict[str, Any],
-        checkpoint_id: Optional[str] = None
-    ) -> str:
-        """
-        Save a checkpoint for the current pipeline state.
-
-        Args:
-            phase: Current phase of the pipeline
-            data: Data to save in the checkpoint
-            checkpoint_id: Optional ID for the checkpoint
-
-        Returns:
-            ID of the saved checkpoint
-        """
-        return self.pipeline.save_checkpoint(
-            phase=phase,
-            data=data,
-            checkpoint_id=checkpoint_id
-        )
-
-    def load_checkpoint(
-        self,
-        checkpoint_id: str
-    ) -> Dict[str, Any]:
-        """
-        Load a checkpoint by ID.
-
-        Args:
-            checkpoint_id: ID of the checkpoint to load
-
-        Returns:
-            Checkpoint data
-        """
-        return self.pipeline.load_checkpoint(checkpoint_id=checkpoint_id)
-
-    def get_available_checkpoints(self) -> List[str]:
-        """
-        Get a list of available checkpoint IDs.
-
-        Returns:
-            List of checkpoint IDs
-        """
-        return self.pipeline.get_available_checkpoints()
-
-    def connect_db(self):
+    def connect_db(self) -> None:
         """Connect to the database."""
-        self.pipeline.loader.connect_db()
+        self._pipeline.connect_db()
 
-    def close_db(self):
+    def close_db(self) -> None:
         """Close the database connection."""
-        self.pipeline.loader.close_db()
+        self._pipeline.close_db()
 
-    @classmethod
-    def load_from_checkpoint(
-        cls,
-        checkpoint_id: str,
-        db_config: Optional[Dict[str, Any]] = None,
-        output_dir: Optional[str] = None
-    ) -> 'TestableETLPipeline':
-        """
-        Create a new pipeline instance from a checkpoint.
 
-        Args:
-            checkpoint_id: ID of the checkpoint to load
-            db_config: Database configuration dictionary
-            output_dir: Directory for output files
-
-        Returns:
-            New TestableETLPipeline instance with the checkpoint loaded
-        """
-        pipeline = cls(db_config=db_config, output_dir=output_dir)
-        pipeline.load_checkpoint(checkpoint_id)
-        return pipeline
-
-    def _patch_extract_method(self, extractor):
-        """Patch the extract method to use validate_json_file_func."""
-        original_extract = extractor.extract
-        validate_json_file_func = self.validate_json_file_func
-
-        def patched_extract(file_path, *args, **kwargs):
-            logger.debug(f"Using patched extract method for {file_path}")
-            try:
-                # Call the validation function and return its result
-                result = validate_json_file_func(file_path)
-                logger.debug(f"Validation function returned: {type(result)}")
-                # Ensure we have a dictionary
-                if not isinstance(result, dict):
-                    try:
-                        # Try to parse as JSON string
-                        parsed_result = json.loads(result) if isinstance(result, str) else None
-                        if isinstance(parsed_result, dict):
-                            return parsed_result
-                    except Exception:
-                        pass
-                    # If we still don't have a dict, raise an error
-                    raise ValueError("Extracted data must be a dictionary")
-                return result
-            except Exception as e:
-                logger.error(f"Error in patched extract: {str(e)}")
-                raise
-
-        # Replace the extract method
-        extractor.extract = patched_extract
-
+# For backward compatibility
 class MockTransformer(Transformer):
-    """Mock transformer that properly handles ETLContext API differences."""
+    """Mock transformer for testing."""
 
-    def transform(self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None) -> Dict[str, Any]:
+    def transform(
+        self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Transform raw Skype export data into a structured format.
 
         Args:
@@ -521,73 +735,61 @@ class MockTransformer(Transformer):
             user_display_name: Optional display name of the user
 
         Returns:
-            Transformed data
+            Dict[str, Any]: Transformed data
         """
         if self.context:
-            # Use start_phase instead of set_phase
-            self.context.start_phase('transform')
+            self.context.start_phase("transformation")
 
-        logger.debug(f"Transforming data with context: {self.context}")
+        logger.debug(f"MockTransformer.transform called with context: {self.context}")
 
-        # Initialize tracking counters
-        total_conversations = 0
-        total_messages = 0
+        # Create a simple transformed data structure
+        transformed_data = {"conversations": []}
 
-        # Initialize the transformed output structure
-        transformed_data = {
-            'task_id': self.context.task_id if self.context else 'mock-task-id',
-            'conversations': [],
-            'conversation_mapping': {}
-        }
+        # Extract conversations from raw data
+        if "conversations" in raw_data:
+            for conversation in raw_data["conversations"]:
+                # Skip conversations without a display name
+                if not conversation.get("displayName"):
+                    continue
 
-        # Add user and export info
-        if user_display_name:
-            transformed_data['user_display_name'] = user_display_name
-
-        if raw_data.get('userId'):
-            transformed_data['user_id'] = raw_data['userId']
-
-        if raw_data.get('exportDate'):
-            transformed_data['export_date'] = raw_data['exportDate']
-
-        # Process conversations
-        if raw_data.get('conversations'):
-            for conv in raw_data['conversations']:
-                # Add basic conversation data
-                conversation = {
-                    'id': conv.get('id', f'unknown-{total_conversations}'),
-                    'display_name': conv.get('displayName', 'Unknown Conversation'),
-                    'messages': []
+                # Create a transformed conversation
+                transformed_conversation = {
+                    "id": conversation.get("id", ""),
+                    "display_name": conversation.get("displayName", ""),
+                    "messages": [],
                 }
 
-                # Process messages
-                if conv.get('MessageList'):
-                    for msg in conv['MessageList']:
-                        message = {
-                            'id': msg.get('id', f'unknown-{total_messages}'),
-                            'timestamp': msg.get('originalarrivaltime', ''),
-                            'sender_id': msg.get('from_id', ''),
-                            'sender_name': msg.get('from_name', ''),
-                            'content': msg.get('content', ''),
-                            'type': msg.get('messagetype', 'Unknown')
+                # Extract messages from the conversation
+                if "MessageList" in conversation:
+                    for message in conversation["MessageList"]:
+                        # Create a transformed message
+                        transformed_message = {
+                            "id": message.get("id", ""),
+                            "content": message.get("content", ""),
+                            "timestamp": message.get("originalarrivaltime", ""),
+                            "sender": message.get("from", ""),
                         }
-                        conversation['messages'].append(message)
-                        total_messages += 1
 
-                transformed_data['conversations'].append(conversation)
-                # Add to conversation mapping
-                transformed_data['conversation_mapping'][conversation['id']] = conversation
-                total_conversations += 1
+                        # Add the message to the conversation
+                        transformed_conversation["messages"].append(transformed_message)
 
-        # Add counts to transformed data
-        transformed_data['total_conversations'] = total_conversations
-        transformed_data['total_messages'] = total_messages
+                # Add the conversation to the transformed data
+                transformed_data["conversations"].append(transformed_conversation)
 
+        # End the transformation phase
         if self.context:
-            # Use end_phase instead of set_phase
-            self.context.end_phase('transform')
+            self.context.end_phase(
+                {
+                    "status": "completed",
+                    "conversations_processed": len(transformed_data["conversations"]),
+                    "messages_processed": sum(
+                        len(c["messages"]) for c in transformed_data["conversations"]
+                    ),
+                }
+            )
 
         return transformed_data
+
 
 if __name__ == "__main__":
     # This module is not meant to be run directly

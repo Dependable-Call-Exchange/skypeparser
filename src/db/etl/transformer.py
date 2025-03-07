@@ -5,24 +5,26 @@ This module provides the Transformer class that transforms raw Skype export data
 into a structured format suitable for database loading.
 """
 
-import logging
-import json
-import os
-from typing import Dict, Any, Optional, List, Callable, Union
 import concurrent.futures
+import json
+import logging
+import os
 from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional, Union
 
+from src.utils.attachment_handler import AttachmentHandler
+from src.utils.di import get_service
 from src.utils.interfaces import (
-    TransformerProtocol,
     ContentExtractorProtocol,
     MessageHandlerFactoryProtocol,
-    StructuredDataExtractorProtocol
+    StructuredDataExtractorProtocol,
+    TransformerProtocol,
 )
-from src.utils.di import get_service
-from src.utils.attachment_handler import AttachmentHandler
+
 from .context import ETLContext
 
 logger = logging.getLogger(__name__)
+
 
 class Transformer(TransformerProtocol):
     """Transforms raw Skype export data into a structured format."""
@@ -35,7 +37,7 @@ class Transformer(TransformerProtocol):
         max_workers: Optional[int] = None,
         content_extractor: Optional[ContentExtractorProtocol] = None,
         message_handler_factory: Optional[MessageHandlerFactoryProtocol] = None,
-        structured_data_extractor: Optional[StructuredDataExtractorProtocol] = None
+        structured_data_extractor: Optional[StructuredDataExtractorProtocol] = None,
     ):
         """Initialize the transformer.
 
@@ -54,13 +56,21 @@ class Transformer(TransformerProtocol):
         self.max_workers = max_workers
 
         # Use provided dependencies or get from service container
-        self.content_extractor = content_extractor or get_service(ContentExtractorProtocol)
-        self.message_handler_factory = message_handler_factory or get_service(MessageHandlerFactoryProtocol)
-        self.structured_data_extractor = structured_data_extractor or get_service(StructuredDataExtractorProtocol)
+        self.content_extractor = content_extractor or get_service(
+            ContentExtractorProtocol
+        )
+        self.message_handler_factory = message_handler_factory or get_service(
+            MessageHandlerFactoryProtocol
+        )
+        self.structured_data_extractor = structured_data_extractor or get_service(
+            StructuredDataExtractorProtocol
+        )
 
         logger.info("Transformer initialized")
 
-    def transform(self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None) -> Dict[str, Any]:
+    def transform(
+        self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Transform raw Skype export data into a structured format.
 
         Args:
@@ -71,7 +81,7 @@ class Transformer(TransformerProtocol):
             Transformed data
         """
         if self.context:
-            self.context.set_phase('transform')
+            self.context.start_phase("transform")
             if user_display_name:
                 self.context.user_display_name = user_display_name
 
@@ -80,45 +90,64 @@ class Transformer(TransformerProtocol):
 
         # Initialize result structure
         result = {
-            'metadata': {
-                'transformed_at': datetime.now().isoformat(),
-                'conversations_count': 0,
-                'messages_count': 0
+            "metadata": {
+                "transformed_at": datetime.now().isoformat(),
+                "conversations_count": 0,
+                "messages_count": 0,
             },
-            'conversations': {}
+            "conversations": {},
         }
 
         # Extract conversations
-        conversations = raw_data.get('conversations', {})
-        result['metadata']['conversations_count'] = len(conversations)
+        conversations = raw_data.get("conversations", {})
+        result["metadata"]["conversations_count"] = len(conversations)
 
         # Process each conversation
         for conversation_id, conversation_data in conversations.items():
             try:
                 # Transform conversation
-                transformed_conversation = self._transform_conversation(conversation_id, conversation_data)
-                result['conversations'][conversation_id] = transformed_conversation
-                result['metadata']['messages_count'] += len(transformed_conversation.get('messages', []))
+                transformed_conversation = self._transform_conversation(
+                    conversation_id, conversation_data
+                )
+                result["conversations"][conversation_id] = transformed_conversation
+                result["metadata"]["messages_count"] += len(
+                    transformed_conversation.get("messages", [])
+                )
             except Exception as e:
                 logger.error(f"Error transforming conversation {conversation_id}: {e}")
                 if self.context:
-                    self.context.record_error('transform', f"Error transforming conversation {conversation_id}: {e}")
+                    self.context.record_error(
+                        "transform",
+                        f"Error transforming conversation {conversation_id}: {e}",
+                    )
 
         # Add user information
         if user_display_name:
-            result['user'] = {
-                'display_name': user_display_name,
-                'id': self.context.user_id if self.context and hasattr(self.context, 'user_id') else f"user_{hash(user_display_name) % 10000}"
+            result["user"] = {
+                "display_name": user_display_name,
+                "id": self.context.user_id
+                if self.context and hasattr(self.context, "user_id")
+                else f"user_{hash(user_display_name) % 10000}",
             }
 
         # Add required keys for loader
-        result['user_id'] = self.context.user_id if self.context and hasattr(self.context, 'user_id') else result.get('user', {}).get('id', 'unknown_user')
-        result['export_date'] = self.context.export_date if self.context and hasattr(self.context, 'export_date') else result['metadata']['transformed_at']
+        result["user_id"] = (
+            self.context.user_id
+            if self.context and hasattr(self.context, "user_id")
+            else result.get("user", {}).get("id", "unknown_user")
+        )
+        result["export_date"] = (
+            self.context.export_date
+            if self.context and hasattr(self.context, "export_date")
+            else result["metadata"]["transformed_at"]
+        )
 
         # Log completion
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
-        logger.info(f"Transformation complete: {result['metadata']['conversations_count']} conversations, {result['metadata']['messages_count']} messages")
+        logger.info(
+            f"Transformation complete: {result['metadata']['conversations_count']} conversations, {result['metadata']['messages_count']} messages"
+        )
         logger.debug(f"Transformation completed in {duration:.2f} seconds")
 
         return result
@@ -137,12 +166,12 @@ class Transformer(TransformerProtocol):
             logger.error(error_msg)
             raise ValueError(error_msg)
 
-        if 'conversations' not in raw_data:
+        if "conversations" not in raw_data:
             error_msg = "Raw data must contain a 'conversations' key"
             logger.error(error_msg)
             raise ValueError(error_msg)
 
-        if not isinstance(raw_data['conversations'], dict):
+        if not isinstance(raw_data["conversations"], dict):
             error_msg = f"Conversations must be a dictionary, got {type(raw_data['conversations']).__name__}"
             logger.error(error_msg)
             raise ValueError(error_msg)
@@ -152,7 +181,7 @@ class Transformer(TransformerProtocol):
         conversation_id: str,
         conversation_data: Dict[str, Any],
         user_id: Optional[str] = None,
-        user_display_name: Optional[str] = None
+        user_display_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Transform a single conversation.
 
@@ -166,9 +195,13 @@ class Transformer(TransformerProtocol):
             Transformed conversation data
         """
         # Get user ID from context if not provided
-        if user_id is None and self.context and hasattr(self.context, 'user_id'):
+        if user_id is None and self.context and hasattr(self.context, "user_id"):
             user_id = self.context.user_id
-        elif user_id is None and self.context and hasattr(self.context, 'user_display_name'):
+        elif (
+            user_id is None
+            and self.context
+            and hasattr(self.context, "user_display_name")
+        ):
             # Generate a user ID from the display name if available
             user_id = f"user_{hash(self.context.user_display_name) % 10000}"
         elif user_id is None:
@@ -176,46 +209,55 @@ class Transformer(TransformerProtocol):
             user_id = "unknown_user"
 
         # Get user display name from context if not provided
-        if user_display_name is None and self.context and hasattr(self.context, 'user_display_name'):
+        if (
+            user_display_name is None
+            and self.context
+            and hasattr(self.context, "user_display_name")
+        ):
             user_display_name = self.context.user_display_name
 
         # Extract conversation properties
-        properties = conversation_data.get('Properties', {})
-        message_list = conversation_data.get('MessageList', [])
+        properties = conversation_data.get("Properties", {})
+        message_list = conversation_data.get("MessageList", [])
 
         # Get conversation type and participants
-        conversation_type = properties.get('conversationType', 'unknown')
-        display_name = properties.get('displayName', '')
-        participants = self._extract_participants(properties.get('participants', []), user_id, user_display_name)
+        conversation_type = properties.get("conversationType", "unknown")
+        display_name = properties.get("displayName", "")
+        participants = self._extract_participants(
+            properties.get("participants", []), user_id, user_display_name
+        )
 
         # Create transformed conversation structure
         transformed_conversation = {
-            'id': conversation_id,
-            'display_name': display_name,
-            'type': conversation_type,
-            'participants': participants,
-            'created_at': properties.get('creationTime', ''),
-            'last_message_at': properties.get('lastUpdatedTime', ''),
-            'messages': [],
-            'metadata': {
-                'message_count': len(message_list),
-                'participant_count': len(participants)
-            }
+            "id": conversation_id,
+            "display_name": display_name,
+            "type": conversation_type,
+            "participants": participants,
+            "created_at": properties.get("creationTime", ""),
+            "last_message_at": properties.get("lastUpdatedTime", ""),
+            "messages": [],
+            "metadata": {
+                "message_count": len(message_list),
+                "participant_count": len(participants),
+            },
         }
 
         # Transform messages
         if message_list:
             if self.parallel_processing and len(message_list) > self.chunk_size:
                 # Process messages in parallel
-                transformed_messages = self._transform_messages_parallel(message_list, conversation_id)
+                transformed_messages = self._transform_messages_parallel(
+                    message_list, conversation_id
+                )
             else:
                 # Process messages sequentially
-                transformed_messages = self._transform_messages_sequential(message_list, conversation_id)
+                transformed_messages = self._transform_messages_sequential(
+                    message_list, conversation_id
+                )
 
             # Sort messages by timestamp
-            transformed_conversation['messages'] = sorted(
-                transformed_messages,
-                key=lambda m: m.get('timestamp', '0')
+            transformed_conversation["messages"] = sorted(
+                transformed_messages, key=lambda m: m.get("timestamp", "0")
             )
 
         return transformed_conversation
@@ -224,7 +266,7 @@ class Transformer(TransformerProtocol):
         self,
         participants_data: List[Dict[str, Any]],
         user_id: str,
-        user_display_name: Optional[str]
+        user_display_name: Optional[str],
     ) -> List[Dict[str, Any]]:
         """Extract and transform participant information.
 
@@ -240,8 +282,8 @@ class Transformer(TransformerProtocol):
 
         for participant in participants_data:
             # Extract participant properties
-            mri = participant.get('mri', '')
-            display_name = participant.get('displayName', '')
+            mri = participant.get("mri", "")
+            display_name = participant.get("displayName", "")
 
             # Check if this is the current user
             is_self = mri == user_id
@@ -252,16 +294,18 @@ class Transformer(TransformerProtocol):
 
             # Create transformed participant
             transformed_participant = {
-                'id': mri,
-                'display_name': display_name,
-                'is_self': is_self
+                "id": mri,
+                "display_name": display_name,
+                "is_self": is_self,
             }
 
             transformed_participants.append(transformed_participant)
 
         return transformed_participants
 
-    def _transform_messages_parallel(self, messages: List[Dict[str, Any]], conversation_id: str) -> List[Dict[str, Any]]:
+    def _transform_messages_parallel(
+        self, messages: List[Dict[str, Any]], conversation_id: str
+    ) -> List[Dict[str, Any]]:
         """Transform messages in parallel using multiple workers.
 
         Args:
@@ -272,14 +316,21 @@ class Transformer(TransformerProtocol):
             List of transformed messages
         """
         # Split messages into chunks
-        chunks = [messages[i:i + self.chunk_size] for i in range(0, len(messages), self.chunk_size)]
+        chunks = [
+            messages[i : i + self.chunk_size]
+            for i in range(0, len(messages), self.chunk_size)
+        ]
         transformed_messages = []
 
         # Process chunks in parallel
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.max_workers
+        ) as executor:
             # Submit tasks
             future_to_chunk = {
-                executor.submit(self._transform_messages_sequential, chunk, conversation_id): i
+                executor.submit(
+                    self._transform_messages_sequential, chunk, conversation_id
+                ): i
                 for i, chunk in enumerate(chunks)
             }
 
@@ -289,15 +340,24 @@ class Transformer(TransformerProtocol):
                 try:
                     chunk_result = future.result()
                     transformed_messages.extend(chunk_result)
-                    logger.debug(f"Processed message chunk {chunk_index+1}/{len(chunks)} for conversation {conversation_id}")
+                    logger.debug(
+                        f"Processed message chunk {chunk_index+1}/{len(chunks)} for conversation {conversation_id}"
+                    )
                 except Exception as e:
-                    logger.error(f"Error processing message chunk {chunk_index+1}/{len(chunks)} for conversation {conversation_id}: {e}")
+                    logger.error(
+                        f"Error processing message chunk {chunk_index+1}/{len(chunks)} for conversation {conversation_id}: {e}"
+                    )
                     if self.context:
-                        self.context.record_error('transform', f"Error processing message chunk for conversation {conversation_id}: {e}")
+                        self.context.record_error(
+                            "transform",
+                            f"Error processing message chunk for conversation {conversation_id}: {e}",
+                        )
 
         return transformed_messages
 
-    def _transform_messages_sequential(self, messages: List[Dict[str, Any]], conversation_id: str) -> List[Dict[str, Any]]:
+    def _transform_messages_sequential(
+        self, messages: List[Dict[str, Any]], conversation_id: str
+    ) -> List[Dict[str, Any]]:
         """Transform messages sequentially.
 
         Args:
@@ -313,54 +373,76 @@ class Transformer(TransformerProtocol):
         attachment_handler = None
         if self.context and self.context.download_attachments:
             # Create attachments directory if it doesn't exist
-            if self.context.attachments_dir and not os.path.exists(self.context.attachments_dir):
+            if self.context.attachments_dir and not os.path.exists(
+                self.context.attachments_dir
+            ):
                 os.makedirs(self.context.attachments_dir, exist_ok=True)
 
             # Initialize attachment handler
             attachment_handler = AttachmentHandler(
                 storage_dir=self.context.attachments_dir,
             )
-            logger.info(f"Initialized attachment handler with storage directory: {self.context.attachments_dir}")
+            logger.info(
+                f"Initialized attachment handler with storage directory: {self.context.attachments_dir}"
+            )
 
         for message in messages:
             try:
                 # Get message type
-                message_type = message.get('messagetype', 'unknown')
+                message_type = message.get("messagetype", "unknown")
 
                 # Get appropriate handler for this message type
                 handler = self.message_handler_factory.get_handler(message_type)
 
                 if handler:
                     # Extract content
-                    content_html = message.get('content', '')
-                    content_text = self.content_extractor.extract_cleaned_content(content_html)
+                    content_html = message.get("content", "")
+                    content_text = self.content_extractor.extract_cleaned_content(
+                        content_html
+                    )
 
                     # Transform message using handler
                     transformed_message = handler.extract_structured_data(message)
 
                     # Add extracted content
-                    transformed_message['content_html'] = content_html
-                    transformed_message['content_text'] = content_text
+                    transformed_message["content_html"] = content_html
+                    transformed_message["content_text"] = content_text
 
                     # Process attachments if enabled
-                    if attachment_handler and 'attachments' in transformed_message:
+                    if attachment_handler and "attachments" in transformed_message:
                         try:
                             # Process attachments
-                            processed_message = attachment_handler.process_message_attachments(transformed_message)
+                            processed_message = (
+                                attachment_handler.process_message_attachments(
+                                    transformed_message
+                                )
+                            )
                             transformed_message = processed_message
-                            logger.debug(f"Processed {len(transformed_message.get('attachments', []))} attachments for message in conversation {conversation_id}")
+                            logger.debug(
+                                f"Processed {len(transformed_message.get('attachments', []))} attachments for message in conversation {conversation_id}"
+                            )
                         except Exception as e:
-                            logger.warning(f"Error processing attachments for message in conversation {conversation_id}: {e}")
+                            logger.warning(
+                                f"Error processing attachments for message in conversation {conversation_id}: {e}"
+                            )
                             if self.context:
-                                self.context.record_error('transform', f"Error processing attachments for message in conversation {conversation_id}: {e}")
+                                self.context.record_error(
+                                    "transform",
+                                    f"Error processing attachments for message in conversation {conversation_id}: {e}",
+                                )
 
                     # Add to result
                     transformed_messages.append(transformed_message)
                 else:
                     logger.warning(f"No handler found for message type: {message_type}")
             except Exception as e:
-                logger.error(f"Error transforming message in conversation {conversation_id}: {e}")
+                logger.error(
+                    f"Error transforming message in conversation {conversation_id}: {e}"
+                )
                 if self.context:
-                    self.context.record_error('transform', f"Error transforming message in conversation {conversation_id}: {e}")
+                    self.context.record_error(
+                        "transform",
+                        f"Error transforming message in conversation {conversation_id}: {e}",
+                    )
 
         return transformed_messages

@@ -13,6 +13,7 @@ This tool parses Skype export data (from the "Export Chat History" feature in Sk
 - Parse Skype export data from JSON or TAR files
 - Extract conversations, messages, and metadata
 - Store parsed data in a PostgreSQL database
+- Memory-efficient streaming processing for large export files
 - Analyze message patterns, frequencies, and content
 - Generate visualizations of chat activity
 - Support for various message types (text, media, calls, etc.)
@@ -70,6 +71,31 @@ for conversation_id, conversation in data['conversations'].items():
     for message in conversation['messages']:
         print(f"  {message['sender_name']}: {message['content']}")
 ```
+
+### Streaming Processing for Large Files
+
+For very large export files (>500MB or >100,000 messages), use the streaming approach:
+
+```python
+from src.parser.core_parser import parse_skype_data_streaming, stream_conversations
+
+# Get statistics without loading all data into memory
+stats = parse_skype_data_streaming(
+    file_path='path/to/large_export.tar',
+    user_display_name='Your Name'
+)
+print(f"Found {stats['conversation_count']} conversations and {stats['message_count']} messages")
+
+# Process conversations one by one
+for conversation in stream_conversations('path/to/large_export.tar'):
+    # Process each conversation individually
+    messages = conversation.get('MessageList', [])
+    if len(messages) > 100:  # Filter by criteria
+        # Process this conversation...
+        pass
+```
+
+See [Processing Large Files](docs/user_guide/processing_large_files.md) for more details.
 
 ### Using the ETL Pipeline
 
@@ -150,6 +176,17 @@ Benefits of the DI approach:
 - Explicit dependencies and contracts
 - Easier maintenance and extension
 
+### Memory Efficiency
+
+For large Skype exports (which can contain millions of messages), the project offers:
+
+- Streaming JSON processing using the `ijson` library
+- Incremental file parsing without loading entire files into memory
+- Periodic garbage collection during long-running operations
+- Memory usage monitoring and optimization
+- Efficient temporary file management
+- Configurable batch processing of conversations
+
 ## Testing
 
 Run the tests with pytest:
@@ -216,3 +253,195 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+# SkypeParser Scripts
+
+This directory contains various scripts for parsing, analyzing, and managing Skype export data. Below is a comprehensive guide to each script and its functionality.
+
+## ETL Pipeline Scripts
+
+### `custom_etl_script.py`
+A simple Skype export parser that extracts data from a Skype export file and saves it to JSON files, without database storage or dependency injection. It also generates an HTML report of the parsed data.
+
+**Usage:**
+```bash
+python scripts/custom_etl_script.py
+```
+
+### `run_etl_pipeline.py`
+Command-line interface for running the basic ETL pipeline on Skype export data.
+
+**Usage:**
+```bash
+python scripts/run_etl_pipeline.py -f <skype_export_file> -u <your_display_name>
+```
+
+### `stream_skype_data.py`
+Memory-efficient processing of large Skype export files using streaming techniques.
+
+**Usage:**
+```bash
+python scripts/stream_skype_data.py -f <skype_export_file> -u <your_display_name> -v
+```
+
+### `run_etl_pipeline_enhanced.py`
+Enhanced ETL pipeline runner with additional features such as parallel processing, memory management, checkpointing, and attachment downloading.
+
+**Usage:**
+```bash
+python scripts/run_etl_pipeline_enhanced.py -f <skype_export_file> -u <your_display_name> [options]
+```
+
+**Key Options:**
+- `-d <database_name>` - Specify database name
+- `--parallel` - Enable parallel processing
+- `--memory-limit <memory_limit_mb>` - Set memory limit
+- `--download-attachments` - Download message attachments
+- `--resume` - Resume from checkpoint
+
+### `run_modular_etl.py`
+Command-line interface for the modular ETL pipeline, with support for configuration from both files and command-line options.
+
+**Usage:**
+```bash
+python scripts/run_modular_etl.py [-f <skype_export_file>] [-u <your_display_name>] [options]
+```
+
+### `run_streaming_etl.py`
+Implements a streaming ETL process for handling large Skype exports with minimal memory footprint.
+
+**Usage:**
+```bash
+python scripts/run_streaming_etl.py -f <skype_export_file> -u <your_display_name> [options]
+```
+
+## Migration Scripts
+
+### `migrate_from_deprecated.py`
+Migrates data from the deprecated schema to the current schema format.
+
+**Usage:**
+```bash
+python scripts/migrate_from_deprecated.py -d <database_name> [options]
+```
+
+### `migrate_cli_commands.py`
+Helper script for migrating from old command-line formats to the new unified CLI interface.
+
+**Usage:**
+```bash
+python scripts/migrate_cli_commands.py convert "<old_command>"
+```
+
+### `migrate_to_modular_etl.py`
+Migrates existing ETL pipeline configurations to the modular ETL format.
+
+**Usage:**
+```bash
+python scripts/migrate_to_modular_etl.py -c <config_file> -o <output_config_file>
+```
+
+## Analysis and Server Scripts
+
+### `run_analysis.py`
+Performs analysis on the parsed Skype data, generating statistics and visualizations.
+
+**Usage:**
+```bash
+python scripts/run_analysis.py -d <database_name> [options]
+```
+
+### `run_api_server.sh`
+Bash script to run the Skype Parser API server and Celery worker for background task processing.
+
+**Usage:**
+```bash
+./scripts/run_api_server.sh [options]
+```
+
+**Key Options:**
+- `--api-host` - API server host (default: 0.0.0.0)
+- `--api-port` - API server port (default: 5000)
+- `--worker-concurrency` - Number of Celery workers (default: 2)
+- `--redis-url` - Redis connection URL
+
+## Utility Scripts
+
+### `extract_message_types.py`
+Extracts and categorizes different message types from Skype exports for analysis.
+
+**Usage:**
+```bash
+python scripts/extract_message_types.py -f <skype_export_file>
+```
+
+### `update_imports.py`
+Utility script to update import statements across the codebase when refactoring.
+
+**Usage:**
+```bash
+python scripts/update_imports.py -o <old_module> -n <new_module>
+```
+
+### `check_di_compliance.py`
+Pre-commit hook to check for direct service instantiation in constructors to enforce the Dependency Inversion Principle.
+
+**Usage:**
+```bash
+python scripts/check_di_compliance.py <files...>
+```
+
+## Testing Scripts
+
+### `run_tests.py`
+Test runner for SkypeParser that can run specific test modules or all tests.
+
+**Usage:**
+```bash
+python scripts/run_tests.py [--module <module>] [--suite <suite>] [--verbose]
+```
+
+### `run_integration_tests.py`
+Runner for integration tests that require a complete environment including database.
+
+**Usage:**
+```bash
+python scripts/run_integration_tests.py [--db <test_database>] [--skip-db-reset]
+```
+
+### `run_validation_tests.py`
+Validates the output of the ETL pipeline against expected results.
+
+**Usage:**
+```bash
+python scripts/run_validation_tests.py -f <skype_export_file> -e <expected_results_file>
+```
+
+## Getting Started
+
+For most use cases, you'll want to start with the enhanced ETL pipeline:
+
+```bash
+python scripts/run_etl_pipeline_enhanced.py -f <your_skype_export_file> -u "<your_display_name>"
+```
+
+For development and testing:
+
+```bash
+# Run all tests
+python scripts/run_tests.py --verbose
+
+# Run integration tests
+python scripts/run_integration_tests.py
+
+# Check code quality
+python scripts/check_di_compliance.py
+```
+
+## Contributing
+
+When adding new scripts, please follow the existing patterns and ensure:
+1. Each script has a clear docstring explaining its purpose
+2. Command-line arguments are well documented
+3. Error handling is implemented
+4. Logging is set up appropriately

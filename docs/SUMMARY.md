@@ -49,11 +49,19 @@ The ETL pipeline implementation provides a comprehensive solution for processing
 
 ### 6. Documentation
 
-- Created comprehensive README files:
-  - Project-level README with overview and usage instructions
-  - Module-level READMEs for `db`, `utils`, and `parser` modules
-- Added detailed docstrings to all functions and classes
-- Created this summary document
+- Created comprehensive documentation for the ETL pipeline:
+  - `docs/implementation/ETL_MIGRATION_PLAN.md`: Plan for migrating to the new ETL pipeline
+  - `docs/implementation/ETL_MIGRATION_DECISIONS.md`: Key decisions made during the migration
+  - `docs/implementation/ETL_VALIDATION.md`: Validation approach for ETL processes
+  - `docs/development/ETL_CONTEXT_API.md`: Documentation for the ETLContext phase management API
+- Updated existing documentation to reflect the changes:
+  - `docs/README.md`: Added references to the new documentation
+  - `docs/SUMMARY.md`: Added a summary of the ETL pipeline implementation
+- Added examples and usage guidelines:
+  - `docs/user_guide/CHECKPOINT_RESUMPTION.md`: Guide for using checkpoint resumption
+  - `examples/etl_example.py`: Example of using the ETL pipeline
+  - `examples/web_etl_example.py`: Example of integrating with a web application
+  - `examples/etl_context_phase_management_example.py`: Example demonstrating the ETLContext phase management API
 
 ## Changes to Existing Files
 

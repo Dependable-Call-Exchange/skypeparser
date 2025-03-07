@@ -4,7 +4,7 @@ This document outlines the standardized error handling approach implemented in t
 
 ## Overview
 
-The Skype Parser project now uses a consistent error handling approach across all modules. This approach is based on custom exception classes that provide specific information about errors and a standardized way to handle them.
+The Skype Parser project uses a consistent error handling approach across all modules. This approach is based on custom exception classes that provide specific information about errors and a standardized way to handle them.
 
 ## Custom Exception Hierarchy
 
@@ -19,7 +19,8 @@ Exception
     ├── DataExtractionError
     ├── InvalidInputError
     ├── DatabaseOperationError
-    └── ExportError
+    ├── ExportError
+    └── SchemaValidationError
 ```
 
 ### Exception Types
@@ -32,6 +33,166 @@ Exception
 - **InvalidInputError**: Raised when input data is invalid or missing required fields.
 - **DatabaseOperationError**: Raised when a database operation fails.
 - **ExportError**: Raised when exporting conversations fails.
+- **SchemaValidationError**: Raised when data fails schema validation.
+
+## Error Handling Tools
+
+### ErrorContext
+
+The `ErrorContext` class provides a way to attach context information to errors. It can be used as a context manager or a decorator.
+
+```python
+from src.utils.error_handling import ErrorContext
+
+# As a context manager
+def process_user_data(user_id, data):
+    with ErrorContext(user_id=user_id, action="process_data"):
+        # If an error occurs here, it will include the context information
+        process_data(data)
+
+# As a decorator
+@ErrorContext(component="data_processor")
+def process_data(data):
+    # This function will have the component context attached to any errors
+    validate_data(data)
+```
+
+### handle_errors Decorator
+
+The `handle_errors` decorator provides a standardized way to catch and handle errors in functions.
+
+```python
+from src.utils.error_handling import handle_errors
+from src.parser.exceptions import InvalidInputError, DataExtractionError
+
+@handle_errors(
+    error_types=[InvalidInputError, DataExtractionError],
+    reraise=True,
+    log_level="ERROR",
+    default_message="Error processing data",
+    include_traceback=True
+)
+def process_data(data):
+    # If an error occurs here, it will be logged with the specified level and message
+    validate_data(data)
+    extract_data(data)
+```
+
+### report_error Function
+
+The `report_error` function provides a way to report errors with standardized format and additional context.
+
+```python
+from src.utils.error_handling import report_error
+
+try:
+    process_data(data)
+except Exception as e:
+    error_details = report_error(
+        error=e,
+        log_level="ERROR",
+        include_traceback=True,
+        additional_context={"data_size": len(data), "user_id": user_id}
+    )
+    # error_details contains structured information about the error
+```
+
+## Structured Logging
+
+The Skype Parser project uses structured logging to provide more context and details in log messages. This makes it easier to filter and search logs, and to understand the context of errors.
+
+### Structured Logger
+
+The `StructuredLogger` class extends the standard Python logger with structured logging capabilities.
+
+```python
+from src.utils.structured_logging import get_logger
+
+# Get a structured logger
+logger = get_logger(__name__)
+
+# Basic logging (same as standard logger)
+logger.info("Processing data")
+
+# Structured logging with additional context
+logger.info_s(
+    "Processing data",
+    user_id="123",
+    data_size=1024,
+    operation="extract"
+)
+```
+
+### Setting Up Logging
+
+The `setup_logging` function provides a standardized way to set up logging for the application.
+
+```python
+from src.utils.structured_logging import setup_logging
+
+# Set up logging with default settings
+setup_logging()
+
+# Set up logging with custom settings
+setup_logging(
+    level="DEBUG",
+    log_file="app.log",
+    json_format=True,
+    structured=True,
+    rotation="size",
+    max_bytes=10 * 1024 * 1024,  # 10 MB
+    backup_count=5
+)
+```
+
+## Schema Validation
+
+The Skype Parser project uses JSON Schema for validating configuration, input data, and other structured data.
+
+### Validating Data
+
+The `validate_data` function provides a way to validate data against a schema.
+
+```python
+from src.utils.schema_validation import validate_data
+
+# Validate data against a schema
+try:
+    validated_data = validate_data(
+        data=input_data,
+        schema_name="skype_export_schema",
+        fill_defaults=True,
+        schema_dir="/path/to/schemas",
+        raise_exception=True
+    )
+    # validated_data contains the validated data with defaults filled in
+except SchemaValidationError as e:
+    # Handle validation error
+    print(f"Validation failed: {e}")
+    for error in e.errors:
+        print(f"- {error['path']}: {error['message']}")
+```
+
+### Validating Configuration
+
+The `validate_config` function provides a way to validate configuration.
+
+```python
+from src.utils.schema_validation import validate_config
+
+# Validate configuration
+try:
+    validated_config = validate_config(
+        config=app_config,
+        config_type="app_config",
+        fill_defaults=True,
+        schema_dir="/path/to/schemas"
+    )
+    # validated_config contains the validated configuration with defaults filled in
+except SchemaValidationError as e:
+    # Handle validation error
+    print(f"Configuration validation failed: {e}")
+```
 
 ## Error Handling Patterns
 

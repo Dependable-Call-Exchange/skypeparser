@@ -6,18 +6,19 @@ the different components of the ETL pipeline, including progress tracking,
 memory monitoring, configuration, and telemetry.
 """
 
-import logging
-import datetime
-import uuid
-import json
-import pickle
 import base64
+import datetime
+import json
+import logging
 import os
-from typing import Dict, Any, Optional, List, BinaryIO, ClassVar, Type
+import pickle
+import uuid
+from typing import Any, BinaryIO, ClassVar, Dict, List, Optional, Type
 
-from .utils import ProgressTracker, MemoryMonitor
+from .utils import MemoryMonitor, ProgressTracker
 
 logger = logging.getLogger(__name__)
+
 
 # Custom JSON encoder for datetime objects
 class DateTimeEncoder(json.JSONEncoder):
@@ -25,6 +26,7 @@ class DateTimeEncoder(json.JSONEncoder):
         if isinstance(obj, datetime.datetime):
             return obj.isoformat()
         return super().default(obj)
+
 
 class ETLContext:
     """
@@ -37,15 +39,33 @@ class ETLContext:
 
     # Class variables for checkpoint serialization
     SERIALIZABLE_ATTRIBUTES: ClassVar[List[str]] = [
-        'db_config', 'output_dir', 'memory_limit_mb', 'parallel_processing',
-        'chunk_size', 'batch_size', 'max_workers', 'task_id', 'start_time',
-        'current_phase', 'phase_results', 'checkpoints', 'errors', 'export_id',
-        'metrics', 'user_id', 'user_display_name', 'export_date', 'custom_metadata',
-        'download_attachments', 'attachments_dir', 'generate_thumbnails', 'extract_metadata'
+        "db_config",
+        "output_dir",
+        "memory_limit_mb",
+        "parallel_processing",
+        "chunk_size",
+        "batch_size",
+        "max_workers",
+        "task_id",
+        "start_time",
+        "current_phase",
+        "phase_results",
+        "checkpoints",
+        "errors",
+        "export_id",
+        "metrics",
+        "user_id",
+        "user_display_name",
+        "export_date",
+        "custom_metadata",
+        "download_attachments",
+        "attachments_dir",
+        "generate_thumbnails",
+        "extract_metadata",
     ]
 
     # Data attributes that need special handling for serialization
-    DATA_ATTRIBUTES: ClassVar[List[str]] = ['raw_data', 'transformed_data']
+    DATA_ATTRIBUTES: ClassVar[List[str]] = ["raw_data", "transformed_data"]
 
     def __init__(
         self,
@@ -63,8 +83,8 @@ class ETLContext:
         download_attachments: bool = False,
         attachments_dir: Optional[str] = None,
         generate_thumbnails: bool = True,
-        extract_metadata: bool = True
-    ):
+        extract_metadata: bool = True,
+    ) -> None:
         """
         Initialize the ETL context.
 
@@ -86,68 +106,78 @@ class ETLContext:
             extract_metadata: Whether to extract metadata from attachments
         """
         # Validate configuration parameters
-        self._validate_configuration(db_config, output_dir, memory_limit_mb,
-                                    chunk_size, batch_size, max_workers)
+        self._validate_configuration(
+            db_config, output_dir, memory_limit_mb, chunk_size, batch_size, max_workers
+        )
 
         # Core configuration
-        self.db_config = db_config
-        self.output_dir = output_dir
+        self.db_config: Dict[str, Any] = db_config
+        self.output_dir: Optional[str] = output_dir
 
         # Performance configuration
-        self.memory_limit_mb = memory_limit_mb
-        self.parallel_processing = parallel_processing
-        self.chunk_size = chunk_size
-        self.batch_size = batch_size
-        self.max_workers = max_workers
+        self.memory_limit_mb: int = memory_limit_mb
+        self.parallel_processing: bool = parallel_processing
+        self.chunk_size: int = chunk_size
+        self.batch_size: int = batch_size
+        self.max_workers: Optional[int] = max_workers
 
         # Task identification
-        self.task_id = task_id or str(uuid.uuid4())
-        self.start_time = datetime.datetime.now()
+        self.task_id: str = task_id or str(uuid.uuid4())
+        self.start_time: datetime.datetime = datetime.datetime.now()
 
         # User information
-        self.user_id = user_id or f"user_{hash(user_display_name or 'unknown') % 10000}"
-        self.user_display_name = user_display_name
-        self.export_date = export_date or datetime.datetime.now().isoformat()
+        self.user_id: str = (
+            user_id or f"user_{hash(user_display_name or 'unknown') % 10000}"
+        )
+        self.user_display_name: Optional[str] = user_display_name
+        self.export_date: str = export_date or datetime.datetime.now().isoformat()
 
         # Attachment handling configuration
-        self.download_attachments = download_attachments
-        self.attachments_dir = attachments_dir or (output_dir and os.path.join(output_dir, 'attachments'))
-        self.generate_thumbnails = generate_thumbnails
-        self.extract_metadata = extract_metadata
+        self.download_attachments: bool = download_attachments
+        self.attachments_dir: Optional[str] = attachments_dir or (
+            output_dir and os.path.join(output_dir, "attachments")
+        )
+        self.generate_thumbnails: bool = generate_thumbnails
+        self.extract_metadata: bool = extract_metadata
 
         # Shared utilities
-        self.progress_tracker = ProgressTracker()
-        self.memory_monitor = MemoryMonitor(memory_limit_mb=memory_limit_mb)
+        self.progress_tracker: ProgressTracker = ProgressTracker()
+        self.memory_monitor: MemoryMonitor = MemoryMonitor(
+            memory_limit_mb=memory_limit_mb
+        )
 
         # State tracking
-        self.current_phase = None
-        self.phase_results = {}
-        self.checkpoints = {}
-        self.errors = []
+        self.current_phase: Optional[str] = None
+        self.phase_results: Dict[str, Dict[str, Any]] = {}
+        self.checkpoints: Dict[str, Dict[str, Any]] = {}
+        self.errors: List[Dict[str, Any]] = []
 
         # Data references
-        self.raw_data = None
-        self.transformed_data = None
-        self.file_source = None
-        self.export_id = None
+        self.raw_data: Optional[Dict[str, Any]] = None
+        self.transformed_data: Optional[Dict[str, Any]] = None
+        self.file_source: Optional[str] = None
+        self.export_id: Optional[int] = None
 
         # Telemetry
-        self.metrics = {
-            'start_time': self.start_time,
-            'memory_usage': [],
-            'duration': {},
-            'processed_items': {},
-            'errors': 0
+        self.metrics: Dict[str, Any] = {
+            "start_time": self.start_time,
+            "memory_usage": [],
+            "duration": {},
+            "processed_items": {},
+            "errors": 0,
         }
 
         logger.info(f"Initialized ETL context with task ID: {self.task_id}")
 
-    def _validate_configuration(self, db_config: Dict[str, Any],
-                               output_dir: Optional[str],
-                               memory_limit_mb: int,
-                               chunk_size: int,
-                               batch_size: int,
-                               max_workers: Optional[int]) -> None:
+    def _validate_configuration(
+        self,
+        db_config: Dict[str, Any],
+        output_dir: Optional[str],
+        memory_limit_mb: int,
+        chunk_size: int,
+        batch_size: int,
+        max_workers: Optional[int],
+    ) -> None:
         """
         Validate all configuration parameters.
 
@@ -167,10 +197,11 @@ class ETLContext:
             raise ValueError("Database configuration must be a dictionary")
 
         # Check if we're in a test environment
-        in_test_env = os.environ.get('POSTGRES_TEST_DB') == 'true'
+        in_test_env = os.environ.get("POSTGRES_TEST_DB") == "true"
 
         # Import validation function here to avoid circular imports
         from src.utils.validation import validate_db_config
+
         try:
             # Skip strict validation in test environment
             if not in_test_env:
@@ -179,7 +210,9 @@ class ETLContext:
             if not in_test_env:
                 raise ValueError(f"Invalid database configuration: {str(e)}")
             else:
-                logger.warning(f"Database configuration validation skipped in test environment: {str(e)}")
+                logger.warning(
+                    f"Database configuration validation skipped in test environment: {str(e)}"
+                )
 
         # Validate output directory
         if output_dir is not None and not isinstance(output_dir, str):
@@ -198,12 +231,16 @@ class ETLContext:
             raise ValueError("Batch size must be a positive integer")
 
         # Validate max workers
-        if max_workers is not None and (not isinstance(max_workers, int) or max_workers <= 0):
+        if max_workers is not None and (
+            not isinstance(max_workers, int) or max_workers <= 0
+        ):
             raise ValueError("Max workers must be a positive integer")
 
         logger.info("All configuration parameters validated successfully")
 
-    def start_phase(self, phase_name: str, total_conversations: int = 0, total_messages: int = 0) -> None:
+    def start_phase(
+        self, phase_name: str, total_conversations: int = 0, total_messages: int = 0
+    ) -> None:
         """
         Start a new phase in the ETL pipeline.
 
@@ -213,13 +250,15 @@ class ETLContext:
             total_messages: Total number of messages to process
         """
         self.current_phase = phase_name
-        self.progress_tracker.start_phase(phase_name, total_conversations, total_messages)
+        self.progress_tracker.start_phase(
+            phase_name, total_conversations, total_messages
+        )
 
         # Record phase start in metrics
-        self.metrics['duration'][phase_name] = {
-            'start': datetime.datetime.now(),
-            'end': None,
-            'duration_seconds': None
+        self.metrics["duration"][phase_name] = {
+            "start": datetime.datetime.now(),
+            "end": None,
+            "duration_seconds": None,
         }
 
         logger.info(f"Starting {phase_name} phase")
@@ -229,14 +268,28 @@ class ETLContext:
         End the current phase and record results.
 
         Args:
-            result: Optional result data for the phase
+            result: Optional result data for the phase as a dictionary. This should contain
+                   metrics or information about the completed phase that will be merged with
+                   the statistics from the progress tracker. Common keys include 'status',
+                   'conversations_processed', and 'messages_processed'.
 
         Returns:
-            Dict containing statistics about the completed phase
+            Dict[str, Any]: Dictionary containing statistics about the completed phase
+
+        Raises:
+            ValueError: If result is provided but is not a dictionary
         """
         if not self.current_phase:
             logger.warning("Attempting to end a phase when no phase is active")
             return {}
+
+        # Validate result type if provided
+        if result is not None and not isinstance(result, dict):
+            error_msg = (
+                f"Phase result must be a dictionary, got {type(result).__name__}"
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         # Get statistics from progress tracker
         stats = self.progress_tracker.finish_phase()
@@ -244,13 +297,15 @@ class ETLContext:
         # Record phase end in metrics
         phase_name = self.current_phase
         end_time = datetime.datetime.now()
-        self.metrics['duration'][phase_name]['end'] = end_time
-        self.metrics['duration'][phase_name]['duration_seconds'] = stats['duration_seconds']
+        self.metrics["duration"][phase_name]["end"] = end_time
+        self.metrics["duration"][phase_name]["duration_seconds"] = stats[
+            "duration_seconds"
+        ]
 
         # Store processed items metrics
-        self.metrics['processed_items'][phase_name] = {
-            'conversations': stats['processed_conversations'],
-            'messages': stats['processed_messages']
+        self.metrics["processed_items"][phase_name] = {
+            "conversations": stats["processed_conversations"],
+            "messages": stats["processed_messages"],
         }
 
         # Combine stats with result
@@ -263,7 +318,9 @@ class ETLContext:
         # Create checkpoint for this phase
         self._create_checkpoint(phase_name)
 
-        logger.info(f"Completed {phase_name} phase in {stats['duration_seconds']:.2f} seconds")
+        logger.info(
+            f"Completed {phase_name} phase in {stats['duration_seconds']:.2f} seconds"
+        )
 
         # Reset current phase
         self.current_phase = None
@@ -291,11 +348,13 @@ class ETLContext:
         self.memory_monitor.check_memory()
 
         # Record memory usage in metrics
-        if hasattr(self.memory_monitor, 'last_memory_mb'):
-            self.metrics['memory_usage'].append({
-                'timestamp': datetime.datetime.now(),
-                'memory_mb': self.memory_monitor.last_memory_mb
-            })
+        if hasattr(self.memory_monitor, "last_memory_mb"):
+            self.metrics["memory_usage"].append(
+                {
+                    "timestamp": datetime.datetime.now(),
+                    "memory_mb": self.memory_monitor.last_memory_mb,
+                }
+            )
 
     def record_error(self, phase: str, error: Exception, fatal: bool = False) -> None:
         """
@@ -306,21 +365,53 @@ class ETLContext:
             error: The exception that was raised
             fatal: Whether this error is fatal to the pipeline
         """
+        # Import here to avoid circular imports
+        from src.utils.error_handling import (
+            get_error_severity,
+            is_fatal_error,
+            report_error,
+        )
+
+        # Check if error is considered fatal by our classification system
+        if not fatal:
+            fatal = is_fatal_error(error)
+
+        # Get error severity
+        severity = get_error_severity(error)
+        severity_name = (
+            "CRITICAL" if fatal else "ERROR" if severity >= 40 else "WARNING"
+        )
+
+        # Create error info
         error_info = {
-            'phase': phase,
-            'timestamp': datetime.datetime.now(),
-            'error_type': type(error).__name__,
-            'error_message': str(error),
-            'fatal': fatal
+            "phase": phase,
+            "timestamp": datetime.datetime.now(),
+            "error_type": type(error).__name__,
+            "error_message": str(error),
+            "fatal": fatal,
+            "severity": severity_name,
         }
 
+        # Add to errors list
         self.errors.append(error_info)
-        self.metrics['errors'] += 1
+        self.metrics["errors"] += 1
 
-        if fatal:
-            logger.error(f"Fatal error in {phase} phase: {error}")
-        else:
-            logger.warning(f"Non-fatal error in {phase} phase: {error}")
+        # Add context for error reporting
+        additional_context = {
+            "phase": phase,
+            "context_id": id(self),
+            "task_id": self.task_id,
+            "user_id": self.user_id,
+            "export_id": self.export_id,
+        }
+
+        # Report the error with our error handling system
+        report_error(
+            error=error,
+            log_level=severity_name,
+            include_traceback=True,
+            additional_context=additional_context,
+        )
 
     def _create_checkpoint(self, phase_name: str) -> None:
         """
@@ -330,21 +421,25 @@ class ETLContext:
             phase_name: Name of the completed phase
         """
         checkpoint = {
-            'phase': phase_name,
-            'timestamp': datetime.datetime.now(),
-            'metrics': {
-                'conversations': self.metrics['processed_items'].get(phase_name, {}).get('conversations', 0),
-                'messages': self.metrics['processed_items'].get(phase_name, {}).get('messages', 0)
-            }
+            "phase": phase_name,
+            "timestamp": datetime.datetime.now(),
+            "metrics": {
+                "conversations": self.metrics["processed_items"]
+                .get(phase_name, {})
+                .get("conversations", 0),
+                "messages": self.metrics["processed_items"]
+                .get(phase_name, {})
+                .get("messages", 0),
+            },
         }
 
         # Store references to data based on phase
-        if phase_name == 'extract':
-            checkpoint['raw_data_available'] = self.raw_data is not None
-        elif phase_name == 'transform':
-            checkpoint['transformed_data_available'] = self.transformed_data is not None
-        elif phase_name == 'load':
-            checkpoint['export_id'] = self.export_id
+        if phase_name == "extract":
+            checkpoint["raw_data_available"] = self.raw_data is not None
+        elif phase_name == "transform":
+            checkpoint["transformed_data_available"] = self.transformed_data is not None
+        elif phase_name == "load":
+            checkpoint["export_id"] = self.export_id
 
         self.checkpoints[phase_name] = checkpoint
         logger.info(f"Created checkpoint for {phase_name} phase")
@@ -364,10 +459,10 @@ class ETLContext:
 
         checkpoint = self.checkpoints[phase_name]
 
-        if phase_name == 'extract':
-            return checkpoint.get('raw_data_available', False)
-        elif phase_name == 'transform':
-            return checkpoint.get('transformed_data_available', False)
+        if phase_name == "extract":
+            return checkpoint.get("raw_data_available", False)
+        elif phase_name == "transform":
+            return checkpoint.get("transformed_data_available", False)
 
         return False
 
@@ -382,17 +477,19 @@ class ETLContext:
         total_duration = (end_time - self.start_time).total_seconds()
 
         return {
-            'task_id': self.task_id,
-            'start_time': self.start_time.isoformat(),
-            'end_time': end_time.isoformat(),
-            'total_duration_seconds': total_duration,
-            'phases': self.phase_results,
-            'export_id': self.export_id,
-            'error_count': len(self.errors),
-            'fatal_error': any(e['fatal'] for e in self.errors)
+            "task_id": self.task_id,
+            "start_time": self.start_time.isoformat(),
+            "end_time": end_time.isoformat(),
+            "total_duration_seconds": total_duration,
+            "phases": self.phase_results,
+            "export_id": self.export_id,
+            "error_count": len(self.errors),
+            "fatal_error": any(e["fatal"] for e in self.errors),
         }
 
-    def set_file_source(self, file_path: Optional[str] = None, file_obj: Optional[BinaryIO] = None) -> None:
+    def set_file_source(
+        self, file_path: Optional[str] = None, file_obj: Optional[BinaryIO] = None
+    ) -> None:
         """
         Set the file source for the ETL process.
 
@@ -404,7 +501,7 @@ class ETLContext:
 
         if file_path:
             logger.info(f"Using file source: {file_path}")
-        elif file_obj and hasattr(file_obj, 'name'):
+        elif file_obj and hasattr(file_obj, "name"):
             logger.info(f"Using file object: {file_obj.name}")
         else:
             logger.info("Using file object (no name available)")
@@ -418,13 +515,13 @@ class ETLContext:
         """
         # Create base serialized data
         serialized = {
-            'checkpoint_version': '1.0',
-            'serialized_at': datetime.datetime.now().isoformat(),
-            'context': {}
+            "checkpoint_version": "1.0",
+            "serialized_at": datetime.datetime.now().isoformat(),
+            "context": {},
         }
 
         # Ensure db_config is included and not empty
-        if not hasattr(self, 'db_config') or not self.db_config:
+        if not hasattr(self, "db_config") or not self.db_config:
             logger.warning("Database configuration is missing or empty in context")
 
         # Serialize basic attributes
@@ -434,9 +531,9 @@ class ETLContext:
 
                 # Handle datetime objects
                 if isinstance(value, datetime.datetime):
-                    serialized['context'][attr] = value.isoformat()
+                    serialized["context"][attr] = value.isoformat()
                 else:
-                    serialized['context'][attr] = value
+                    serialized["context"][attr] = value
 
         # Handle data attributes separately
         data_files = {}
@@ -444,28 +541,30 @@ class ETLContext:
             if hasattr(self, attr) and getattr(self, attr) is not None:
                 # If we have an output directory, save data to files
                 if self.output_dir:
-                    data_file = os.path.join(self.output_dir, f"{self.task_id}_{attr}.json")
-                    with open(data_file, 'w') as f:
+                    data_file = os.path.join(
+                        self.output_dir, f"{self.task_id}_{attr}.json"
+                    )
+                    with open(data_file, "w") as f:
                         json.dump(getattr(self, attr), f)
                     data_files[attr] = data_file
-                    serialized['context'][f"{attr}_file"] = data_file
+                    serialized["context"][f"{attr}_file"] = data_file
                 else:
                     # Otherwise, include data directly in the serialized output
                     # This could be large, so we might want to consider alternatives
-                    serialized['context'][attr] = getattr(self, attr)
+                    serialized["context"][attr] = getattr(self, attr)
 
         # Include file source
         if self.file_source:
-            serialized['context']['file_source'] = self.file_source
+            serialized["context"]["file_source"] = self.file_source
 
         # Include checkpoint metadata
-        serialized['available_checkpoints'] = list(self.checkpoints.keys())
-        serialized['data_files'] = data_files
+        serialized["available_checkpoints"] = list(self.checkpoints.keys())
+        serialized["data_files"] = data_files
 
         return serialized
 
     @classmethod
-    def restore_from_checkpoint(cls, checkpoint_data: Dict[str, Any]) -> 'ETLContext':
+    def restore_from_checkpoint(cls, checkpoint_data: Dict[str, Any]) -> "ETLContext":
         """
         Restore a context from serialized checkpoint data.
 
@@ -476,25 +575,25 @@ class ETLContext:
             ETLContext: Restored context instance
         """
         # Extract context data - handle both old and new format
-        context_data = checkpoint_data.get('context', checkpoint_data)
+        context_data = checkpoint_data.get("context", checkpoint_data)
 
         # Handle required initialization parameters
-        db_config = context_data.get('db_config', {})
+        db_config = context_data.get("db_config", {})
 
         # Log warning if db_config is empty
         if not db_config:
             logger.warning("Database configuration is missing or empty in checkpoint")
 
-        output_dir = context_data.get('output_dir')
-        memory_limit_mb = context_data.get('memory_limit_mb', 1024)
-        parallel_processing = context_data.get('parallel_processing', True)
-        chunk_size = context_data.get('chunk_size', 1000)
-        batch_size = context_data.get('batch_size', 100)
-        max_workers = context_data.get('max_workers')
-        task_id = context_data.get('task_id')
-        user_id = context_data.get('user_id')
-        user_display_name = context_data.get('user_display_name')
-        export_date = context_data.get('export_date')
+        output_dir = context_data.get("output_dir")
+        memory_limit_mb = context_data.get("memory_limit_mb", 1024)
+        parallel_processing = context_data.get("parallel_processing", True)
+        chunk_size = context_data.get("chunk_size", 1000)
+        batch_size = context_data.get("batch_size", 100)
+        max_workers = context_data.get("max_workers")
+        task_id = context_data.get("task_id")
+        user_id = context_data.get("user_id")
+        user_display_name = context_data.get("user_display_name")
+        export_date = context_data.get("export_date")
 
         # Create new context instance
         context = cls(
@@ -508,21 +607,34 @@ class ETLContext:
             task_id=task_id,
             user_id=user_id,
             user_display_name=user_display_name,
-            export_date=export_date
+            export_date=export_date,
         )
 
         # Restore other serializable attributes
         for attr in cls.SERIALIZABLE_ATTRIBUTES:
-            if attr in context_data and attr not in ['db_config', 'output_dir', 'memory_limit_mb',
-                                                    'parallel_processing', 'chunk_size', 'batch_size',
-                                                    'max_workers', 'task_id', 'user_id', 'user_display_name',
-                                                    'export_date']:
+            if attr in context_data and attr not in [
+                "db_config",
+                "output_dir",
+                "memory_limit_mb",
+                "parallel_processing",
+                "chunk_size",
+                "batch_size",
+                "max_workers",
+                "task_id",
+                "user_id",
+                "user_display_name",
+                "export_date",
+            ]:
                 value = context_data[attr]
 
                 # Handle datetime objects
-                if attr == 'start_time' or (isinstance(value, str) and 'T' in value and value.endswith('Z')):
+                if attr == "start_time" or (
+                    isinstance(value, str) and "T" in value and value.endswith("Z")
+                ):
                     try:
-                        value = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+                        value = datetime.datetime.fromisoformat(
+                            value.replace("Z", "+00:00")
+                        )
                     except ValueError:
                         # If parsing fails, keep the string value
                         pass
@@ -530,20 +642,20 @@ class ETLContext:
                 setattr(context, attr, value)
 
         # Restore current phase
-        if 'current_phase' in context_data:
-            context.current_phase = context_data['current_phase']
+        if "current_phase" in context_data:
+            context.current_phase = context_data["current_phase"]
 
         # Restore phase results
-        if 'phase_results' in context_data:
-            context.phase_results = context_data['phase_results']
+        if "phase_results" in context_data:
+            context.phase_results = context_data["phase_results"]
 
         # Restore errors
-        if 'errors' in context_data:
-            context.errors = context_data['errors']
+        if "errors" in context_data:
+            context.errors = context_data["errors"]
 
         # Restore custom metadata
-        if 'custom_metadata' in context_data:
-            context.custom_metadata = context_data['custom_metadata']
+        if "custom_metadata" in context_data:
+            context.custom_metadata = context_data["custom_metadata"]
 
         logger.info(f"Restored ETL context with task ID: {context.task_id}")
         return context
@@ -573,14 +685,14 @@ class ETLContext:
         checkpoint_data = self.serialize_checkpoint()
 
         # Save to file using custom encoder for datetime objects
-        with open(checkpoint_file, 'w') as f:
+        with open(checkpoint_file, "w") as f:
             json.dump(checkpoint_data, f, indent=2, cls=DateTimeEncoder)
 
         logger.info(f"Saved checkpoint to {checkpoint_file}")
         return checkpoint_file
 
     @classmethod
-    def load_from_checkpoint_file(cls, checkpoint_file: str) -> 'ETLContext':
+    def load_from_checkpoint_file(cls, checkpoint_file: str) -> "ETLContext":
         """
         Load a context from a checkpoint file.
 
@@ -591,7 +703,7 @@ class ETLContext:
             ETLContext: Restored context instance
         """
         # Load checkpoint data
-        with open(checkpoint_file, 'r') as f:
+        with open(checkpoint_file, "r") as f:
             checkpoint_data = json.load(f)
 
         # Restore context from checkpoint
@@ -607,17 +719,17 @@ class ETLContext:
             phase: The phase to get the status for
 
         Returns:
-            The status of the phase
+            str: The status of the phase, defaults to 'pending' if not found
         """
-        return self.phase_results.get(phase, {}).get('status', 'pending')
+        return self.phase_results.get(phase, {}).get("status", "pending")
 
     def has_checkpoint(self) -> bool:
         """Check if the context has checkpoint data.
 
         Returns:
-            True if the context has checkpoint data, False otherwise
+            bool: True if the context has checkpoint data, False otherwise
         """
-        return bool(self.checkpoints) or hasattr(self, 'current_phase')
+        return bool(self.checkpoints) or hasattr(self, "current_phase")
 
     def set_phase_status(self, phase: str, status: str) -> None:
         """
@@ -625,12 +737,12 @@ class ETLContext:
 
         Args:
             phase: The phase name
-            status: The status to set
+            status: The status to set ('pending', 'running', 'completed', 'failed')
         """
         if phase not in self.phase_results:
             self.phase_results[phase] = {}
 
-        self.phase_results[phase]['status'] = status
+        self.phase_results[phase]["status"] = status
         logger.debug(f"Set phase {phase} status to {status}")
 
     def set_export_id(self, export_id: int) -> None:
