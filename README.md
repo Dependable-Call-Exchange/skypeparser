@@ -2,6 +2,8 @@
 
 A Python tool for parsing and analyzing Skype export data.
 
+<!-- Test change for pre-commit hooks -->
+
 ## Overview
 
 This tool parses Skype export data (from the "Export Chat History" feature in Skype) and provides various ways to analyze and visualize the data. It can handle both JSON and TAR exports from Skype.
