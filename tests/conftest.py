@@ -8,14 +8,34 @@ generating test data.
 import os
 import sys
 import tempfile
-from typing import Any, Dict
 from pathlib import Path
+from typing import Any, Dict
 
 import pytest
 
 # Add the parent directory to the path so we can import the src module
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from src.db.connection import DatabaseConnection
+from src.db.etl.extractor import Extractor
+from src.db.etl.loader import Loader
+from src.db.etl.transformer import Transformer
+
+# Import dependencies
+from src.utils.di import ServiceProvider, get_service_provider
+from src.utils.file_handler import FileHandler
+from src.utils.interfaces import (
+    ContentExtractorProtocol,
+    DatabaseConnectionProtocol,
+    ExtractorProtocol,
+    FileHandlerProtocol,
+    LoaderProtocol,
+    MessageHandlerFactoryProtocol,
+    StructuredDataExtractorProtocol,
+    TransformerProtocol,
+    ValidationServiceProtocol,
+)
+from src.utils.message_type_handlers import SkypeMessageHandlerFactory
 from tests.fixtures import (
     DatabaseRecordFactory,
     SkypeConversationFactory,
@@ -25,28 +45,19 @@ from tests.fixtures import (
 )
 from tests.fixtures import test_db_connection as _test_db_connection
 from tests.fixtures.etl_mocks import (
-    MockExtractor,
-    MockTransformer,
-    MockFileHandler,
-    MockValidationService,
     MockContentExtractor,
-    MockStructuredDataExtractor,
+    MockDatabase,
+    MockExtractor,
+    MockFileHandler,
     MockMessageHandler,
     MockMessageHandlerFactory,
-    MockProgressTracker,
     MockMessageProcessor,
-    MockDatabase
+    MockProgressTracker,
+    MockStructuredDataExtractor,
+    MockTransformer,
+    MockValidationService,
 )
 
-# Import dependencies
-from src.utils.di import ServiceProvider, get_service_provider
-from src.utils.interfaces import FileHandlerProtocol, MessageHandlerFactoryProtocol, ExtractorProtocol, TransformerProtocol, LoaderProtocol, DatabaseConnectionProtocol, ValidationServiceProtocol, ContentExtractorProtocol, StructuredDataExtractorProtocol
-from src.utils.file_handler import FileHandler
-from src.utils.message_type_handlers import SkypeMessageHandlerFactory
-from src.db.etl.extractor import Extractor
-from src.db.etl.transformer import Transformer
-from src.db.etl.loader import Loader
-from src.db.connection import DatabaseConnection
 
 # Register dependencies
 @pytest.fixture(scope="session", autouse=True)
@@ -63,24 +74,24 @@ def register_dependencies():
     provider.register_singleton(MessageHandlerFactoryProtocol, message_handler_factory)
 
     # Register ETL components for integration tests
-    from src.utils.interfaces import (
-        ExtractorProtocol,
-        TransformerProtocol,
-        LoaderProtocol,
-        DatabaseConnectionProtocol,
-        ValidationServiceProtocol,
-        ContentExtractorProtocol,
-        StructuredDataExtractorProtocol
-    )
-    from src.db.etl.extractor import Extractor
-    from src.db.etl.transformer import Transformer
-    from src.db.etl.loader import Loader
     from src.db.connection import DatabaseConnection
+    from src.db.etl.extractor import Extractor
+    from src.db.etl.loader import Loader
+    from src.db.etl.transformer import Transformer
+    from src.utils.interfaces import (
+        ContentExtractorProtocol,
+        DatabaseConnectionProtocol,
+        ExtractorProtocol,
+        LoaderProtocol,
+        StructuredDataExtractorProtocol,
+        TransformerProtocol,
+        ValidationServiceProtocol,
+    )
     from tests.fixtures.etl_mocks import (
-        MockValidationService,
         MockContentExtractor,
+        MockDatabase,
         MockStructuredDataExtractor,
-        MockDatabase
+        MockValidationService,
     )
 
     # Create mock services
@@ -90,22 +101,25 @@ def register_dependencies():
     db_connection = MockDatabase()
 
     # Register ETL components with explicit dependencies
-    provider.register_singleton(ExtractorProtocol, Extractor(
-        file_handler=file_handler,
-        validation_service=validation_service
-    ))
-    provider.register_singleton(TransformerProtocol, Transformer(
-        content_extractor=content_extractor,
-        message_handler_factory=message_handler_factory,
-        structured_data_extractor=structured_data_extractor
-    ))
-    provider.register_singleton(LoaderProtocol, Loader(
-        db_connection=db_connection
-    ))
+    provider.register_singleton(
+        ExtractorProtocol,
+        Extractor(file_handler=file_handler, validation_service=validation_service),
+    )
+    provider.register_singleton(
+        TransformerProtocol,
+        Transformer(
+            content_extractor=content_extractor,
+            message_handler_factory=message_handler_factory,
+            structured_data_extractor=structured_data_extractor,
+        ),
+    )
+    provider.register_singleton(LoaderProtocol, Loader(db_connection=db_connection))
     provider.register_singleton(DatabaseConnectionProtocol, db_connection)
     provider.register_singleton(ValidationServiceProtocol, validation_service)
     provider.register_singleton(ContentExtractorProtocol, content_extractor)
-    provider.register_singleton(StructuredDataExtractorProtocol, structured_data_extractor)
+    provider.register_singleton(
+        StructuredDataExtractorProtocol, structured_data_extractor
+    )
 
     # Also register by string name for legacy code
     provider.register_singleton("file_handler", file_handler)
@@ -117,56 +131,67 @@ def register_dependencies():
 
     return provider
 
+
 # ETL mock fixtures
 @pytest.fixture
 def mock_extractor():
     """Fixture for a MockExtractor instance."""
     return MockExtractor()
 
+
 @pytest.fixture
 def mock_transformer():
     """Fixture for a MockTransformer instance."""
     return MockTransformer()
+
 
 @pytest.fixture
 def mock_file_handler():
     """Fixture for a MockFileHandler instance."""
     return MockFileHandler()
 
+
 @pytest.fixture
 def mock_validation_service():
     """Fixture for a MockValidationService instance."""
     return MockValidationService()
+
 
 @pytest.fixture
 def mock_content_extractor():
     """Fixture for a MockContentExtractor instance."""
     return MockContentExtractor()
 
+
 @pytest.fixture
 def mock_structured_data_extractor():
     """Fixture for a MockStructuredDataExtractor instance."""
     return MockStructuredDataExtractor()
+
 
 @pytest.fixture
 def mock_message_handler():
     """Fixture for a MockMessageHandler instance."""
     return MockMessageHandler(message_type="RichText")
 
+
 @pytest.fixture
 def mock_message_handler_factory():
     """Fixture for a MockMessageHandlerFactory instance."""
     return MockMessageHandlerFactory()
+
 
 @pytest.fixture
 def mock_progress_tracker():
     """Fixture for a MockProgressTracker instance."""
     return MockProgressTracker()
 
+
 @pytest.fixture
 def mock_message_processor():
     """Fixture for a MockMessageProcessor instance."""
     return MockMessageProcessor()
+
 
 # Basic fixtures for common test data
 

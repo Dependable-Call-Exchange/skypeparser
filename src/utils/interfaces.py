@@ -129,7 +129,9 @@ class FileHandlerProtocol(Protocol):
         """
         ...
 
-    def read_file_object(self, file_obj: BinaryIO, file_name: Optional[str] = None) -> Dict[str, Any]:
+    def read_file_object(
+        self, file_obj: BinaryIO, file_name: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Read data from a file object.
 
@@ -142,7 +144,12 @@ class FileHandlerProtocol(Protocol):
         """
         ...
 
-    def read_tarfile(self, file_path: str, auto_select: bool = False, select_json: Optional[int] = None) -> Dict[str, Any]:
+    def read_tarfile(
+        self,
+        file_path: str,
+        auto_select: bool = False,
+        select_json: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
         Read data from a tar file.
 
@@ -156,7 +163,12 @@ class FileHandlerProtocol(Protocol):
         """
         ...
 
-    def read_tarfile_object(self, file_obj: BinaryIO, auto_select: bool = False, select_json: Optional[int] = None) -> Dict[str, Any]:
+    def read_tarfile_object(
+        self,
+        file_obj: BinaryIO,
+        auto_select: bool = False,
+        select_json: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
         Read data from a tar file object.
 
@@ -229,7 +241,9 @@ class DatabaseConnectionProtocol(Protocol):
         """
         ...
 
-    def fetch_one(self, query: str, params: Optional[Dict[str, Any]] = None) -> Optional[Tuple]:
+    def fetch_one(
+        self, query: str, params: Optional[Dict[str, Any]] = None
+    ) -> Optional[Tuple]:
         """
         Execute a query and fetch one result.
 

@@ -9,6 +9,7 @@ components but provide simplified behavior for testing.
 import io
 import json
 from typing import Any, BinaryIO, Dict, Iterator, List, Optional, Tuple
+from unittest.mock import MagicMock
 
 from src.utils.interfaces import (
     ContentExtractorProtocol,
@@ -20,7 +21,6 @@ from src.utils.interfaces import (
     TransformerProtocol,
     ValidationServiceProtocol,
 )
-from unittest.mock import MagicMock
 
 from .skype_data import BASIC_SKYPE_DATA, COMPLEX_SKYPE_DATA, INVALID_SKYPE_DATA
 
@@ -41,7 +41,7 @@ class MockDatabase:
         # Create a mock cursor with a connection attribute that has encoding
         self.mock_cursor = MagicMock()
         self.mock_cursor.connection = MagicMock()
-        self.mock_cursor.connection.encoding = 'UTF8'
+        self.mock_cursor.connection.encoding = "UTF8"
 
         # Set up fetchone to return a mock result with __getitem__ implemented
         mock_result = MagicMock()
@@ -49,15 +49,19 @@ class MockDatabase:
         self.mock_cursor.fetchone.return_value = mock_result
 
         # Set up mogrify to return bytes instead of a MagicMock
-        self.mock_cursor.mogrify.side_effect = lambda template, args: b'MOCK_MOGRIFIED_SQL'
+        self.mock_cursor.mogrify.side_effect = (
+            lambda template, args: b"MOCK_MOGRIFIED_SQL"
+        )
 
         # Set up execute to increment the execute_count and track queries
         original_execute = self.mock_cursor.execute
+
         def execute_with_count(query, params=None):
             self.execute_count += 1
             self.queries.append(query)
             self.params.append(params)
             return original_execute(query, params)
+
         self.mock_cursor.execute = execute_with_count
 
         # Set up __enter__ and __exit__ for cursor context manager support
@@ -103,7 +107,9 @@ class MockMessageProcessor:
     """
 
     @staticmethod
-    def extract_messages_from_conversations(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def extract_messages_from_conversations(
+        data: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
         """
         Extract all messages from all conversations in the data.
 
@@ -136,7 +142,7 @@ class MockMessageProcessor:
             "sender": msg.get("from", "unknown"),
             "content": msg.get("content", ""),
             "message_type": msg.get("messagetype", "unknown"),
-            "conversation_id": conv_id
+            "conversation_id": conv_id,
         }
 
     @staticmethod
@@ -155,7 +161,7 @@ class MockMessageProcessor:
             "timestamp": msg.get("originalarrivaltime", "unknown"),
             "sender": msg.get("from", "unknown"),
             "content": msg.get("content", ""),
-            "message_type": msg.get("messagetype", "unknown")
+            "message_type": msg.get("messagetype", "unknown"),
         }
 
 
@@ -168,7 +174,9 @@ class MockExtractor(ExtractorProtocol):
         self.file_obj = None
         self.message_processor = MockMessageProcessor()
 
-    def extract(self, file_path: Optional[str] = None, file_obj: Optional[BinaryIO] = None) -> Dict[str, Any]:
+    def extract(
+        self, file_path: Optional[str] = None, file_obj: Optional[BinaryIO] = None
+    ) -> Dict[str, Any]:
         """Mock extract method."""
         self.extract_called = True
         self.file_path = file_path
@@ -178,7 +186,9 @@ class MockExtractor(ExtractorProtocol):
         data = BASIC_SKYPE_DATA.copy()
 
         # Extract all messages from all conversations
-        data["messages"] = self.message_processor.extract_messages_from_conversations(data)
+        data["messages"] = self.message_processor.extract_messages_from_conversations(
+            data
+        )
         return data
 
 
@@ -191,7 +201,9 @@ class MockTransformer(TransformerProtocol):
         self.user_display_name = None
         self.message_processor = MockMessageProcessor()
 
-    def transform(self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None) -> Dict[str, Any]:
+    def transform(
+        self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Mock transform method."""
         self.transform_called = True
         self.raw_data = raw_data
@@ -214,7 +226,9 @@ class MockTransformer(TransformerProtocol):
                 message = self.message_processor.transform_message(msg, conv_id)
 
                 # Transform the message for the conversation
-                conv_message = self.message_processor.transform_conversation_message(msg)
+                conv_message = self.message_processor.transform_conversation_message(
+                    msg
+                )
 
                 conv_messages.append(conv_message)
                 all_messages[conv_id].append(message)
@@ -223,14 +237,14 @@ class MockTransformer(TransformerProtocol):
             conversations[conv_id] = {
                 "id": conv_id,
                 "display_name": conv.get("displayName", "unknown"),
-                "messages": conv_messages
+                "messages": conv_messages,
             }
 
         return {
             "user_id": raw_data.get("userId", "unknown"),
             "export_date": raw_data.get("exportDate", "unknown"),
             "conversations": conversations,  # Now a dictionary keyed by conversation ID
-            "messages": all_messages  # Dictionary with conversation_id as keys
+            "messages": all_messages,  # Dictionary with conversation_id as keys
         }
 
 
@@ -252,7 +266,9 @@ class MockFileHandler(FileHandlerProtocol):
         self.file_path = file_path
         return self.default_data
 
-    def read_file_object(self, file_obj: BinaryIO, file_name: Optional[str] = None) -> Dict[str, Any]:
+    def read_file_object(
+        self, file_obj: BinaryIO, file_name: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Mock read_file_object method."""
         self.read_file_object_called = True
         self.file_obj = file_obj
@@ -261,19 +277,31 @@ class MockFileHandler(FileHandlerProtocol):
     # Alias for backward compatibility
     read_file_obj = read_file_object
 
-    def read_tarfile(self, file_path: str, auto_select: bool = False, select_json: Optional[int] = None) -> Dict[str, Any]:
+    def read_tarfile(
+        self,
+        file_path: str,
+        auto_select: bool = False,
+        select_json: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """Mock read_tarfile method."""
         self.read_tarfile_called = True
         self.file_path = file_path
         return self.default_data
 
-    def read_tarfile_object(self, file_obj: BinaryIO, auto_select: bool = False, select_json: Optional[int] = None) -> Dict[str, Any]:
+    def read_tarfile_object(
+        self,
+        file_obj: BinaryIO,
+        auto_select: bool = False,
+        select_json: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """Mock read_tarfile_object method."""
         self.read_tarfile_object_called = True
         self.file_obj = file_obj
         return self.default_data
 
-    def read_tarfile_streaming(self, file_path: str, auto_select: bool = False) -> Iterator[Tuple[str, Any]]:
+    def read_tarfile_streaming(
+        self, file_path: str, auto_select: bool = False
+    ) -> Iterator[Tuple[str, Any]]:
         """Mock read_tarfile_streaming method."""
         yield "test.json", self.default_data
 
@@ -371,7 +399,7 @@ class MockStructuredDataExtractor(StructuredDataExtractorProtocol):
             "timestamp": message.get("originalarrivaltime", ""),
             "sender": message.get("from", ""),
             "content": message.get("content", ""),
-            "message_type": message.get("messagetype", "")
+            "message_type": message.get("messagetype", ""),
         }
 
 
@@ -398,7 +426,7 @@ class MockMessageHandler(MessageHandlerProtocol):
             "timestamp": message.get("originalarrivaltime", ""),
             "sender": message.get("from", ""),
             "content": message.get("content", ""),
-            "message_type": message.get("messagetype", "")
+            "message_type": message.get("messagetype", ""),
         }
 
 
@@ -417,7 +445,7 @@ class MockMessageHandlerFactory(MessageHandlerFactoryProtocol):
             "Location": MockMessageHandler("Location"),
             "Contacts": MockMessageHandler("Contacts"),
             "Event": MockMessageHandler("Event"),
-            "ScheduledCall": MockMessageHandler("ScheduledCall")
+            "ScheduledCall": MockMessageHandler("ScheduledCall"),
         }
 
     def get_handler(self, message_type: str) -> MessageHandlerProtocol:
@@ -453,8 +481,8 @@ class MockProgressTracker:
         self.total_items = total
         self.item_type = item_type
         self.phases[phase] = {
-            'current': current,
-            'total': total,
-            'item_type': item_type
+            "current": current,
+            "total": total,
+            "item_type": item_type,
         }
         self.update_count += 1

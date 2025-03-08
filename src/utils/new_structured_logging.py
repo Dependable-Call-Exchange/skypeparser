@@ -7,24 +7,25 @@ It includes JSON formatting, context tracking, and helper functions for common
 logging patterns.
 """
 
-import logging
-import json
 import datetime
-import uuid
-import threading
 import functools
-import time
-import traceback
+import json
+import logging
 import os
 import sys
+import threading
+import time
+import traceback
+import uuid
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar, Union, cast
+
 import psutil
-from typing import Any, Dict, Optional, Callable, TypeVar, cast, List, Union, Tuple
 
 # Thread-local storage for request context
 _context = threading.local()
 
 # Type variables for decorators
-F = TypeVar('F', bound=Callable[..., Any])
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 class JsonFormatter(logging.Formatter):
@@ -39,7 +40,7 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
             "module": record.module,
             "function": record.funcName or "",  # Ensure function is always a string
-            "line": record.lineno
+            "line": record.lineno,
         }
 
         # Add context data if available
@@ -53,16 +54,39 @@ class JsonFormatter(logging.Formatter):
             log_data["exception"] = {
                 "type": exc_type.__name__ if exc_type else "",
                 "message": str(exc_value) if exc_value else "",
-                "traceback": traceback.format_exception(exc_type, exc_value, exc_traceback) if exc_traceback else []
+                "traceback": traceback.format_exception(
+                    exc_type, exc_value, exc_traceback
+                )
+                if exc_traceback
+                else [],
             }
 
         # Add extra fields from record
         for key, value in record.__dict__.items():
             if key not in [
-                "args", "asctime", "created", "exc_info", "exc_text", "filename",
-                "funcName", "id", "levelname", "levelno", "lineno", "module",
-                "msecs", "message", "msg", "name", "pathname", "process",
-                "processName", "relativeCreated", "stack_info", "thread", "threadName"
+                "args",
+                "asctime",
+                "created",
+                "exc_info",
+                "exc_text",
+                "filename",
+                "funcName",
+                "id",
+                "levelname",
+                "levelno",
+                "lineno",
+                "module",
+                "msecs",
+                "message",
+                "msg",
+                "name",
+                "pathname",
+                "process",
+                "processName",
+                "relativeCreated",
+                "stack_info",
+                "thread",
+                "threadName",
             ] and not key.startswith("_"):
                 log_data[key] = value
 
@@ -76,7 +100,7 @@ def initialize_logging(
     enable_console: bool = True,
     enable_json: bool = True,
     max_file_size_mb: int = 10,
-    backup_count: int = 5
+    backup_count: int = 5,
 ) -> None:
     """Initialize logging configuration for the application.
 
@@ -96,7 +120,7 @@ def initialize_logging(
         formatter = JsonFormatter()
     else:
         if log_format is None:
-            log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         formatter = logging.Formatter(log_format)
 
     # Console handler
@@ -108,10 +132,9 @@ def initialize_logging(
     # File handler
     if log_file:
         from logging.handlers import RotatingFileHandler
+
         file_handler = RotatingFileHandler(
-            log_file,
-            maxBytes=max_file_size_mb * 1024 * 1024,
-            backupCount=backup_count
+            log_file, maxBytes=max_file_size_mb * 1024 * 1024, backupCount=backup_count
         )
         file_handler.setFormatter(formatter)
         handlers.append(file_handler)
@@ -247,6 +270,7 @@ def with_context(**kwargs):
     Returns:
         Decorated function
     """
+
     def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(*args, **func_kwargs):
@@ -265,11 +289,15 @@ def with_context(**kwargs):
             # Set context values
             with LogContext(**context_values):
                 return func(*args, **func_kwargs)
+
         return cast(F, wrapper)
+
     return decorator
 
 
-def log_execution_time(logger: Optional[logging.Logger] = None, level: int = logging.INFO):
+def log_execution_time(
+    logger: Optional[logging.Logger] = None, level: int = logging.INFO
+):
     """Decorator for logging function execution time.
 
     Args:
@@ -279,6 +307,7 @@ def log_execution_time(logger: Optional[logging.Logger] = None, level: int = log
     Returns:
         Decorated function
     """
+
     def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -288,7 +317,11 @@ def log_execution_time(logger: Optional[logging.Logger] = None, level: int = log
                 logger = get_logger(func.__module__)
 
             # Get function name with class if method
-            if args and hasattr(args[0], "__class__") and hasattr(args[0].__class__, func.__name__):
+            if (
+                args
+                and hasattr(args[0], "__class__")
+                and hasattr(args[0].__class__, func.__name__)
+            ):
                 func_name = f"{args[0].__class__.__name__}.{func.__name__}"
             else:
                 func_name = f"{func.__module__}.{func.__name__}"
@@ -307,10 +340,12 @@ def log_execution_time(logger: Optional[logging.Logger] = None, level: int = log
                     extra={
                         "function_name": func_name,
                         "duration_ms": duration_ms,
-                        "call_module": func.__module__
-                    }
+                        "call_module": func.__module__,
+                    },
                 )
+
         return cast(F, wrapper)
+
     return decorator
 
 
@@ -324,6 +359,7 @@ def log_call(logger: Optional[logging.Logger] = None, level: int = logging.DEBUG
     Returns:
         Decorated function
     """
+
     def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -339,7 +375,11 @@ def log_call(logger: Optional[logging.Logger] = None, level: int = logging.DEBUG
             args_formatted = ", ".join(all_args)
 
             # Get function name with class if method
-            if args and hasattr(args[0], "__class__") and hasattr(args[0].__class__, func.__name__):
+            if (
+                args
+                and hasattr(args[0], "__class__")
+                and hasattr(args[0].__class__, func.__name__)
+            ):
                 func_name = f"{args[0].__class__.__name__}.{func.__name__}"
             else:
                 func_name = f"{func.__module__}.{func.__name__}"
@@ -352,8 +392,8 @@ def log_call(logger: Optional[logging.Logger] = None, level: int = logging.DEBUG
                     "function_name": func_name,
                     "args_str": args_str,
                     "kwargs_str": kwargs_str,
-                    "call_module": func.__module__
-                }
+                    "call_module": func.__module__,
+                },
             )
 
             # Call the function
@@ -366,12 +406,14 @@ def log_call(logger: Optional[logging.Logger] = None, level: int = logging.DEBUG
                 extra={
                     "function_name": func_name,
                     "result": repr(result),
-                    "call_module": func.__module__
-                }
+                    "call_module": func.__module__,
+                },
             )
 
             return result
+
         return cast(F, wrapper)
+
     return decorator
 
 
@@ -394,6 +436,7 @@ def handle_errors(
     Returns:
         Decorated function
     """
+
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -403,7 +446,9 @@ def handle_errors(
                 logger = get_logger(func.__module__)
 
             # Get log level
-            level = getattr(logging, log_level) if isinstance(log_level, str) else log_level
+            level = (
+                getattr(logging, log_level) if isinstance(log_level, str) else log_level
+            )
 
             try:
                 return func(*args, **kwargs)
@@ -421,14 +466,16 @@ def handle_errors(
                 update_context(
                     error=str(e),
                     error_type=e.__class__.__name__,
-                    error_traceback=traceback.format_exception(*exc_info)
+                    error_traceback=traceback.format_exception(*exc_info),
                 )
 
                 # Reraise or return default
                 if reraise:
                     raise
                 return default_return
+
         return wrapper
+
     return decorator
 
 
@@ -446,7 +493,12 @@ def get_structured_logger(name: str) -> logging.Logger:
     return get_logger(name)
 
 
-def log_metrics(logger: logging.Logger, metrics: Dict[str, Any], level: int = logging.INFO, message: str = "Metrics"):
+def log_metrics(
+    logger: logging.Logger,
+    metrics: Dict[str, Any],
+    level: int = logging.INFO,
+    message: str = "Metrics",
+):
     """Log metrics with the given logger.
 
     Args:
@@ -474,7 +526,7 @@ def get_system_metrics() -> Dict[str, Any]:
         "thread_count": process.num_threads(),
         "open_files": len(process.open_files()),
         "system_cpu_percent": psutil.cpu_percent(),
-        "system_memory_percent": psutil.virtual_memory().percent
+        "system_memory_percent": psutil.virtual_memory().percent,
     }
 
 
@@ -522,7 +574,9 @@ def create_request_context(request_id: Optional[str] = None) -> Dict[str, Any]:
     return {
         "request_id": request_id,
         "start_time": datetime.datetime.now().isoformat(),
-        "source": "api" if "flask" in sys.modules or "fastapi" in sys.modules else "cli"
+        "source": "api"
+        if "flask" in sys.modules or "fastapi" in sys.modules
+        else "cli",
     }
 
 
@@ -535,6 +589,7 @@ def with_request_context(func: F) -> F:
     Returns:
         Decorated function
     """
+
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         # Create request context
@@ -553,7 +608,7 @@ def log_database_query(
     params: Optional[Dict[str, Any]] = None,
     duration_ms: Optional[float] = None,
     rows_affected: Optional[int] = None,
-    level: int = logging.DEBUG
+    level: int = logging.DEBUG,
 ):
     """Log a database query.
 
@@ -580,9 +635,5 @@ def log_database_query(
     logger.log(
         level,
         f"Database query: {query}",
-        extra={
-            "query": query,
-            "params": params,
-            "metrics": metrics
-        }
+        extra={"query": query, "params": params, "metrics": metrics},
     )

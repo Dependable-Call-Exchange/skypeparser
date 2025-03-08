@@ -5,20 +5,24 @@ This module provides functionality for generating reports on Skype data
 that has been processed by the ETL pipeline.
 """
 
-import logging
 import json
+import logging
 import os
-from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
 
-from src.utils.interfaces import DatabaseConnectionProtocol
 from src.utils.di import get_service
+from src.utils.interfaces import DatabaseConnectionProtocol
 
 logger = logging.getLogger(__name__)
 
+
 # Add the generate_report function for backward compatibility
-def generate_report(export_id: int, output_file: Optional[str] = None,
-                    db_connection: Optional[DatabaseConnectionProtocol] = None) -> Dict[str, Any]:
+def generate_report(
+    export_id: int,
+    output_file: Optional[str] = None,
+    db_connection: Optional[DatabaseConnectionProtocol] = None,
+) -> Dict[str, Any]:
     """
     Generate a report for a Skype export.
 
@@ -58,20 +62,21 @@ def generate_report(export_id: int, output_file: Optional[str] = None,
         "conversation_statistics": conversation_stats,
         "message_type_distribution": message_types,
         "activity_by_hour": activity_by_hour,
-        "activity_by_day_of_week": activity_by_day
+        "activity_by_day_of_week": activity_by_day,
     }
 
     # Save the report to a file if requested
     if output_file:
         try:
             os.makedirs(os.path.dirname(output_file), exist_ok=True)
-            with open(output_file, 'w', encoding='utf-8') as f:
+            with open(output_file, "w", encoding="utf-8") as f:
                 json.dump(report, f, indent=2, default=str)
             logger.info(f"Report saved to {output_file}")
         except Exception as e:
             logger.error(f"Error saving report to {output_file}: {e}")
 
     return report
+
 
 class SkypeReportGenerator:
     """
@@ -132,8 +137,12 @@ class SkypeReportGenerator:
             WHERE
                 export_id = %s
         """
-        conversation_result = self.db_connection.execute_query(conversation_query, (export_id,))
-        conversation_count = conversation_result[0]["conversation_count"] if conversation_result else 0
+        conversation_result = self.db_connection.execute_query(
+            conversation_query, (export_id,)
+        )
+        conversation_count = (
+            conversation_result[0]["conversation_count"] if conversation_result else 0
+        )
 
         # Get message count
         message_query = """
@@ -157,10 +166,16 @@ class SkypeReportGenerator:
             WHERE
                 export_id = %s
         """
-        date_range_result = self.db_connection.execute_query(date_range_query, (export_id,))
+        date_range_result = self.db_connection.execute_query(
+            date_range_query, (export_id,)
+        )
 
-        first_message = date_range_result[0]["first_message"] if date_range_result else None
-        last_message = date_range_result[0]["last_message"] if date_range_result else None
+        first_message = (
+            date_range_result[0]["first_message"] if date_range_result else None
+        )
+        last_message = (
+            date_range_result[0]["last_message"] if date_range_result else None
+        )
 
         # Calculate duration in days
         duration_days = None
@@ -178,10 +193,12 @@ class SkypeReportGenerator:
             "message_count": message_count,
             "first_message": first_message,
             "last_message": last_message,
-            "duration_days": duration_days
+            "duration_days": duration_days,
         }
 
-    def get_conversation_statistics(self, export_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_conversation_statistics(
+        self, export_id: int, limit: int = 10
+    ) -> List[Dict[str, Any]]:
         """
         Get statistics for conversations in a Skype export.
 
@@ -307,7 +324,15 @@ class SkypeReportGenerator:
         result = self.db_connection.execute_query(query, (export_id, export_id))
 
         # Convert day_of_week number to name
-        day_names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+        day_names = [
+            "Sunday",
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+        ]
         for row in result:
             row["day_name"] = day_names[int(row["day_of_week"])]
 
@@ -380,7 +405,7 @@ class SkypeReportGenerator:
                 "min_length": 0,
                 "max_length": 0,
                 "median_length": 0,
-                "stddev_length": 0
+                "stddev_length": 0,
             }
 
         return result[0]
@@ -402,7 +427,7 @@ class SkypeReportGenerator:
             "activity_by_hour": self.get_activity_by_hour(export_id),
             "activity_by_day_of_week": self.get_activity_by_day_of_week(export_id),
             "top_senders": self.get_top_senders(export_id),
-            "message_length_statistics": self.get_message_length_statistics(export_id)
+            "message_length_statistics": self.get_message_length_statistics(export_id),
         }
 
         return report

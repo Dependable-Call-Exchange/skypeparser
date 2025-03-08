@@ -14,9 +14,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from src.utils.di import ServiceProvider, get_service_provider
-from src.utils.interfaces import FileHandlerProtocol, MessageHandlerFactoryProtocol
 from src.utils.file_handler import FileHandler
+from src.utils.interfaces import FileHandlerProtocol, MessageHandlerFactoryProtocol
 from src.utils.message_type_handlers import SkypeMessageHandlerFactory
+
 
 def register_dependencies():
     """Register missing dependencies in the dependency injection system."""
@@ -27,9 +28,12 @@ def register_dependencies():
     provider.register_singleton(FileHandlerProtocol, FileHandler())
 
     print("Registering MessageHandlerFactoryProtocol...")
-    provider.register_singleton(MessageHandlerFactoryProtocol, SkypeMessageHandlerFactory())
+    provider.register_singleton(
+        MessageHandlerFactoryProtocol, SkypeMessageHandlerFactory()
+    )
 
     print("Dependencies registered successfully.")
+
 
 if __name__ == "__main__":
     register_dependencies()

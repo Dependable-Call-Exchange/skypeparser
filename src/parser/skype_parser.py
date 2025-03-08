@@ -14,26 +14,26 @@ Usage:
 
 import argparse
 import json
+import logging
 import os
 import sys
-import logging
 
-from ..utils.file_handler import read_file, read_tarfile
 from ..utils.dependencies import PSYCOPG2_AVAILABLE
-from .core_parser import parse_skype_data, id_selector
-from .file_output import export_conversations
+from ..utils.file_handler import read_file, read_tarfile
+from .core_parser import id_selector, parse_skype_data
 from .exceptions import (
-    FileOperationError,
     DataExtractionError,
     ExportError,
-    InvalidInputError
+    FileOperationError,
+    InvalidInputError,
 )
+from .file_output import export_conversations
 
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
 
@@ -42,9 +42,12 @@ ETL_AVAILABLE = False
 if PSYCOPG2_AVAILABLE:
     try:
         from ..db.etl.pipeline_manager import ETLPipeline
+
         ETL_AVAILABLE = True
     except ImportError:
-        logger.warning("ETL pipeline module not available. Database operations will be disabled.")
+        logger.warning(
+            "ETL pipeline module not available. Database operations will be disabled."
+        )
 else:
     logger.warning("psycopg2 is not available. Database operations will be disabled.")
 
@@ -66,7 +69,7 @@ class SkypeETLPipeline:
         db_port: int = 5432,
         output_dir: str = None,
         memory_limit_mb: int = 1024,
-        parallel_processing: bool = True
+        parallel_processing: bool = True,
     ):
         """
         Initialize the Skype ETL pipeline.
@@ -92,7 +95,7 @@ class SkypeETLPipeline:
             "user": db_user,
             "password": db_password,
             "host": db_host,
-            "port": db_port
+            "port": db_port,
         }
 
         # Store other parameters
@@ -105,7 +108,7 @@ class SkypeETLPipeline:
             db_config=self.db_config,
             output_dir=self.output_dir,
             memory_limit_mb=self.memory_limit_mb,
-            parallel_processing=self.parallel_processing
+            parallel_processing=self.parallel_processing,
         )
 
         logger.info("Initialized Skype ETL pipeline")
@@ -116,7 +119,7 @@ class SkypeETLPipeline:
         is_tar: bool = False,
         json_index: int = None,
         output_dir: str = None,
-        user_display_name: str = None
+        user_display_name: str = None,
     ) -> bool:
         """
         Run the ETL pipeline on a Skype export file.
@@ -138,13 +141,14 @@ class SkypeETLPipeline:
 
             # Run the pipeline
             result = self.pipeline.run_pipeline(
-                file_path=input_file,
-                user_display_name=user_display_name
+                file_path=input_file, user_display_name=user_display_name
             )
 
             # Check if the pipeline completed successfully
             if result and "export_id" in result:
-                logger.info(f"ETL pipeline completed successfully. Export ID: {result['export_id']}")
+                logger.info(
+                    f"ETL pipeline completed successfully. Export ID: {result['export_id']}"
+                )
                 return True
             else:
                 logger.error("ETL pipeline failed to complete")
@@ -183,7 +187,11 @@ def main():
 
         # Read the Skype export file
         try:
-            main_file = read_file(args.input_file) if not args.extract_tar else read_tarfile(args.input_file, args.select_json)
+            main_file = (
+                read_file(args.input_file)
+                if not args.extract_tar
+                else read_tarfile(args.input_file, args.select_json)
+            )
         except (json.JSONDecodeError, KeyError, IndexError) as e:
             logger.error(f"Error reading file: {e}")
             sys.exit(1)
@@ -200,7 +208,7 @@ def main():
                     db_user=args.db_user,
                     db_password=args.db_password,
                     db_host=args.db_host,
-                    db_port=args.db_port
+                    db_port=args.db_port,
                 )
 
                 # Run the ETL pipeline
@@ -209,25 +217,27 @@ def main():
                     is_tar=args.extract_tar,
                     json_index=args.select_json,
                     output_dir=args.output_dir,
-                    user_display_name=user_display_name
+                    user_display_name=user_display_name,
                 )
 
                 if result:
                     logger.info("ETL pipeline completed successfully.")
-                    if not args.text_output and args.format not in ['json', 'csv']:
+                    if not args.text_output and args.format not in ["json", "csv"]:
                         logger.info("\nAll done!")
                         return
                 else:
                     logger.error("ETL pipeline failed.")
-                    if not args.text_output and args.format not in ['json', 'csv']:
+                    if not args.text_output and args.format not in ["json", "csv"]:
                         sys.exit(1)
             except Exception as e:
                 logger.error(f"Error in ETL pipeline: {e}")
-                if not args.text_output and args.format not in ['json', 'csv']:
+                if not args.text_output and args.format not in ["json", "csv"]:
                     sys.exit(1)
         elif args.store_db and not ETL_AVAILABLE:
-            logger.error("Database storage requested but ETL pipeline is not available. "
-                        "Please ensure psycopg2 is installed and the ETL pipeline module is accessible.")
+            logger.error(
+                "Database storage requested but ETL pipeline is not available. "
+                "Please ensure psycopg2 is installed and the ETL pipeline module is accessible."
+            )
             sys.exit(1)
 
         # Parse the Skype export data
@@ -246,7 +256,7 @@ def main():
         # Filter conversations if requested
         if args.choose or args.select_conversations:
             filtered_conversations = {}
-            all_ids = list(structured_data['conversations'].keys())
+            all_ids = list(structured_data["conversations"].keys())
 
             try:
                 if args.choose:
@@ -257,8 +267,14 @@ def main():
                         sys.exit(1)
                 else:
                     try:
-                        selected_indices = [int(idx) - 1 for idx in args.select_conversations.split(',')]
-                        selected_ids = [all_ids[idx] for idx in selected_indices if 0 <= idx < len(all_ids)]
+                        selected_indices = [
+                            int(idx) - 1 for idx in args.select_conversations.split(",")
+                        ]
+                        selected_ids = [
+                            all_ids[idx]
+                            for idx in selected_indices
+                            if 0 <= idx < len(all_ids)
+                        ]
                         if not selected_ids:
                             logger.error("No valid conversations selected.")
                             sys.exit(1)
@@ -268,10 +284,12 @@ def main():
 
                 # Filter conversations
                 for conv_id in selected_ids:
-                    if conv_id in structured_data['conversations']:
-                        filtered_conversations[conv_id] = structured_data['conversations'][conv_id]
+                    if conv_id in structured_data["conversations"]:
+                        filtered_conversations[conv_id] = structured_data[
+                            "conversations"
+                        ][conv_id]
 
-                structured_data['conversations'] = filtered_conversations
+                structured_data["conversations"] = filtered_conversations
             except Exception as e:
                 logger.error(f"Error filtering conversations: {e}")
                 sys.exit(1)
@@ -281,10 +299,10 @@ def main():
             export_conversations(
                 structured_data,
                 args.format,
-                args.output_dir or '',
+                args.output_dir or "",
                 args.overwrite,
                 args.skip_existing,
-                args.text_output
+                args.text_output,
             )
             logger.info("\nAll done!")
         except FileOperationError as e:
@@ -312,60 +330,91 @@ def get_commandline_args():
     Returns:
         argparse.Namespace: Parsed command-line arguments
     """
-    command = argparse.ArgumentParser(description="Parse Skype chat history from JSON or TAR files")
-    command.add_argument('input_file',
-                         help='The path/name to the Skype json/tar file you want to parse')
-    command.add_argument('-c', '--choose',
-                         action='store_true',
-                         help="Use this flag to choose which conversations you'd like to parse interactively")
-    command.add_argument('-t', '--extract-tar',
-                         action='store_true',
-                         dest='extract_tar',
-                         help='Use this flag to feed in a tar file')
-    command.add_argument('-o', '--output-dir',
-                         help='Directory to save the output files')
-    command.add_argument('-u', '--user-display-name',
-                         help='Your display name in the logs (skips interactive prompt)')
-    command.add_argument('-s', '--select-conversations',
-                         help='Comma-separated list of conversation indices to parse (e.g., "1,3,5")')
-    command.add_argument('-j', '--select-json',
-                         type=int,
-                         help='Index of the JSON file to use if multiple are found in the tar (default: 0)')
-    command.add_argument('--overwrite',
-                         action='store_true',
-                         help='Overwrite existing files without prompting')
-    command.add_argument('--skip-existing',
-                         action='store_true',
-                         help='Skip existing files without prompting')
-    command.add_argument('-v', '--verbose',
-                         action='store_true',
-                         help='Enable verbose logging')
-    command.add_argument('-f', '--format',
-                         choices=['text', 'json', 'csv', 'all'],
-                         default='all',
-                         help='Output format (text, json, csv, or all)')
-    command.add_argument('--text-output',
-                         action='store_true',
-                         help='Generate text output in addition to structured output')
+    command = argparse.ArgumentParser(
+        description="Parse Skype chat history from JSON or TAR files"
+    )
+    command.add_argument(
+        "input_file", help="The path/name to the Skype json/tar file you want to parse"
+    )
+    command.add_argument(
+        "-c",
+        "--choose",
+        action="store_true",
+        help="Use this flag to choose which conversations you'd like to parse interactively",
+    )
+    command.add_argument(
+        "-t",
+        "--extract-tar",
+        action="store_true",
+        dest="extract_tar",
+        help="Use this flag to feed in a tar file",
+    )
+    command.add_argument(
+        "-o", "--output-dir", help="Directory to save the output files"
+    )
+    command.add_argument(
+        "-u",
+        "--user-display-name",
+        help="Your display name in the logs (skips interactive prompt)",
+    )
+    command.add_argument(
+        "-s",
+        "--select-conversations",
+        help='Comma-separated list of conversation indices to parse (e.g., "1,3,5")',
+    )
+    command.add_argument(
+        "-j",
+        "--select-json",
+        type=int,
+        help="Index of the JSON file to use if multiple are found in the tar (default: 0)",
+    )
+    command.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing files without prompting",
+    )
+    command.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip existing files without prompting",
+    )
+    command.add_argument(
+        "-v", "--verbose", action="store_true", help="Enable verbose logging"
+    )
+    command.add_argument(
+        "-f",
+        "--format",
+        choices=["text", "json", "csv", "all"],
+        default="all",
+        help="Output format (text, json, csv, or all)",
+    )
+    command.add_argument(
+        "--text-output",
+        action="store_true",
+        help="Generate text output in addition to structured output",
+    )
 
     # Database storage options
-    db_group = command.add_argument_group('Database Storage Options')
-    db_group.add_argument('--store-db',
-                         action='store_true',
-                         help='Store data in PostgreSQL database using ETL pipeline')
-    db_group.add_argument('--db-name',
-                         help='PostgreSQL database name')
-    db_group.add_argument('--db-user',
-                         help='PostgreSQL database user')
-    db_group.add_argument('--db-password',
-                         help='PostgreSQL database password')
-    db_group.add_argument('--db-host',
-                         default='localhost',
-                         help='PostgreSQL database host (default: localhost)')
-    db_group.add_argument('--db-port',
-                         type=int,
-                         default=5432,
-                         help='PostgreSQL database port (default: 5432)')
+    db_group = command.add_argument_group("Database Storage Options")
+    db_group.add_argument(
+        "--store-db",
+        action="store_true",
+        help="Store data in PostgreSQL database using ETL pipeline",
+    )
+    db_group.add_argument("--db-name", help="PostgreSQL database name")
+    db_group.add_argument("--db-user", help="PostgreSQL database user")
+    db_group.add_argument("--db-password", help="PostgreSQL database password")
+    db_group.add_argument(
+        "--db-host",
+        default="localhost",
+        help="PostgreSQL database host (default: localhost)",
+    )
+    db_group.add_argument(
+        "--db-port",
+        type=int,
+        default=5432,
+        help="PostgreSQL database port (default: 5432)",
+    )
 
     args = command.parse_args()
 

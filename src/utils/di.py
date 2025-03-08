@@ -8,13 +8,23 @@ and improve testability.
 """
 
 import logging
-from typing import Dict, Any, Type, Callable, TypeVar, Optional, cast, get_type_hints, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Optional,
+    Type,
+    TypeVar,
+    Union,
+    cast,
+    get_type_hints,
+)
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
 # Type variable for generic service types
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 class ServiceProvider:
@@ -33,7 +43,9 @@ class ServiceProvider:
         self._transients: Dict[Type, Type] = {}
         self._factories: Dict[Type, Callable[..., Any]] = {}
 
-    def register_singleton(self, service_type: Union[Type[T], str], instance: T) -> None:
+    def register_singleton(
+        self, service_type: Union[Type[T], str], instance: T
+    ) -> None:
         """
         Register a singleton service with a pre-created instance.
 
@@ -47,7 +59,9 @@ class ServiceProvider:
         else:
             logger.debug(f"Registered singleton for {service_type}")
 
-    def register_singleton_class(self, service_type: Type[T], implementation_type: Type[T]) -> None:
+    def register_singleton_class(
+        self, service_type: Type[T], implementation_type: Type[T]
+    ) -> None:
         """
         Register a singleton service with a class that will be instantiated on first use.
 
@@ -55,6 +69,7 @@ class ServiceProvider:
             service_type: The type/interface to register
             implementation_type: The implementation class to instantiate
         """
+
         # Create a factory function that will instantiate the implementation
         def factory():
             instance = self._create_instance(implementation_type)
@@ -64,9 +79,13 @@ class ServiceProvider:
 
         # Store the factory in singletons dict
         self._singletons[service_type] = factory
-        logger.debug(f"Registered singleton class {implementation_type.__name__} for {service_type.__name__}")
+        logger.debug(
+            f"Registered singleton class {implementation_type.__name__} for {service_type.__name__}"
+        )
 
-    def register_transient(self, service_type: Type[T], implementation_type: Type[T]) -> None:
+    def register_transient(
+        self, service_type: Type[T], implementation_type: Type[T]
+    ) -> None:
         """
         Register a transient service that will be instantiated each time it's resolved.
 
@@ -75,9 +94,13 @@ class ServiceProvider:
             implementation_type: The implementation class to instantiate
         """
         self._transients[service_type] = implementation_type
-        logger.debug(f"Registered transient {implementation_type.__name__} for {service_type.__name__}")
+        logger.debug(
+            f"Registered transient {implementation_type.__name__} for {service_type.__name__}"
+        )
 
-    def register_factory(self, service_type: Type[T], factory: Callable[..., T]) -> None:
+    def register_factory(
+        self, service_type: Type[T], factory: Callable[..., T]
+    ) -> None:
         """
         Register a factory function that will create the service when needed.
 
@@ -139,14 +162,14 @@ class ServiceProvider:
             # Get constructor parameter types
             type_hints = get_type_hints(implementation_type.__init__)
             # Remove return type
-            if 'return' in type_hints:
-                del type_hints['return']
+            if "return" in type_hints:
+                del type_hints["return"]
 
             # Try to resolve dependencies
             kwargs = {}
             for param_name, param_type in type_hints.items():
                 # Skip self parameter
-                if param_name == 'self':
+                if param_name == "self":
                     continue
 
                 try:
@@ -160,13 +183,16 @@ class ServiceProvider:
             # Create the instance with resolved dependencies
             return implementation_type(**kwargs)
         except Exception as e:
-            logger.error(f"Error creating instance of {implementation_type.__name__}: {e}")
+            logger.error(
+                f"Error creating instance of {implementation_type.__name__}: {e}"
+            )
             # Fall back to creating without dependencies
             return implementation_type()
 
 
 # Global service provider instance
 _global_provider = ServiceProvider()
+
 
 def get_service_provider() -> ServiceProvider:
     """
@@ -176,6 +202,7 @@ def get_service_provider() -> ServiceProvider:
         The global ServiceProvider instance
     """
     return _global_provider
+
 
 def get_service(service_type: Union[Type[T], str]) -> T:
     """

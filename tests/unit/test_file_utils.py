@@ -6,18 +6,14 @@ This module contains tests for the functionality in src.utils.file_utils.
 """
 
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from src.utils.file_utils import (
-    get_file_extension,
-    is_json_file,
-    is_tar_file
-)
+from src.utils.file_utils import get_file_extension, is_json_file, is_tar_file
 
 
 class TestFileUtils(unittest.TestCase):
@@ -29,27 +25,28 @@ class TestFileUtils(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
 
         # Create sample files
-        self.json_path = os.path.join(self.temp_dir.name, 'test.json')
-        with open(self.json_path, 'w') as f:
+        self.json_path = os.path.join(self.temp_dir.name, "test.json")
+        with open(self.json_path, "w") as f:
             f.write('{"test": "data"}')
 
         # Create a valid tar file
         import tarfile
-        self.tar_path = os.path.join(self.temp_dir.name, 'test.tar')
-        with tarfile.open(self.tar_path, 'w') as tar:
+
+        self.tar_path = os.path.join(self.temp_dir.name, "test.tar")
+        with tarfile.open(self.tar_path, "w") as tar:
             # Add a file to the tar archive
-            file_path = os.path.join(self.temp_dir.name, 'file_for_tar.txt')
-            with open(file_path, 'w') as f:
-                f.write('This file will be added to the tar archive')
-            tar.add(file_path, arcname='file_for_tar.txt')
+            file_path = os.path.join(self.temp_dir.name, "file_for_tar.txt")
+            with open(file_path, "w") as f:
+                f.write("This file will be added to the tar archive")
+            tar.add(file_path, arcname="file_for_tar.txt")
 
-        self.txt_path = os.path.join(self.temp_dir.name, 'test.txt')
-        with open(self.txt_path, 'w') as f:
-            f.write('This is a text file')
+        self.txt_path = os.path.join(self.temp_dir.name, "test.txt")
+        with open(self.txt_path, "w") as f:
+            f.write("This is a text file")
 
-        self.no_extension_path = os.path.join(self.temp_dir.name, 'noextension')
-        with open(self.no_extension_path, 'w') as f:
-            f.write('This file has no extension')
+        self.no_extension_path = os.path.join(self.temp_dir.name, "noextension")
+        with open(self.no_extension_path, "w") as f:
+            f.write("This file has no extension")
 
     def tearDown(self):
         """Clean up test fixtures."""
@@ -59,19 +56,19 @@ class TestFileUtils(unittest.TestCase):
         """Test get_file_extension function."""
         # Test with a JSON file
         extension = get_file_extension(self.json_path)
-        self.assertEqual(extension, '.json')
+        self.assertEqual(extension, ".json")
 
         # Test with a TAR file
         extension = get_file_extension(self.tar_path)
-        self.assertEqual(extension, '.tar')
+        self.assertEqual(extension, ".tar")
 
         # Test with a TXT file
         extension = get_file_extension(self.txt_path)
-        self.assertEqual(extension, '.txt')
+        self.assertEqual(extension, ".txt")
 
         # Test with a file that has no extension
         extension = get_file_extension(self.no_extension_path)
-        self.assertEqual(extension, '')
+        self.assertEqual(extension, "")
 
     def test_is_json_file(self):
         """Test is_json_file function."""
@@ -94,5 +91,5 @@ class TestFileUtils(unittest.TestCase):
         self.assertFalse(is_tar_file(self.no_extension_path))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

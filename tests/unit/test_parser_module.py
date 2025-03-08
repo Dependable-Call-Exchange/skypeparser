@@ -5,22 +5,18 @@ Tests for the parser_module module.
 This module contains tests for the functionality in src.parser.parser_module.
 """
 
-import os
 import json
+import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from src.parser.core_parser import (
-    timestamp_parser,
-    content_parser,
-    enhanced_tag_stripper as tag_stripper,
-    pretty_quotes,
-    parse_skype_data
-)
+from src.parser.core_parser import content_parser
+from src.parser.core_parser import enhanced_tag_stripper as tag_stripper
+from src.parser.core_parser import parse_skype_data, pretty_quotes, timestamp_parser
 from src.parser.exceptions import SkypeParserError
 
 
@@ -46,18 +42,18 @@ class TestParserModule(unittest.TestCase):
                             "originalarrivaltime": "2023-01-01T12:00:00.000Z",
                             "from": "user1",
                             "content": "<p>Hello, world!</p>",
-                            "messagetype": "RichText"
+                            "messagetype": "RichText",
                         },
                         {
                             "id": "2",
                             "originalarrivaltime": "2023-01-01T12:01:00.000Z",
                             "from": "user2",
                             "content": "<p>Hi there!</p>",
-                            "messagetype": "RichText"
-                        }
-                    ]
+                            "messagetype": "RichText",
+                        },
+                    ],
                 }
-            ]
+            ],
         }
         self.json_file = os.path.join(self.temp_dir.name, "test.json")
         with open(self.json_file, "w") as f:
@@ -99,13 +95,13 @@ class TestParserModule(unittest.TestCase):
 
     def test_pretty_quotes(self):
         """Test pretty_quotes function."""
-        text = 'This is a "test" with \'quotes\'.'
+        text = "This is a \"test\" with 'quotes'."
         pretty = pretty_quotes(text)
         self.assertNotEqual(pretty, text)  # Should be different after processing
 
     def test_parse_skype_data(self):
         """Test parse_skype_data function."""
-        with open(self.json_file, 'r') as f:
+        with open(self.json_file, "r") as f:
             raw_data = json.load(f)
         result = parse_skype_data(raw_data, "Test User")
         self.assertIn("conversations", result)
@@ -113,5 +109,5 @@ class TestParserModule(unittest.TestCase):
         self.assertEqual(result["user_id"], "user123")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

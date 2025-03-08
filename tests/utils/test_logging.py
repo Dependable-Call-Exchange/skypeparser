@@ -7,7 +7,7 @@ This module provides utilities for testing logging functionality.
 import json
 import logging
 from io import StringIO
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 from src.utils.new_structured_logging import JsonFormatter
 
@@ -29,7 +29,9 @@ class LogCapture:
         if json_format:
             self.handler.setFormatter(JsonFormatter())
         else:
-            self.handler.setFormatter(logging.Formatter('%(levelname)s:%(name)s:%(message)s'))
+            self.handler.setFormatter(
+                logging.Formatter("%(levelname)s:%(name)s:%(message)s")
+            )
 
         self.handler.setLevel(level)
         self.old_level = None
@@ -69,14 +71,12 @@ class LogCapture:
                     logs.append(json.loads(line))
                 except json.JSONDecodeError:
                     # Handle non-JSON formatted logs
-                    parts = line.split(':', 2)
+                    parts = line.split(":", 2)
                     if len(parts) == 3:
                         level, name, message = parts
-                        logs.append({
-                            'level': level,
-                            'logger': name,
-                            'message': message
-                        })
+                        logs.append(
+                            {"level": level, "logger": name, "message": message}
+                        )
         return logs
 
     def get_log_messages(self) -> List[str]:
@@ -86,7 +86,7 @@ class LogCapture:
         Returns:
             List of log messages
         """
-        return [log.get('message', '') for log in self.get_logs()]
+        return [log.get("message", "") for log in self.get_logs()]
 
     def get_logs_for_logger(self, logger_name: str) -> List[Dict[str, Any]]:
         """
@@ -98,7 +98,7 @@ class LogCapture:
         Returns:
             List of log records for the specified logger
         """
-        return [log for log in self.get_logs() if log.get('logger') == logger_name]
+        return [log for log in self.get_logs() if log.get("logger") == logger_name]
 
     def get_logs_with_level(self, level: str) -> List[Dict[str, Any]]:
         """
@@ -110,9 +110,11 @@ class LogCapture:
         Returns:
             List of log records with the specified level
         """
-        return [log for log in self.get_logs() if log.get('level') == level]
+        return [log for log in self.get_logs() if log.get("level") == level]
 
-    def assert_log_contains(self, message_substring: str, level: Optional[str] = None) -> bool:
+    def assert_log_contains(
+        self, message_substring: str, level: Optional[str] = None
+    ) -> bool:
         """
         Assert that the logs contain a message with the specified substring.
 
@@ -125,38 +127,50 @@ class LogCapture:
         """
         logs = self.get_logs()
         if level:
-            logs = [log for log in logs if log.get('level') == level]
+            logs = [log for log in logs if log.get("level") == level]
 
         # Check message field
-        if any(message_substring in log.get('message', '') for log in logs):
+        if any(message_substring in log.get("message", "") for log in logs):
             return True
 
         # Check exception fields
         for log in logs:
-            if 'exception' in log:
-                exception = log['exception']
-                if message_substring in exception.get('type', ''):
+            if "exception" in log:
+                exception = log["exception"]
+                if message_substring in exception.get("type", ""):
                     return True
-                if message_substring in exception.get('message', ''):
+                if message_substring in exception.get("message", ""):
                     return True
-                if isinstance(exception.get('traceback'), list):
-                    if any(message_substring in line for line in exception['traceback']):
+                if isinstance(exception.get("traceback"), list):
+                    if any(
+                        message_substring in line for line in exception["traceback"]
+                    ):
                         return True
-                elif isinstance(exception.get('traceback'), str):
-                    if message_substring in exception['traceback']:
+                elif isinstance(exception.get("traceback"), str):
+                    if message_substring in exception["traceback"]:
                         return True
 
         # Check context fields
         for log in logs:
-            if 'context' in log:
-                context = log['context']
+            if "context" in log:
+                context = log["context"]
                 if message_substring in str(context):
                     return True
 
         # Check extra fields
         for log in logs:
             for key, value in log.items():
-                if key not in ['message', 'level', 'logger', 'timestamp', 'module', 'function', 'line', 'exception', 'context']:
+                if key not in [
+                    "message",
+                    "level",
+                    "logger",
+                    "timestamp",
+                    "module",
+                    "function",
+                    "line",
+                    "exception",
+                    "context",
+                ]:
                     if message_substring in str(value):
                         return True
 
@@ -193,9 +207,11 @@ def capture_logs(func):
     Returns:
         Decorated function
     """
+
     def wrapper(*args, **kwargs):
         with LogCapture() as logs:
             # Add logs to kwargs
-            kwargs['logs'] = logs
+            kwargs["logs"] = logs
             return func(*args, **kwargs)
+
     return wrapper

@@ -5,7 +5,7 @@ This module provides mock implementations of various classes used in the Skype P
 making it easier to test components in isolation.
 """
 
-from typing import Dict, List, Any, Optional, Callable, BinaryIO
+from typing import Any, BinaryIO, Callable, Dict, List, Optional
 
 
 class MockContentExtractor:
@@ -145,6 +145,7 @@ def mock_structured_data_extractor(message: Dict[str, Any]) -> Dict[str, Any]:
         return {"html_elements": ["b", "i"]}
     return {}
 
+
 # Add the MockFileHandler class
 class MockFileHandler:
     """
@@ -192,7 +193,9 @@ class MockFileHandler:
         self.read_tarfile_calls.append((file_path, auto_select))
         return self.read_tarfile_return
 
-    def read_file_obj(self, file_obj: BinaryIO, file_name: Optional[str] = None) -> Dict[str, Any]:
+    def read_file_obj(
+        self, file_obj: BinaryIO, file_name: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Mock implementation of read_file_obj.
 

@@ -2,10 +2,11 @@
 Utility functions for file operations.
 """
 
-import re
-import os
 import json
+import os
+import re
 import tarfile
+
 
 def safe_filename(name):
     """
@@ -20,7 +21,8 @@ def safe_filename(name):
     """
     # Replace characters that are problematic in filenames
     invalid_chars = r'[<>:"/\\|?*]'
-    return re.sub(invalid_chars, '_', name)
+    return re.sub(invalid_chars, "_", name)
+
 
 def get_file_extension(file_path):
     """
@@ -34,6 +36,7 @@ def get_file_extension(file_path):
     """
     _, ext = os.path.splitext(file_path)
     return ext.lower()
+
 
 def is_json_file(file_path):
     """
@@ -52,18 +55,19 @@ def is_json_file(file_path):
         return False
 
     # Check extension
-    if get_file_extension(file_path) != '.json':
+    if get_file_extension(file_path) != ".json":
         return False
 
     # Try to parse the file
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             json.load(f)
         return True
     except (json.JSONDecodeError, UnicodeDecodeError):
         return False
     except Exception:
         return False
+
 
 def is_tar_file(file_path):
     """
@@ -83,12 +87,12 @@ def is_tar_file(file_path):
 
     # Check extension
     ext = get_file_extension(file_path)
-    if ext not in ['.tar', '.gz', '.bz2', '.xz']:
+    if ext not in [".tar", ".gz", ".bz2", ".xz"]:
         return False
 
     # Try to open the file as a TAR file
     try:
-        with tarfile.open(file_path, 'r') as tar:
+        with tarfile.open(file_path, "r") as tar:
             return True
     except tarfile.ReadError:
         return False

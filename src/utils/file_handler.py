@@ -34,8 +34,11 @@ except ImportError:
         "ijson library not available. Streaming JSON processing will not be supported."
     )
 
+
 # Add extract_tar_contents function for backward compatibility
-def extract_tar_contents(tar_path: str, output_dir: str, file_pattern: str = None) -> List[str]:
+def extract_tar_contents(
+    tar_path: str, output_dir: str, file_pattern: str = None
+) -> List[str]:
     """
     Extract the contents of a TAR file to a directory.
 
@@ -59,20 +62,26 @@ def extract_tar_contents(tar_path: str, output_dir: str, file_pattern: str = Non
     os.makedirs(output_dir, exist_ok=True)
 
     # Extract the TAR file
-    with tarfile.open(tar_path, 'r') as tar:
+    with tarfile.open(tar_path, "r") as tar:
         # Filter files if a pattern is provided
         if file_pattern:
             import re
+
             pattern = re.compile(file_pattern)
             members_to_extract = [m for m in tar.getmembers() if pattern.match(m.name)]
             tar.extractall(path=output_dir, members=members_to_extract)
-            extracted_files = [os.path.join(output_dir, member.name) for member in members_to_extract]
+            extracted_files = [
+                os.path.join(output_dir, member.name) for member in members_to_extract
+            ]
         else:
             tar.extractall(path=output_dir)
-            extracted_files = [os.path.join(output_dir, member.name) for member in tar.getmembers()]
+            extracted_files = [
+                os.path.join(output_dir, member.name) for member in tar.getmembers()
+            ]
 
     logger.info(f"Extracted {len(extracted_files)} files from {tar_path}")
     return extracted_files
+
 
 # Add list_tar_contents function for backward compatibility
 def list_tar_contents(tar_path: str, file_pattern: str = None) -> List[str]:
@@ -93,19 +102,25 @@ def list_tar_contents(tar_path: str, file_pattern: str = None) -> List[str]:
     validate_tar_file(tar_path)
 
     # List the contents of the TAR file
-    with tarfile.open(tar_path, 'r') as tar:
+    with tarfile.open(tar_path, "r") as tar:
         if file_pattern:
             import re
+
             pattern = re.compile(file_pattern)
-            file_names = [member.name for member in tar.getmembers() if pattern.match(member.name)]
+            file_names = [
+                member.name for member in tar.getmembers() if pattern.match(member.name)
+            ]
         else:
             file_names = [member.name for member in tar.getmembers()]
 
     logger.info(f"Found {len(file_names)} files in {tar_path}")
     return file_names
 
+
 # Add read_tarfile function for backward compatibility
-def read_tarfile(file_path: str, auto_select: bool = False, select_json: Optional[int] = None) -> Dict[str, Any]:
+def read_tarfile(
+    file_path: str, auto_select: bool = False, select_json: Optional[int] = None
+) -> Dict[str, Any]:
     """
     Read data from a tar file.
 
@@ -174,9 +189,7 @@ def read_tarfile(file_path: str, auto_select: bool = False, select_json: Optiona
             # Extract and read the selected file
             f = tar.extractfile(selected_file)
             if f is None:
-                error_msg = (
-                    f"Failed to extract {selected_file.name} from TAR archive"
-                )
+                error_msg = f"Failed to extract {selected_file.name} from TAR archive"
                 logger.error(error_msg)
                 raise ValueError(error_msg)
 
@@ -190,6 +203,7 @@ def read_tarfile(file_path: str, auto_select: bool = False, select_json: Optiona
         error_msg = f"Error reading TAR file {file_path}: {e}"
         logger.error(error_msg)
         raise
+
 
 class FileHandler(FileHandlerProtocol):
     """
@@ -305,7 +319,12 @@ class FileHandler(FileHandlerProtocol):
             logger.error(error_msg)
             raise
 
-    def read_tarfile(self, file_path: str, auto_select: bool = False, select_json: Optional[int] = None) -> Dict[str, Any]:
+    def read_tarfile(
+        self,
+        file_path: str,
+        auto_select: bool = False,
+        select_json: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
         Read data from a tar file.
 
@@ -493,7 +512,12 @@ class FileHandler(FileHandlerProtocol):
         """Alias for read_tarfile_object for backward compatibility."""
         return self.read_tarfile_object(file_obj, auto_select=True)
 
-    def read_tarfile_object(self, file_obj: BinaryIO, auto_select: bool = False, select_json: Optional[int] = None) -> Dict[str, Any]:
+    def read_tarfile_object(
+        self,
+        file_obj: BinaryIO,
+        auto_select: bool = False,
+        select_json: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """
         Read data from a tar file object.
 
@@ -594,15 +618,23 @@ def read_file_obj(
     return get_service(FileHandlerProtocol).read_file_object(file_obj, file_name)
 
 
-def read_tarfile(file_path: str, auto_select: bool = False, select_json: Optional[int] = None) -> Dict[str, Any]:
+def read_tarfile(
+    file_path: str, auto_select: bool = False, select_json: Optional[int] = None
+) -> Dict[str, Any]:
     """Helper function to read a tar file using the FileHandler."""
     from src.utils.di import get_service
 
-    return get_service(FileHandlerProtocol).read_tarfile(file_path, auto_select, select_json)
+    return get_service(FileHandlerProtocol).read_tarfile(
+        file_path, auto_select, select_json
+    )
 
 
-def read_tar_file_obj(file_obj: BinaryIO, auto_select: bool = False, select_json: Optional[int] = None) -> Dict[str, Any]:
+def read_tar_file_obj(
+    file_obj: BinaryIO, auto_select: bool = False, select_json: Optional[int] = None
+) -> Dict[str, Any]:
     """Helper function to read a tar file object using the FileHandler."""
     from src.utils.di import get_service
 
-    return get_service(FileHandlerProtocol).read_tarfile_object(file_obj, auto_select, select_json)
+    return get_service(FileHandlerProtocol).read_tarfile_object(
+        file_obj, auto_select, select_json
+    )

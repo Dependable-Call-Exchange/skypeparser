@@ -12,19 +12,19 @@ import json
 import logging
 import os
 import pickle
-import uuid
 import time
+import uuid
 from typing import Any, BinaryIO, ClassVar, Dict, List, Optional, Type
 
 from src.utils.new_structured_logging import (
-    get_logger,
-    log_execution_time,
-    log_call,
-    handle_errors,
-    with_context,
     LogContext,
+    get_logger,
+    get_system_metrics,
+    handle_errors,
+    log_call,
+    log_execution_time,
     log_metrics,
-    get_system_metrics
+    with_context,
 )
 
 from .utils import MemoryMonitor, ProgressTracker
@@ -201,7 +201,11 @@ class ETLContext:
             logger.info(f"Created output directory: {self.output_dir}")
 
         # Create attachments directory if needed
-        if self.download_attachments and self.attachments_dir and not os.path.exists(self.attachments_dir):
+        if (
+            self.download_attachments
+            and self.attachments_dir
+            and not os.path.exists(self.attachments_dir)
+        ):
             os.makedirs(self.attachments_dir, exist_ok=True)
             logger.info(f"Created attachments directory: {self.attachments_dir}")
 
@@ -218,7 +222,7 @@ class ETLContext:
                 "max_workers": self.max_workers,
                 "memory_limit_mb": self.memory_limit_mb,
                 "download_attachments": self.download_attachments,
-            }
+            },
         )
 
     @handle_errors(log_level="ERROR", default_message="Error validating configuration")
@@ -264,20 +268,27 @@ class ETLContext:
                 logger.error(
                     f"Invalid database configuration: {str(e)}",
                     exc_info=True,
-                    extra={"db_config": {k: v for k, v in db_config.items() if k != "password"}}
+                    extra={
+                        "db_config": {
+                            k: v for k, v in db_config.items() if k != "password"
+                        }
+                    },
                 )
                 raise ValueError(f"Invalid database configuration: {str(e)}")
             else:
                 logger.warning(
                     f"Database configuration validation skipped in test environment: {str(e)}",
-                    extra={"db_config": {k: v for k, v in db_config.items() if k != "password"}}
+                    extra={
+                        "db_config": {
+                            k: v for k, v in db_config.items() if k != "password"
+                        }
+                    },
                 )
 
         # Validate output directory
         if output_dir is not None and not isinstance(output_dir, str):
             logger.error(
-                "Output directory must be a string",
-                extra={"output_dir": output_dir}
+                "Output directory must be a string", extra={"output_dir": output_dir}
             )
             raise ValueError("Output directory must be a string")
 
@@ -285,7 +296,7 @@ class ETLContext:
         if not isinstance(memory_limit_mb, int) or memory_limit_mb <= 0:
             logger.error(
                 "Memory limit must be a positive integer",
-                extra={"memory_limit_mb": memory_limit_mb}
+                extra={"memory_limit_mb": memory_limit_mb},
             )
             raise ValueError("Memory limit must be a positive integer")
 
@@ -293,7 +304,7 @@ class ETLContext:
         if not isinstance(chunk_size, int) or chunk_size <= 0:
             logger.error(
                 "Chunk size must be a positive integer",
-                extra={"chunk_size": chunk_size}
+                extra={"chunk_size": chunk_size},
             )
             raise ValueError("Chunk size must be a positive integer")
 
@@ -301,21 +312,28 @@ class ETLContext:
         if not isinstance(batch_size, int) or batch_size <= 0:
             logger.error(
                 "Batch size must be a positive integer",
-                extra={"batch_size": batch_size}
+                extra={"batch_size": batch_size},
             )
             raise ValueError("Batch size must be a positive integer")
 
         # Validate max workers
-        if max_workers is not None and (not isinstance(max_workers, int) or max_workers <= 0):
+        if max_workers is not None and (
+            not isinstance(max_workers, int) or max_workers <= 0
+        ):
             logger.error(
                 "Max workers must be a positive integer",
-                extra={"max_workers": max_workers}
+                extra={"max_workers": max_workers},
             )
             raise ValueError("Max workers must be a positive integer")
 
     @with_context(operation="start_phase")
     @log_call(level=logging.INFO)
-    def start_phase(self, phase_name: str, total_conversations: Optional[int] = None, total_messages: Optional[int] = None) -> None:
+    def start_phase(
+        self,
+        phase_name: str,
+        total_conversations: Optional[int] = None,
+        total_messages: Optional[int] = None,
+    ) -> None:
         """
         Start a new phase of the ETL process.
 
@@ -341,7 +359,9 @@ class ETLContext:
 
         # Store conversation and message counts if provided
         if total_conversations is not None:
-            self.phase_results[phase_name]["metrics"]["total_conversations"] = total_conversations
+            self.phase_results[phase_name]["metrics"][
+                "total_conversations"
+            ] = total_conversations
 
         if total_messages is not None:
             self.phase_results[phase_name]["metrics"]["total_messages"] = total_messages
@@ -378,7 +398,7 @@ class ETLContext:
         if phase_name not in self.phase_results:
             logger.warning(
                 f"Attempted to end non-existent phase: {phase_name}",
-                extra={"task_id": self.task_id, "phase": phase_name}
+                extra={"task_id": self.task_id, "phase": phase_name},
             )
             return
 
@@ -412,12 +432,18 @@ class ETLContext:
                 "status": status,
                 "duration": duration,
                 "metrics": self.phase_results[phase_name].get("metrics", {}),
-            }
+            },
         )
 
     @with_context(operation="record_error")
     @log_call(level=logging.ERROR)
-    def record_error(self, phase: str, error_message: str, error_details: Optional[Dict[str, Any]] = None, fatal: bool = True) -> None:
+    def record_error(
+        self,
+        phase: str,
+        error_message: str,
+        error_details: Optional[Dict[str, Any]] = None,
+        fatal: bool = True,
+    ) -> None:
         """
         Record an error that occurred during the ETL process.
 
@@ -433,7 +459,7 @@ class ETLContext:
             "timestamp": datetime.datetime.now().isoformat(),
             "message": error_message,
             "details": error_details or {},
-            "fatal": fatal
+            "fatal": fatal,
         }
 
         # Add to errors list
@@ -460,8 +486,8 @@ class ETLContext:
                 "task_id": self.task_id,
                 "phase": phase,
                 "error_details": error_details,
-                "fatal": fatal
-            }
+                "fatal": fatal,
+            },
         )
 
     @with_context(operation="create_checkpoint")
@@ -495,7 +521,10 @@ class ETLContext:
         for attr in self.SERIALIZABLE_ATTRIBUTES:
             if hasattr(self, attr):
                 value = getattr(self, attr)
-                if isinstance(value, (dict, list, str, int, float, bool)) or value is None:
+                if (
+                    isinstance(value, (dict, list, str, int, float, bool))
+                    or value is None
+                ):
                     checkpoint_data["serialized_attributes"][attr] = value
                 else:
                     try:
@@ -506,7 +535,10 @@ class ETLContext:
                     except (TypeError, json.JSONDecodeError):
                         logger.warning(
                             f"Could not serialize attribute {attr} for checkpoint",
-                            extra={"task_id": self.task_id, "checkpoint_id": checkpoint_id}
+                            extra={
+                                "task_id": self.task_id,
+                                "checkpoint_id": checkpoint_id,
+                            },
                         )
 
         # Serialize data attributes
@@ -520,7 +552,7 @@ class ETLContext:
                 except Exception as e:
                     logger.warning(
                         f"Could not serialize data attribute {attr} for checkpoint: {str(e)}",
-                        extra={"task_id": self.task_id, "checkpoint_id": checkpoint_id}
+                        extra={"task_id": self.task_id, "checkpoint_id": checkpoint_id},
                     )
 
         # Store checkpoint
@@ -538,7 +570,7 @@ class ETLContext:
                 "checkpoint_id": checkpoint_id,
                 "current_phase": self.current_phase,
                 "phase_statuses": self.phase_statuses,
-            }
+            },
         )
 
         return checkpoint_id
@@ -547,7 +579,9 @@ class ETLContext:
     _create_checkpoint = create_checkpoint
 
     @handle_errors(log_level="ERROR", default_message="Error saving checkpoint to file")
-    def _save_checkpoint_to_file(self, checkpoint_id: str, checkpoint_data: Dict[str, Any]) -> None:
+    def _save_checkpoint_to_file(
+        self, checkpoint_id: str, checkpoint_data: Dict[str, Any]
+    ) -> None:
         """
         Save a checkpoint to a file.
 
@@ -556,7 +590,9 @@ class ETLContext:
             checkpoint_data: Checkpoint data
         """
         # Create checkpoint file path
-        checkpoint_file = os.path.join(self.output_dir, f"checkpoint_{checkpoint_id}.json")
+        checkpoint_file = os.path.join(
+            self.output_dir, f"checkpoint_{checkpoint_id}.json"
+        )
 
         # Save checkpoint to file
         with open(checkpoint_file, "w") as f:
@@ -569,7 +605,7 @@ class ETLContext:
                 "task_id": self.task_id,
                 "checkpoint_id": checkpoint_id,
                 "checkpoint_file": checkpoint_file,
-            }
+            },
         )
 
     @with_context(operation="restore_checkpoint")
@@ -589,11 +625,13 @@ class ETLContext:
             checkpoint_data = self.checkpoints[checkpoint_id]
         else:
             # Try to load checkpoint from file
-            checkpoint_file = os.path.join(self.output_dir, f"checkpoint_{checkpoint_id}.json")
+            checkpoint_file = os.path.join(
+                self.output_dir, f"checkpoint_{checkpoint_id}.json"
+            )
             if not os.path.exists(checkpoint_file):
                 logger.error(
                     f"Checkpoint file not found: {checkpoint_file}",
-                    extra={"task_id": self.task_id, "checkpoint_id": checkpoint_id}
+                    extra={"task_id": self.task_id, "checkpoint_id": checkpoint_id},
                 )
                 return False
 
@@ -604,7 +642,7 @@ class ETLContext:
                 logger.error(
                     f"Error loading checkpoint file: {str(e)}",
                     exc_info=True,
-                    extra={"task_id": self.task_id, "checkpoint_id": checkpoint_id}
+                    extra={"task_id": self.task_id, "checkpoint_id": checkpoint_id},
                 )
                 return False
 
@@ -624,7 +662,7 @@ class ETLContext:
                     logger.error(
                         f"Error deserializing data attribute {attr} from checkpoint: {str(e)}",
                         exc_info=True,
-                        extra={"task_id": self.task_id, "checkpoint_id": checkpoint_id}
+                        extra={"task_id": self.task_id, "checkpoint_id": checkpoint_id},
                     )
                     return False
 
@@ -642,7 +680,7 @@ class ETLContext:
                 "checkpoint_id": checkpoint_id,
                 "current_phase": self.current_phase,
                 "phase_statuses": self.phase_statuses,
-            }
+            },
         )
 
         return True
@@ -660,14 +698,16 @@ class ETLContext:
         memory_usage = get_system_metrics()
 
         # Add to metrics
-        self.metrics["memory_usage"].append({
-            "timestamp": datetime.datetime.now().isoformat(),
-            "phase": phase,
-            "stage": stage,
-            "memory_rss_mb": memory_usage["memory_rss_mb"],
-            "memory_vms_mb": memory_usage["memory_vms_mb"],
-            "cpu_percent": memory_usage["cpu_percent"],
-        })
+        self.metrics["memory_usage"].append(
+            {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "phase": phase,
+                "stage": stage,
+                "memory_rss_mb": memory_usage["memory_rss_mb"],
+                "memory_vms_mb": memory_usage["memory_vms_mb"],
+                "cpu_percent": memory_usage["cpu_percent"],
+            }
+        )
 
         # Log memory usage
         logger.debug(
@@ -680,8 +720,8 @@ class ETLContext:
                     "memory_rss_mb": memory_usage["memory_rss_mb"],
                     "memory_vms_mb": memory_usage["memory_vms_mb"],
                     "cpu_percent": memory_usage["cpu_percent"],
-                }
-            }
+                },
+            },
         )
 
         # Check memory limit
@@ -693,15 +733,18 @@ class ETLContext:
                     "phase": phase,
                     "memory_rss_mb": memory_usage["memory_rss_mb"],
                     "memory_limit_mb": self.memory_limit_mb,
-                }
+                },
             )
             # Trigger garbage collection
             import gc
+
             gc.collect()
 
     @with_context(operation="update_progress")
     @log_call(level=logging.DEBUG)
-    def update_progress(self, phase: str, current: int, total: int, item_type: str = "items") -> None:
+    def update_progress(
+        self, phase: str, current: int, total: int, item_type: str = "items"
+    ) -> None:
         """
         Update progress for the current phase.
 
@@ -728,7 +771,7 @@ class ETLContext:
                     "total": total,
                     "percentage": percentage,
                     "item_type": item_type,
-                }
+                },
             )
 
         # Update processed items in metrics
@@ -774,7 +817,10 @@ class ETLContext:
                 "memory_usage": {
                     "current_rss_mb": get_system_metrics()["memory_rss_mb"],
                     "peak_rss_mb": max(
-                        [m.get("memory_rss_mb", 0) for m in self.metrics["memory_usage"]]
+                        [
+                            m.get("memory_rss_mb", 0)
+                            for m in self.metrics["memory_usage"]
+                        ]
                         if self.metrics["memory_usage"]
                         else [0]
                     ),
@@ -791,7 +837,7 @@ class ETLContext:
                 "phases": self.phase_statuses,
                 "errors": len(self.errors),
                 "export_id": self.export_id,
-            }
+            },
         )
 
         return summary
@@ -814,7 +860,9 @@ class ETLContext:
         # Generate output path if not provided
         if output_path is None:
             if not self.output_dir:
-                raise ValueError("Output directory is required when output_path is not provided")
+                raise ValueError(
+                    "Output directory is required when output_path is not provided"
+                )
 
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             output_path = os.path.join(self.output_dir, f"etl_summary_{timestamp}.json")
@@ -832,7 +880,7 @@ class ETLContext:
             extra={
                 "task_id": self.task_id,
                 "output_path": output_path,
-            }
+            },
         )
 
         return output_path
@@ -869,10 +917,14 @@ class ETLContext:
         if previous_phase_status == "completed":
             # Also check if we have the necessary data
             if previous_phase == "extract" and not self.raw_data:
-                logger.warning("Cannot resume from transform phase: raw data is missing")
+                logger.warning(
+                    "Cannot resume from transform phase: raw data is missing"
+                )
                 return False
             elif previous_phase == "transform" and not self.transformed_data:
-                logger.warning("Cannot resume from load phase: transformed data is missing")
+                logger.warning(
+                    "Cannot resume from load phase: transformed data is missing"
+                )
                 return False
             return True
 

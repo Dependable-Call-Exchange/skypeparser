@@ -7,10 +7,10 @@ It has been renamed from test_logging.py to logging_test.py to avoid
 namespace conflicts with the actual test module in tests/utils/test_logging.py.
 """
 
+import argparse
 import os
 import sys
 import unittest
-import argparse
 from pathlib import Path
 
 # Add the parent directory to the path so we can import the modules
@@ -32,7 +32,7 @@ def run_tests(verbose=False, pattern="test_*.py"):
         app_name="skype_parser_tests",
         environment="testing",
         log_file="logging_tests.log",
-        enable_json=True
+        enable_json=True,
     )
 
     # Discover and run tests
@@ -45,8 +45,7 @@ def run_tests(verbose=False, pattern="test_*.py"):
     if pattern == "test_logging.py":
         # Run only logging tests
         test_suite = loader.discover(
-            os.path.join(test_dir, "unit"),
-            pattern="test_structured_logging.py"
+            os.path.join(test_dir, "unit"), pattern="test_structured_logging.py"
         )
     else:
         # Run all tests
@@ -64,14 +63,10 @@ def main():
     """Main function."""
     parser = argparse.ArgumentParser(description="Run logging tests")
     parser.add_argument(
-        "-v", "--verbose",
-        action="store_true",
-        help="Run tests in verbose mode"
+        "-v", "--verbose", action="store_true", help="Run tests in verbose mode"
     )
     parser.add_argument(
-        "-p", "--pattern",
-        default="test_*.py",
-        help="Pattern to match test files"
+        "-p", "--pattern", default="test_*.py", help="Pattern to match test files"
     )
 
     args = parser.parse_args()

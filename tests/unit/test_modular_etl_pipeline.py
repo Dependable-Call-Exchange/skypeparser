@@ -8,15 +8,21 @@ focusing on the orchestration of the extraction, transformation, and loading pha
 
 import os
 import sys
+from typing import Any, Dict, Optional, Tuple
+from unittest.mock import MagicMock, call, patch
+
 import pytest
-from unittest.mock import patch, MagicMock, call
-from typing import Dict, Any, Tuple, Optional
 
 # Add the parent directory to the path so we can import the src module
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from src.db.etl.pipeline_manager import ETLPipeline
-from src.utils.interfaces import ExtractorProtocol, TransformerProtocol, LoaderProtocol, DatabaseConnectionProtocol
+from src.utils.interfaces import (
+    DatabaseConnectionProtocol,
+    ExtractorProtocol,
+    LoaderProtocol,
+    TransformerProtocol,
+)
 
 
 @pytest.fixture
@@ -52,7 +58,7 @@ def raw_data():
                 "id": "msg1",
                 "content": "Hello world",
             }
-        ]
+        ],
     }
 
 
@@ -135,13 +141,18 @@ def pipeline(mock_service_provider, mock_monitors, db_config):
     """Create an ETLPipeline instance for testing."""
     with patch("src.utils.di.get_service", mock_service_provider):
         with patch("src.db.etl.utils.ProgressTracker", return_value=mock_monitors[0]):
-            with patch("src.db.etl.pipeline_manager.MemoryMonitor", return_value=mock_monitors[1]):
+            with patch(
+                "src.db.etl.pipeline_manager.MemoryMonitor",
+                return_value=mock_monitors[1],
+            ):
                 pipeline = create_pipeline(db_config)
                 # Manually set the mocked components since patching get_service doesn't work in the fixture
                 pipeline.extractor = mock_service_provider(ExtractorProtocol)
                 pipeline.transformer = mock_service_provider(TransformerProtocol)
                 pipeline.loader = mock_service_provider(LoaderProtocol)
-                pipeline.db_connection = mock_service_provider(DatabaseConnectionProtocol)
+                pipeline.db_connection = mock_service_provider(
+                    DatabaseConnectionProtocol
+                )
                 return pipeline
 
 
@@ -164,29 +175,39 @@ def create_pipeline(db_config, **kwargs):
 
 
 @pytest.mark.modular_etl
-def test_init(mock_service_provider, mock_monitors, pipeline, mock_components, db_config):
+def test_init(
+    mock_service_provider, mock_monitors, pipeline, mock_components, db_config
+):
     """Test initialization of the ETLPipeline class."""
     # Check that the pipeline was initialized correctly
     assert pipeline.db_config == db_config
-    assert pipeline.output_dir == 'test_output'
+    assert pipeline.output_dir == "test_output"
     assert pipeline.memory_limit_mb == 2048
     assert pipeline.parallel_processing is True
     assert pipeline.chunk_size == 2000
 
     # Since we manually set the components in the fixture, we don't need to check call_count
-    assert pipeline.extractor == mock_components['extractor']
-    assert pipeline.transformer == mock_components['transformer']
-    assert pipeline.loader == mock_components['loader']
+    assert pipeline.extractor == mock_components["extractor"]
+    assert pipeline.transformer == mock_components["transformer"]
+    assert pipeline.loader == mock_components["loader"]
 
 
 @pytest.mark.modular_etl
-def test_run_pipeline_success(mock_service_provider, mock_monitors, pipeline, mock_components, raw_data, transformed_data, monkeypatch):
+def test_run_pipeline_success(
+    mock_service_provider,
+    mock_monitors,
+    pipeline,
+    mock_components,
+    raw_data,
+    transformed_data,
+    monkeypatch,
+):
     """Test successful execution of the ETL pipeline."""
     # Set up mocks
-    mock_extractor = mock_components['extractor']
-    mock_transformer = mock_components['transformer']
-    mock_loader = mock_components['loader']
-    mock_progress_tracker = mock_components['progress_tracker']
+    mock_extractor = mock_components["extractor"]
+    mock_transformer = mock_components["transformer"]
+    mock_loader = mock_components["loader"]
+    mock_progress_tracker = mock_components["progress_tracker"]
 
     # Configure mock behavior
     mock_extractor.extract.return_value = raw_data
@@ -194,89 +215,137 @@ def test_run_pipeline_success(mock_service_provider, mock_monitors, pipeline, mo
     mock_loader.load.return_value = 123  # Export ID
 
     # Patch os.path.exists and os.path.isfile to avoid file not found error
-    monkeypatch.setattr(os.path, 'exists', lambda path: True)
-    monkeypatch.setattr(os.path, 'isfile', lambda path: True)
+    monkeypatch.setattr(os.path, "exists", lambda path: True)
+    monkeypatch.setattr(os.path, "isfile", lambda path: True)
 
     # Patch the pipeline methods to avoid issues
-    monkeypatch.setattr(pipeline, '_run_extract_phase', lambda file_path, file_obj=None: raw_data)
-    monkeypatch.setattr(pipeline, '_run_transform_phase', lambda raw_data, user_display_name=None: transformed_data)
-    monkeypatch.setattr(pipeline, '_run_load_phase', lambda raw_data, transformed_data, file_source=None: 123)
+    monkeypatch.setattr(
+        pipeline, "_run_extract_phase", lambda file_path, file_obj=None: raw_data
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_run_transform_phase",
+        lambda raw_data, user_display_name=None: transformed_data,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_run_load_phase",
+        lambda raw_data, transformed_data, file_source=None: 123,
+    )
 
     # Run the pipeline
-    result = pipeline.run_pipeline('test_file.json')
+    result = pipeline.run_pipeline("test_file.json")
 
     # Check the result structure
     assert isinstance(result, dict)
-    assert result['status'] == 'completed'
-    assert result['export_id'] == 123
-    assert 'phases' in result
-    assert result['phases']['extract']['status'] == 'completed'
-    assert result['phases']['transform']['status'] == 'completed'
-    assert result['phases']['load']['status'] == 'completed'
-    assert result['phases']['load']['export_id'] == 123
+    assert result["status"] == "completed"
+    assert result["export_id"] == 123
+    assert "phases" in result
+    assert result["phases"]["extract"]["status"] == "completed"
+    assert result["phases"]["transform"]["status"] == "completed"
+    assert result["phases"]["load"]["status"] == "completed"
+    assert result["phases"]["load"]["export_id"] == 123
 
 
 @pytest.mark.modular_etl
-@pytest.mark.parametrize("phase, component_name, error_msg", [
-    ('extract', 'extractor', "Extraction error"),
-    ('transform', 'transformer', "Transformation error"),
-    ('load', 'loader', "Loading error"),
-])
-def test_pipeline_phase_errors(mock_service_provider, mock_monitors, pipeline, mock_components,
-                              raw_data, transformed_data, phase, component_name, error_msg, monkeypatch):
+@pytest.mark.parametrize(
+    "phase, component_name, error_msg",
+    [
+        ("extract", "extractor", "Extraction error"),
+        ("transform", "transformer", "Transformation error"),
+        ("load", "loader", "Loading error"),
+    ],
+)
+def test_pipeline_phase_errors(
+    mock_service_provider,
+    mock_monitors,
+    pipeline,
+    mock_components,
+    raw_data,
+    transformed_data,
+    phase,
+    component_name,
+    error_msg,
+    monkeypatch,
+):
     """Test pipeline execution with errors in different phases."""
     # Set up mocks
-    mock_extractor = mock_components['extractor']
-    mock_transformer = mock_components['transformer']
-    mock_loader = mock_components['loader']
+    mock_extractor = mock_components["extractor"]
+    mock_transformer = mock_components["transformer"]
+    mock_loader = mock_components["loader"]
 
     # Configure mock behavior
     mock_extractor.extract.return_value = raw_data
     mock_transformer.transform.return_value = transformed_data
 
     # Patch os.path.exists and os.path.isfile to avoid file not found error
-    monkeypatch.setattr(os.path, 'exists', lambda path: True)
-    monkeypatch.setattr(os.path, 'isfile', lambda path: True)
+    monkeypatch.setattr(os.path, "exists", lambda path: True)
+    monkeypatch.setattr(os.path, "isfile", lambda path: True)
 
     # Patch the methods to avoid parameter issues
-    monkeypatch.setattr(pipeline, '_run_extract_phase', lambda file_path, file_obj=None: raw_data)
-    monkeypatch.setattr(pipeline, '_run_transform_phase', lambda raw_data, user_display_name=None: transformed_data)
-    monkeypatch.setattr(pipeline, '_run_load_phase', lambda raw_data, transformed_data, file_source=None: 123)
+    monkeypatch.setattr(
+        pipeline, "_run_extract_phase", lambda file_path, file_obj=None: raw_data
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_run_transform_phase",
+        lambda raw_data, user_display_name=None: transformed_data,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_run_load_phase",
+        lambda raw_data, transformed_data, file_source=None: 123,
+    )
 
     # Set up the specific phase to raise an error
-    if phase == 'extract':
+    if phase == "extract":
+
         def raise_extract_error(*args, **kwargs):
             raise Exception(error_msg)
-        monkeypatch.setattr(pipeline, '_run_extract_phase', raise_extract_error)
-    elif phase == 'transform':
+
+        monkeypatch.setattr(pipeline, "_run_extract_phase", raise_extract_error)
+    elif phase == "transform":
+
         def raise_transform_error(*args, **kwargs):
             raise Exception(error_msg)
-        monkeypatch.setattr(pipeline, '_run_transform_phase', raise_transform_error)
-    elif phase == 'load':
+
+        monkeypatch.setattr(pipeline, "_run_transform_phase", raise_transform_error)
+    elif phase == "load":
+
         def raise_load_error(*args, **kwargs):
             raise Exception(error_msg)
-        monkeypatch.setattr(pipeline, '_run_load_phase', raise_load_error)
+
+        monkeypatch.setattr(pipeline, "_run_load_phase", raise_load_error)
 
     # Run the pipeline and expect an exception
     with pytest.raises(Exception) as excinfo:
-        pipeline.run_pipeline('test_file.json')
+        pipeline.run_pipeline("test_file.json")
 
     # Check that the correct error was raised
     assert error_msg in str(excinfo.value)
 
 
 @pytest.mark.modular_etl
-def test_run_extraction_phase(mock_service_provider, mock_monitors, pipeline, mock_components, raw_data, monkeypatch):
+def test_run_extraction_phase(
+    mock_service_provider,
+    mock_monitors,
+    pipeline,
+    mock_components,
+    raw_data,
+    monkeypatch,
+):
     """Test the extraction phase of the pipeline."""
     # Set up mocks
-    mock_extractor = mock_components['extractor']
-    mock_progress_tracker = mock_components['progress_tracker']
+    mock_extractor = mock_components["extractor"]
+    mock_progress_tracker = mock_components["progress_tracker"]
 
     # Configure mock behavior
     mock_extractor.extract.return_value = raw_data
 
     # Patch the _validate_pipeline_input method to avoid file not found error
-    monkeypatch.setattr(pipeline, '_validate_pipeline_input', lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        pipeline, "_validate_pipeline_input", lambda *args, **kwargs: None
+    )
 
     # Patch the extractor.extract method to handle the correct parameters
     def mock_extract(**kwargs):
@@ -285,18 +354,25 @@ def test_run_extraction_phase(mock_service_provider, mock_monitors, pipeline, mo
     mock_extractor.extract = mock_extract
 
     # Run the extraction phase
-    result = pipeline._run_extract_phase('test_file.json')
+    result = pipeline._run_extract_phase("test_file.json")
 
     # Check the result
     assert result == raw_data
 
 
 @pytest.mark.modular_etl
-def test_run_transformation_phase(mock_service_provider, mock_monitors, pipeline, mock_components, raw_data, transformed_data):
+def test_run_transformation_phase(
+    mock_service_provider,
+    mock_monitors,
+    pipeline,
+    mock_components,
+    raw_data,
+    transformed_data,
+):
     """Test the transformation phase of the pipeline."""
     # Set up mocks
-    mock_transformer = mock_components['transformer']
-    mock_progress_tracker = mock_components['progress_tracker']
+    mock_transformer = mock_components["transformer"]
+    mock_progress_tracker = mock_components["progress_tracker"]
 
     # Configure mock behavior
     mock_transformer.transform.return_value = transformed_data
@@ -315,11 +391,18 @@ def test_run_transformation_phase(mock_service_provider, mock_monitors, pipeline
 
 
 @pytest.mark.modular_etl
-def test_run_loading_phase(mock_service_provider, mock_monitors, pipeline, mock_components, raw_data, transformed_data):
+def test_run_loading_phase(
+    mock_service_provider,
+    mock_monitors,
+    pipeline,
+    mock_components,
+    raw_data,
+    transformed_data,
+):
     """Test the loading phase of the pipeline."""
     # Set up mocks
-    mock_loader = mock_components['loader']
-    mock_progress_tracker = mock_components['progress_tracker']
+    mock_loader = mock_components["loader"]
+    mock_progress_tracker = mock_components["progress_tracker"]
 
     # Configure mock behavior
     mock_loader.load.return_value = 123  # Export ID

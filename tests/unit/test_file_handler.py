@@ -3,28 +3,35 @@
 Tests for the file_handler.py module.
 """
 
-import os
 import json
-import unittest
-from unittest.mock import patch, MagicMock
-from pathlib import Path
+import os
 
 # Add the parent directory to the path so we can import from src
 import sys
+import unittest
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.utils.file_handler import (
-    read_file,
-    read_file_obj,
-    read_tarfile,
+    FileHandler,
     extract_tar_contents,
     list_tar_contents,
-    FileHandler,
-    read_tar_file_obj
+    read_file,
+    read_file_obj,
+    read_tar_file_obj,
+    read_tarfile,
 )
-from src.utils.validation import ValidationError
-from tests.fixtures import TestBase, patch_validation, create_test_file, create_test_json_file, create_test_tar_file
 from src.utils.interfaces import FileHandlerProtocol
+from src.utils.validation import ValidationError
+from tests.fixtures import (
+    TestBase,
+    create_test_file,
+    create_test_json_file,
+    create_test_tar_file,
+    patch_validation,
+)
 
 
 class TestFileHandler(TestBase):
@@ -37,13 +44,15 @@ class TestFileHandler(TestBase):
 
         # Create a sample JSON file
         self.json_data = {"test": "data"}
-        self.json_file = create_test_json_file(self.test_dir, "test.json", self.json_data)
+        self.json_file = create_test_json_file(
+            self.test_dir, "test.json", self.json_data
+        )
 
         # Create a sample tar file with multiple JSON files
         self.tar_files = {
             "file1.json": json.dumps({"file": "1"}),
             "file2.json": json.dumps({"file": "2"}),
-            "file.txt": "test"
+            "file.txt": "test",
         }
         self.tar_file = create_test_tar_file(self.test_dir, "test.tar", self.tar_files)
 
@@ -107,7 +116,9 @@ class TestFileHandler(TestBase):
         mock_file_handler.read_tarfile_object.return_value = {"file": "1"}
 
         # Mock the get_service function to return our mock file handler
-        with patch('src.utils.di.get_service', return_value=mock_file_handler) as mock_get_service:
+        with patch(
+            "src.utils.di.get_service", return_value=mock_file_handler
+        ) as mock_get_service:
             # Test with valid file object
             with open(self.tar_file, "rb") as f:
                 data = read_tar_file_obj(f, auto_select=True)
@@ -124,7 +135,9 @@ class TestFileHandler(TestBase):
                 if len(args) > 1:
                     self.assertEqual(args[1], True)  # auto_select as positional arg
                 else:
-                    self.assertEqual(kwargs.get('auto_select'), True)  # auto_select as keyword arg
+                    self.assertEqual(
+                        kwargs.get("auto_select"), True
+                    )  # auto_select as keyword arg
 
         # Test with invalid file object - we'll use a direct instance of FileHandler for this
         with self.assertRaises(ValueError):
@@ -145,13 +158,17 @@ class TestFileHandler(TestBase):
         self.assertTrue(os.path.exists(os.path.join(output_dir, "file.txt")))
 
         # Test with file pattern
-        files = extract_tar_contents(self.tar_file, output_dir, file_pattern=r".*\.json")
+        files = extract_tar_contents(
+            self.tar_file, output_dir, file_pattern=r".*\.json"
+        )
         self.assertEqual(len(files), 2)
 
         # Test with non-existent file
         mock_validate_path.side_effect = ValidationError("File does not exist")
         with self.assertRaises(ValidationError):
-            extract_tar_contents(os.path.join(self.test_dir, "nonexistent.tar"), output_dir)
+            extract_tar_contents(
+                os.path.join(self.test_dir, "nonexistent.tar"), output_dir
+            )
 
     @patch_validation
     def test_list_tar_contents(self, mock_validate_path):

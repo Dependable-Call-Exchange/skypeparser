@@ -4,24 +4,24 @@ Unit tests for the structured logging system.
 
 import json
 import logging
+import os
+import sys
 import unittest
 from io import StringIO
 
-import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from src.utils.new_structured_logging import (
     JsonFormatter,
-    get_logger,
-    set_context,
-    get_context_data,
-    clear_context,
     LogContext,
-    with_context,
-    log_execution_time,
+    clear_context,
+    get_context_data,
+    get_logger,
+    handle_errors,
     log_call,
-    handle_errors
+    log_execution_time,
+    set_context,
+    with_context,
 )
 from tests.utils.test_logging import LogCapture, capture_logs
 
@@ -91,7 +91,7 @@ class TestStructuredLogging(unittest.TestCase):
             lineno=1,
             msg="Test message",
             args=(),
-            exc_info=None
+            exc_info=None,
         )
 
         # Format the record
@@ -116,7 +116,7 @@ class TestStructuredLogging(unittest.TestCase):
             lineno=1,
             msg="Test message",
             args=(),
-            exc_info=None
+            exc_info=None,
         )
 
         # Set context
@@ -144,7 +144,7 @@ class TestStructuredLogging(unittest.TestCase):
                 lineno=1,
                 msg="Test error message",
                 args=(),
-                exc_info=sys.exc_info()
+                exc_info=sys.exc_info(),
             )
 
         # Format the record
@@ -157,7 +157,9 @@ class TestStructuredLogging(unittest.TestCase):
         # Check that traceback is a list of strings
         self.assertTrue(isinstance(log_data["exception"]["traceback"], list))
         # Check that at least one line contains "Traceback"
-        self.assertTrue(any("Traceback" in line for line in log_data["exception"]["traceback"]))
+        self.assertTrue(
+            any("Traceback" in line for line in log_data["exception"]["traceback"])
+        )
 
     @capture_logs
     def test_log_capture(self, logs):
@@ -181,6 +183,7 @@ class TestStructuredLogging(unittest.TestCase):
 
     def test_with_context_decorator(self):
         """Test with_context decorator."""
+
         @with_context(key1="value1", key2="value2")
         def test_function():
             return get_context_data()
@@ -195,6 +198,7 @@ class TestStructuredLogging(unittest.TestCase):
 
     def test_with_context_decorator_with_callable(self):
         """Test with_context decorator with callable values."""
+
         def get_value(arg):
             return f"value-{arg}"
 
@@ -265,7 +269,13 @@ class TestStructuredLogging(unittest.TestCase):
         """Test handle_errors decorator with reraise=False."""
         logger = get_logger("test_logger")
 
-        @handle_errors(logger, log_level="ERROR", default_message="Function failed", reraise=False, default_return="default")
+        @handle_errors(
+            logger,
+            log_level="ERROR",
+            default_message="Function failed",
+            reraise=False,
+            default_return="default",
+        )
         def test_function():
             raise ValueError("Test error")
 

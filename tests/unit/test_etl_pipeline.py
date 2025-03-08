@@ -11,39 +11,43 @@ The tests are organized into separate classes for each phase of the ETL pipeline
 - TestPipelineExecution: Tests for the complete pipeline execution
 """
 
+import io
+import json
 import os
 import sys
-import unittest
 import tempfile
-import json
-import io
-import pytest
+import unittest
+from typing import Any, BinaryIO, Dict, Iterator, Optional, Tuple
 from unittest.mock import MagicMock, patch
-from typing import Optional, Dict, Any, Iterator, Tuple, BinaryIO
+
+import pytest
 
 # Add the src directory to the path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from src.db.testable_etl_pipeline import create_testable_etl_pipeline, ImprovedTestableETLPipeline
-from src.utils.validation import ValidationError
+from src.db.testable_etl_pipeline import (
+    ImprovedTestableETLPipeline,
+    create_testable_etl_pipeline,
+)
 from src.utils.interfaces import ExtractorProtocol, TransformerProtocol
+from src.utils.validation import ValidationError
 from tests.fixtures import (
     BASIC_SKYPE_DATA,
     COMPLEX_SKYPE_DATA,
     INVALID_SKYPE_DATA,
     MockDatabase,
-    create_mock_file_environment
+    create_mock_file_environment,
 )
 from tests.fixtures.etl_mocks import (
-    MockExtractor,
-    MockTransformer,
-    MockFileHandler,
-    MockValidationService,
     MockContentExtractor,
-    MockStructuredDataExtractor,
+    MockExtractor,
+    MockFileHandler,
     MockMessageHandler,
     MockMessageHandlerFactory,
-    MockProgressTracker
+    MockProgressTracker,
+    MockStructuredDataExtractor,
+    MockTransformer,
+    MockValidationService,
 )
 
 
@@ -62,7 +66,7 @@ class ETLPipelineTestBase(unittest.TestCase):
             "port": 5432,
             "database": "test_db",
             "user": "test_user",
-            "password": "test_password"
+            "password": "test_password",
         }
 
         # Create mock objects
@@ -84,7 +88,7 @@ class ETLPipelineTestBase(unittest.TestCase):
             db_connection=self.mock_db,
             content_extractor=self.mock_content_extractor,
             structured_data_extractor=self.mock_structured_data_extractor,
-            message_handler_factory=self.mock_message_handler_factory
+            message_handler_factory=self.mock_message_handler_factory,
         )
 
         # Replace the extractor and transformer with our mocks
@@ -101,29 +105,38 @@ class ETLPipelineTestBase(unittest.TestCase):
         """Tear down test fixtures."""
         # Clean up temporary directory
         import shutil
+
         shutil.rmtree(self.temp_dir)
 
-    def _validate_extraction_results(self, result: Dict[str, Any], expected_data: Dict[str, Any] = BASIC_SKYPE_DATA):
+    def _validate_extraction_results(
+        self, result: Dict[str, Any], expected_data: Dict[str, Any] = BASIC_SKYPE_DATA
+    ):
         """Validate extraction results.
 
         Args:
             result: The extraction result to validate
             expected_data: The expected data to compare against
         """
-        self.assertEqual(result['userId'], expected_data['userId'])
-        self.assertEqual(result['exportDate'], expected_data['exportDate'])
-        self.assertEqual(len(result['conversations']), len(expected_data['conversations']))
+        self.assertEqual(result["userId"], expected_data["userId"])
+        self.assertEqual(result["exportDate"], expected_data["exportDate"])
+        self.assertEqual(
+            len(result["conversations"]), len(expected_data["conversations"])
+        )
 
-    def _validate_transformation_results(self, result: Dict[str, Any], expected_data: Dict[str, Any] = BASIC_SKYPE_DATA):
+    def _validate_transformation_results(
+        self, result: Dict[str, Any], expected_data: Dict[str, Any] = BASIC_SKYPE_DATA
+    ):
         """Validate transformation results.
 
         Args:
             result: The transformation result to validate
             expected_data: The expected data to compare against
         """
-        self.assertEqual(result['user_id'], expected_data['userId'])
-        self.assertEqual(result['export_date'], expected_data['exportDate'])
-        self.assertEqual(len(result['conversations']), len(expected_data['conversations']))
+        self.assertEqual(result["user_id"], expected_data["userId"])
+        self.assertEqual(result["export_date"], expected_data["exportDate"])
+        self.assertEqual(
+            len(result["conversations"]), len(expected_data["conversations"])
+        )
 
     def _validate_pipeline_results(self, result: Dict[str, Any]):
         """Validate pipeline execution results.
@@ -131,25 +144,28 @@ class ETLPipelineTestBase(unittest.TestCase):
         Args:
             result: The pipeline execution result to validate
         """
-        self.assertIn('extraction', result)
-        self.assertIn('transformation', result)
-        self.assertIn('loading', result)
+        self.assertIn("extraction", result)
+        self.assertIn("transformation", result)
+        self.assertIn("loading", result)
 
 
 @pytest.mark.etl_pipeline
 class TestExtraction(ETLPipelineTestBase):
     """Test cases for the extraction phase of the ETL pipeline."""
 
-    @pytest.mark.parametrize("file_input,is_file_obj", [
-        ('test.json', False),
-        ('test.tar', False),
-        (io.StringIO(json.dumps(BASIC_SKYPE_DATA)), True)
-    ])
+    @pytest.mark.parametrize(
+        "file_input,is_file_obj",
+        [
+            ("test.json", False),
+            ("test.tar", False),
+            (io.StringIO(json.dumps(BASIC_SKYPE_DATA)), True),
+        ],
+    )
     def test_extract(self, file_input, is_file_obj):
         """Test extracting data from different input types."""
         # Set the file name if it's a file object
         if is_file_obj:
-            file_input.name = 'test.json'
+            file_input.name = "test.json"
             result = self.pipeline.extract(file_obj=file_input)
             self.assertEqual(self.mock_extractor.file_obj, file_input)
         else:
@@ -164,9 +180,14 @@ class TestExtraction(ETLPipelineTestBase):
 
     def test_extract_with_no_file(self):
         """Test extracting data with no file provided."""
+
         # Create a custom extractor that raises ValueError when no file is provided
         class MockExtractorWithNoFile(MockExtractor):
-            def extract(self, file_path: Optional[str] = None, file_obj: Optional[BinaryIO] = None) -> Dict[str, Any]:
+            def extract(
+                self,
+                file_path: Optional[str] = None,
+                file_obj: Optional[BinaryIO] = None,
+            ) -> Dict[str, Any]:
                 if not file_path and not file_obj:
                     raise ValueError("No file provided")
                 return super().extract(file_path, file_obj)
@@ -183,10 +204,7 @@ class TestExtraction(ETLPipelineTestBase):
 class TestTransformation(ETLPipelineTestBase):
     """Test cases for the transformation phase of the ETL pipeline."""
 
-    @pytest.mark.parametrize("test_data", [
-        BASIC_SKYPE_DATA,
-        COMPLEX_SKYPE_DATA
-    ])
+    @pytest.mark.parametrize("test_data", [BASIC_SKYPE_DATA, COMPLEX_SKYPE_DATA])
     def test_transform(self, test_data):
         """Test transforming Skype data."""
         # Transform data
@@ -201,9 +219,12 @@ class TestTransformation(ETLPipelineTestBase):
 
     def test_transform_with_invalid_data(self):
         """Test transforming invalid Skype data."""
+
         # Create a mock transformer that raises an exception for invalid data
         class MockErrorTransformer(MockTransformer):
-            def transform(self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None) -> Dict[str, Any]:
+            def transform(
+                self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None
+            ) -> Dict[str, Any]:
                 if raw_data == INVALID_SKYPE_DATA:
                     raise ValidationError("Invalid data")
                 return super().transform(raw_data, user_display_name)
@@ -231,9 +252,9 @@ class TestTransformation(ETLPipelineTestBase):
                             "originalarrivaltime": "2023-01-01T12:30:00Z",
                             "from": "user1",
                             "content": "Hello, world!",
-                            "messagetype": "RichText"
+                            "messagetype": "RichText",
                         }
-                    ]
+                    ],
                 },
                 {
                     "id": "conversation2",
@@ -244,11 +265,11 @@ class TestTransformation(ETLPipelineTestBase):
                             "originalarrivaltime": "2023-01-01T12:35:00Z",
                             "from": "user2",
                             "content": "Hello again!",
-                            "messagetype": "RichText"
+                            "messagetype": "RichText",
                         }
-                    ]
-                }
-            ]
+                    ],
+                },
+            ],
         }
 
         # Transform the data
@@ -259,9 +280,9 @@ class TestTransformation(ETLPipelineTestBase):
         self.assertEqual(self.mock_transformer.raw_data, test_data)
 
         # Verify the result
-        self.assertEqual(result['user_id'], test_data['userId'])
-        self.assertEqual(result['export_date'], test_data['exportDate'])
-        self.assertEqual(len(result['conversations']), len(test_data['conversations']))
+        self.assertEqual(result["user_id"], test_data["userId"])
+        self.assertEqual(result["export_date"], test_data["exportDate"])
+        self.assertEqual(len(result["conversations"]), len(test_data["conversations"]))
 
 
 @pytest.mark.etl_pipeline
@@ -271,15 +292,14 @@ class TestLoading(ETLPipelineTestBase):
     def test_load(self):
         """Test loading data into the database with specific query assertions."""
         # Extract data first
-        raw_data = self.mock_extractor.extract(file_path='test.json')
+        raw_data = self.mock_extractor.extract(file_path="test.json")
 
         # Transform data
         transformed_data = self.mock_transformer.transform(raw_data)
 
         # Load data
         result = self.pipeline.load(
-            raw_data=raw_data,
-            transformed_data=transformed_data
+            raw_data=raw_data, transformed_data=transformed_data
         )
 
         # Assert that the result is not None
@@ -302,7 +322,7 @@ class TestLoading(ETLPipelineTestBase):
             db_connection=mock_db_connection,  # Mock connection that will raise an exception
             content_extractor=self.mock_content_extractor,
             structured_data_extractor=self.mock_structured_data_extractor,
-            message_handler_factory=self.mock_message_handler_factory
+            message_handler_factory=self.mock_message_handler_factory,
         )
 
         # Replace the extractor and transformer with our mocks
@@ -315,8 +335,7 @@ class TestLoading(ETLPipelineTestBase):
         # Test that load raises an exception when the database connection is used
         with self.assertRaises(Exception):
             pipeline_no_db.load(
-                raw_data=BASIC_SKYPE_DATA,
-                transformed_data=transformed_data
+                raw_data=BASIC_SKYPE_DATA, transformed_data=transformed_data
             )
 
 
@@ -324,15 +343,15 @@ class TestLoading(ETLPipelineTestBase):
 class TestPipelineExecution(ETLPipelineTestBase):
     """Test cases for the complete ETL pipeline execution."""
 
-    @pytest.mark.parametrize("file_input,is_file_obj", [
-        ('test.json', False),
-        (io.StringIO(json.dumps(BASIC_SKYPE_DATA)), True)
-    ])
+    @pytest.mark.parametrize(
+        "file_input,is_file_obj",
+        [("test.json", False), (io.StringIO(json.dumps(BASIC_SKYPE_DATA)), True)],
+    )
     def test_run_pipeline(self, file_input, is_file_obj):
         """Test running the complete pipeline with different input types."""
         # Set the file name if it's a file object
         if is_file_obj:
-            file_input.name = 'test.json'
+            file_input.name = "test.json"
             result = self.pipeline.run_pipeline(file_obj=file_input)
             self.assertEqual(self.mock_extractor.file_obj, file_input)
         else:
@@ -360,7 +379,7 @@ class TestPipelineExecution(ETLPipelineTestBase):
             db_connection=mock_db_connection,  # Mock connection that will raise an exception
             content_extractor=self.mock_content_extractor,
             structured_data_extractor=self.mock_structured_data_extractor,
-            message_handler_factory=self.mock_message_handler_factory
+            message_handler_factory=self.mock_message_handler_factory,
         )
 
         # Replace the extractor and transformer with our mocks
@@ -369,13 +388,18 @@ class TestPipelineExecution(ETLPipelineTestBase):
 
         # Test that run_pipeline raises an exception when the database connection is used
         with self.assertRaises(Exception):
-            pipeline_no_db.run_pipeline(file_path='test.json')
+            pipeline_no_db.run_pipeline(file_path="test.json")
 
     def test_run_pipeline_with_invalid_data(self):
         """Test running the pipeline with invalid data."""
+
         # Create a mock extractor that returns invalid data
         class MockInvalidExtractor(MockExtractor):
-            def extract(self, file_path: Optional[str] = None, file_obj: Optional[BinaryIO] = None) -> Dict[str, Any]:
+            def extract(
+                self,
+                file_path: Optional[str] = None,
+                file_obj: Optional[BinaryIO] = None,
+            ) -> Dict[str, Any]:
                 super().extract(file_path, file_obj)
                 # Add a messages key to the data to satisfy the loader validation
                 data = INVALID_SKYPE_DATA.copy()
@@ -388,7 +412,9 @@ class TestPipelineExecution(ETLPipelineTestBase):
 
         # Create a mock transformer that raises an exception for invalid data
         class MockErrorTransformer(MockTransformer):
-            def transform(self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None) -> Dict[str, Any]:
+            def transform(
+                self, raw_data: Dict[str, Any], user_display_name: Optional[str] = None
+            ) -> Dict[str, Any]:
                 if raw_data == INVALID_SKYPE_DATA:
                     raise ValidationError("Invalid data")
                 return super().transform(raw_data, user_display_name)
@@ -399,13 +425,18 @@ class TestPipelineExecution(ETLPipelineTestBase):
 
         # Run the pipeline with invalid data
         with self.assertRaises(ValidationError):
-            self.pipeline.run_pipeline(file_path='invalid.json')
+            self.pipeline.run_pipeline(file_path="invalid.json")
 
     def test_run_pipeline_with_complex_data(self):
         """Test running the pipeline with complex data."""
+
         # Create a mock extractor that returns complex data
         class MockComplexExtractor(MockExtractor):
-            def extract(self, file_path: Optional[str] = None, file_obj: Optional[BinaryIO] = None) -> Dict[str, Any]:
+            def extract(
+                self,
+                file_path: Optional[str] = None,
+                file_obj: Optional[BinaryIO] = None,
+            ) -> Dict[str, Any]:
                 super().extract(file_path, file_obj)
                 # Add a messages key to the data to satisfy the loader validation
                 data = COMPLEX_SKYPE_DATA.copy()
@@ -420,11 +451,11 @@ class TestPipelineExecution(ETLPipelineTestBase):
         self.pipeline.extractor = MockComplexExtractor()
 
         # Run the pipeline
-        result = self.pipeline.run_pipeline(file_path='complex.json')
+        result = self.pipeline.run_pipeline(file_path="complex.json")
 
         # Validate the result
         self._validate_pipeline_results(result)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
