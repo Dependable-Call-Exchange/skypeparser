@@ -177,3 +177,27 @@ htmlcov/
 messages.json
 *.txt
 !requirements*.txt
+
+# Additional project-specific ignores
+skype_parser.log*
+*.log.*
+output/stream_report_*.html
+output/checkpoint_*.json
+output/etl_checkpoint_*.json
+output/parsed_data_*.json
+output/raw_*.json
+temp_extract/
+logs/
+
+# Centralized logging files
+centralized_logging_test.py
+etl_logging_example.py
+README_LOGGING.md
+
+# Temporary test files
+validation_tests.log
+supabase_connection_test.log
+supabase_import.log
+etl_pipeline.log
+skype_export.log
+logging_tests.log
