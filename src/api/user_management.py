@@ -5,19 +5,18 @@ This module provides user management functionality for the Skype Parser API,
 including user authentication, registration, and API key management.
 """
 
-import os
+import hashlib
 import json
 import logging
+import os
 import secrets
-import hashlib
 import time
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -37,7 +36,7 @@ class UserManager:
         Args:
             user_file: Path to the user data file
         """
-        self.user_file = user_file or os.environ.get('USER_FILE', 'users.json')
+        self.user_file = user_file or os.environ.get("USER_FILE", "users.json")
         self.users = self._load_users()
 
     def _load_users(self) -> Dict[str, Dict[str, Any]]:
@@ -49,7 +48,7 @@ class UserManager:
         """
         if os.path.exists(self.user_file):
             try:
-                with open(self.user_file, 'r') as f:
+                with open(self.user_file, "r") as f:
                     return json.load(f)
             except Exception as e:
                 logger.error(f"Error loading user data: {e}")
@@ -63,12 +62,14 @@ class UserManager:
             # Create directory if it doesn't exist
             os.makedirs(os.path.dirname(os.path.abspath(self.user_file)), exist_ok=True)
 
-            with open(self.user_file, 'w') as f:
+            with open(self.user_file, "w") as f:
                 json.dump(self.users, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving user data: {e}")
 
-    def _hash_password(self, password: str, salt: Optional[str] = None) -> Tuple[str, str]:
+    def _hash_password(
+        self, password: str, salt: Optional[str] = None
+    ) -> Tuple[str, str]:
         """
         Hash a password with a salt.
 
@@ -84,15 +85,14 @@ class UserManager:
 
         # Hash the password with the salt
         hashed = hashlib.pbkdf2_hmac(
-            'sha256',
-            password.encode('utf-8'),
-            salt.encode('utf-8'),
-            100000
+            "sha256", password.encode("utf-8"), salt.encode("utf-8"), 100000
         ).hex()
 
         return hashed, salt
 
-    def register_user(self, username: str, password: str, email: str, display_name: str) -> bool:
+    def register_user(
+        self, username: str, password: str, email: str, display_name: str
+    ) -> bool:
         """
         Register a new user.
 
@@ -118,14 +118,14 @@ class UserManager:
 
         # Create user
         self.users[username] = {
-            'username': username,
-            'password': hashed_password,
-            'salt': salt,
-            'email': email,
-            'display_name': display_name,
-            'api_key': api_key,
-            'created_at': time.time(),
-            'last_login': None
+            "username": username,
+            "password": hashed_password,
+            "salt": salt,
+            "email": email,
+            "display_name": display_name,
+            "api_key": api_key,
+            "created_at": time.time(),
+            "last_login": None,
         }
 
         # Save users
@@ -154,15 +154,15 @@ class UserManager:
         user = self.users[username]
 
         # Hash the password with the user's salt
-        hashed_password, _ = self._hash_password(password, user['salt'])
+        hashed_password, _ = self._hash_password(password, user["salt"])
 
         # Check if passwords match
-        if hashed_password != user['password']:
+        if hashed_password != user["password"]:
             logger.warning(f"Invalid password for user {username}")
             return False
 
         # Update last login
-        user['last_login'] = time.time()
+        user["last_login"] = time.time()
         self._save_users()
 
         logger.info(f"User {username} authenticated successfully")
@@ -191,7 +191,7 @@ class UserManager:
             dict: User data, or None if user not found
         """
         for username, user in self.users.items():
-            if user.get('api_key') == api_key:
+            if user.get("api_key") == api_key:
                 return user
 
         return None
@@ -217,12 +217,12 @@ class UserManager:
 
         # Update user data
         for key, value in kwargs.items():
-            if key == 'password':
+            if key == "password":
                 # Hash the password
                 hashed_password, salt = self._hash_password(value)
-                user['password'] = hashed_password
-                user['salt'] = salt
-            elif key in ['username', 'api_key', 'created_at', 'last_login']:
+                user["password"] = hashed_password
+                user["salt"] = salt
+            elif key in ["username", "api_key", "created_at", "last_login"]:
                 # Skip these fields
                 continue
             else:
@@ -263,13 +263,13 @@ class UserManager:
         Generate a new API key.
 
         Returns:
-            str: API key
+            str: New API key
         """
         return secrets.token_hex(32)
 
-    def regenerate_api_key(self, username: str) -> Optional[str]:
+    def regenerate_api_key(self, username: str) -> str:
         """
-        Regenerate API key for a user.
+        Regenerate the API key for a user.
 
         Args:
             username: Username
@@ -286,7 +286,7 @@ class UserManager:
         api_key = self._generate_api_key()
 
         # Update user
-        self.users[username]['api_key'] = api_key
+        self.users[username]["api_key"] = api_key
 
         # Save users
         self._save_users()
@@ -304,11 +304,11 @@ class UserManager:
         # Return a list of users without sensitive information
         return [
             {
-                'username': user['username'],
-                'email': user['email'],
-                'display_name': user['display_name'],
-                'created_at': user['created_at'],
-                'last_login': user['last_login']
+                "username": user["username"],
+                "email": user["email"],
+                "display_name": user["display_name"],
+                "created_at": user["created_at"],
+                "last_login": user["last_login"],
             }
             for user in self.users.values()
         ]

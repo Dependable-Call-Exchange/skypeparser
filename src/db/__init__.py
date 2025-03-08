@@ -12,8 +12,6 @@ removed in version 2.0.0.
 For a SOLID implementation that follows best practices, use the SOLIDSkypeETLPipeline class.
 """
 
-import warnings
-
 # For backward compatibility, expose any constants or functions that might be imported directly
 from ..parser.core_parser import timestamp_parser
 
@@ -35,33 +33,8 @@ from .raw_storage import (
     SkypeDataStorage,
 )
 
-# Import legacy modules with deprecation warnings
-from .skype_to_postgres import create_tables, import_skype_data
-from .skype_to_postgres import main as import_to_postgres
-from .store_skype_export import clean_skype_data
-from .store_skype_export import main as store_skype_export
-
-# Issue deprecation warnings for legacy modules and classes
-warnings.warn(
-    "The SkypeETLPipeline class is deprecated and will be removed in version 2.0.0. "
-    "Please use the ETLPipeline class from the modular ETL pipeline instead.",
-    DeprecationWarning,
-    stacklevel=2,
-)
-
-warnings.warn(
-    "The skype_to_postgres module is deprecated and will be removed in version 2.0.0. "
-    "Please use the ETLPipeline class instead.",
-    DeprecationWarning,
-    stacklevel=2,
-)
-
-warnings.warn(
-    "The store_skype_export module is deprecated and will be removed in version 2.0.0. "
-    "Please use the ETLPipeline class instead.",
-    DeprecationWarning,
-    stacklevel=2,
-)
+# Note: Legacy modules are deprecated and will be removed in version 2.0.0
+# Use the ETLPipeline class from the modular ETL pipeline instead
 
 __all__ = [
     # Modular ETL pipeline
@@ -79,12 +52,6 @@ __all__ = [
     "RAW_EXPORTS_TABLE",
     "CONVERSATIONS_TABLE",
     "MESSAGES_TABLE",
-    # Legacy functions (deprecated)
-    "create_tables",
-    "import_skype_data",
-    "import_to_postgres",
-    "store_skype_export",
-    "clean_skype_data",
     # Raw storage
     "SkypeDataStorage",
     "CREATE_RAW_TABLES_SQL",

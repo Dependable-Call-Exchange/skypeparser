@@ -7,12 +7,11 @@ and emitting progress events to listeners.
 
 import logging
 import time
-from typing import Dict, Any, Optional, List, Callable
+from typing import Any, Callable, Dict, List, Optional
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -40,6 +39,8 @@ class ProgressTracker:
         self.message = "Initializing task..."
         self.start_time = time.time()
         self.listeners: List[Callable[[Dict[str, Any]], None]] = []
+        self.export_id = None
+        self.error = None
 
         # Emit initial progress
         self._emit_progress()
@@ -56,8 +57,14 @@ class ProgressTracker:
         # Send current progress to the new listener
         listener(self._get_progress_data())
 
-    def update(self, step: Optional[int] = None, increment: int = 0,
-               status: Optional[str] = None, message: Optional[str] = None) -> None:
+    def update(
+        self,
+        step: Optional[int] = None,
+        increment: int = 0,
+        status: Optional[str] = None,
+        message: Optional[str] = None,
+        export_id: Optional[int] = None,
+    ) -> None:
         """
         Update the progress.
 
@@ -66,6 +73,7 @@ class ProgressTracker:
             increment: Amount to increment the current step by
             status: Current status (if provided, updates the status)
             message: Current message (if provided, updates the message)
+            export_id: Export ID (if provided, updates the export ID)
         """
         # Update step
         if step is not None:
@@ -80,19 +88,43 @@ class ProgressTracker:
         if message is not None:
             self.message = message
 
+        # Update export ID
+        if export_id is not None:
+            self.export_id = export_id
+
         # Emit progress
         self._emit_progress()
 
-    def complete(self, message: str = "Task completed successfully") -> None:
+    def complete(
+        self,
+        message: str = "Task completed successfully",
+        export_id: Optional[int] = None,
+    ) -> None:
         """
         Mark the task as complete.
 
         Args:
             message: Completion message
+            export_id: Export ID (if provided, updates the export ID)
         """
         self.current_step = self.total_steps
         self.status = "completed"
         self.message = message
+        if export_id is not None:
+            self.export_id = export_id
+        self._emit_progress()
+
+    def error(self, message: str = "Task failed", error: Optional[str] = None) -> None:
+        """
+        Mark the task as failed with an error.
+
+        Args:
+            message: Failure message
+            error: Error details
+        """
+        self.status = "failed"
+        self.message = message
+        self.error = error
         self._emit_progress()
 
     def fail(self, message: str = "Task failed") -> None:
@@ -105,6 +137,33 @@ class ProgressTracker:
         self.status = "failed"
         self.message = message
         self._emit_progress()
+
+    def get_status(self) -> Dict[str, Any]:
+        """
+        Get a simplified status object suitable for API responses.
+
+        Returns:
+            Dict containing status information
+        """
+        percent_complete = (
+            (self.current_step / self.total_steps) * 100 if self.total_steps > 0 else 0
+        )
+
+        status_obj = {
+            "status": self.status,
+            "progress": round(percent_complete),
+            "message": self.message,
+        }
+
+        # Add export_id if available
+        if self.export_id is not None:
+            status_obj["export_id"] = self.export_id
+
+        # Add error if available
+        if self.error is not None:
+            status_obj["error"] = self.error
+
+        return status_obj
 
     def _emit_progress(self) -> None:
         """Emit progress to all listeners."""
@@ -124,9 +183,11 @@ class ProgressTracker:
             Dict containing progress data
         """
         elapsed_time = time.time() - self.start_time
-        percent_complete = (self.current_step / self.total_steps) * 100 if self.total_steps > 0 else 0
+        percent_complete = (
+            (self.current_step / self.total_steps) * 100 if self.total_steps > 0 else 0
+        )
 
-        return {
+        data = {
             "task_id": self.task_id,
             "status": self.status,
             "message": self.message,
@@ -134,8 +195,18 @@ class ProgressTracker:
             "total_steps": self.total_steps,
             "percent_complete": round(percent_complete, 2),
             "elapsed_time": round(elapsed_time, 2),
-            "timestamp": time.time()
+            "timestamp": time.time(),
         }
+
+        # Add export_id if available
+        if self.export_id is not None:
+            data["export_id"] = self.export_id
+
+        # Add error if available
+        if self.error is not None:
+            data["error"] = self.error
+
+        return data
 
 
 # Global registry of progress trackers

@@ -16,85 +16,72 @@ Note: The parser_module.py file is deprecated and will be removed in a future ve
       Please use the functions from core_parser.py instead.
 """
 
-import warnings
-
-# Show deprecation warning for parser_module
-warnings.warn(
-    "The parser_module.py file is deprecated and will be removed in a future version. "
-    "Please use the functions from core_parser.py instead.",
-    DeprecationWarning,
-    stacklevel=2
+# Import content extraction functions
+from .content_extractor import (
+    ContentExtractor,
+    extract_content_data,
+    format_content_with_markup,
+    format_content_with_regex,
 )
 
 # Import core parsing functions
 from .core_parser import (
-    timestamp_parser,
-    content_parser,
-    pretty_quotes,
-    type_parser,
     banner_constructor,
+    content_parser,
+    id_selector,
     parse_skype_data,
-    id_selector
-)
-
-# Import content extraction functions
-from .content_extractor import (
-    extract_content_data,
-    format_content_with_markup,
-    format_content_with_regex,
-    ContentExtractor
-)
-
-# Import file output functions
-from .file_output import (
-    write_to_file,
-    output_structured_data,
-    export_conversations_to_text,
-    export_conversations
+    pretty_quotes,
+    timestamp_parser,
+    type_parser,
 )
 
 # Import custom exceptions
 from .exceptions import (
+    ContentParsingError,
+    DatabaseOperationError,
+    DataExtractionError,
+    ExportError,
+    FileOperationError,
+    InvalidInputError,
     SkypeParserError,
     TimestampParsingError,
-    ContentParsingError,
-    FileOperationError,
-    DataExtractionError,
-    InvalidInputError,
-    DatabaseOperationError,
-    ExportError
+)
+
+# Import file output functions
+from .file_output import (
+    export_conversations,
+    export_conversations_to_text,
+    output_structured_data,
+    write_to_file,
 )
 
 # Define public API
 __all__ = [
     # Core parsing functions
-    'timestamp_parser',
-    'content_parser',
-    'pretty_quotes',
-    'type_parser',
-    'banner_constructor',
-    'parse_skype_data',
-    'id_selector',
-
+    "timestamp_parser",
+    "content_parser",
+    "pretty_quotes",
+    "type_parser",
+    "banner_constructor",
+    "parse_skype_data",
+    "id_selector",
     # Content extraction functions
-    'extract_content_data',
-    'format_content_with_markup',
-    'format_content_with_regex',
-    'ContentExtractor',
-
+    "extract_content_data",
+    "format_content_with_markup",
+    "format_content_with_regex",
+    "ContentExtractor",
     # File output functions
-    'write_to_file',
-    'output_structured_data',
-    'export_conversations_to_text',
-    'export_conversations',
-
+    "write_to_file",
+    "output_structured_data",
+    "export_conversations_to_text",
+    "export_conversations",
     # Custom exceptions
-    'SkypeParserError',
-    'TimestampParsingError',
-    'ContentParsingError',
-    'FileOperationError',
-    'DataExtractionError',
-    'InvalidInputError',
-    'DatabaseOperationError',
-    'ExportError'
+    "SkypeParserError",
+    "TimestampParsingError",
+    "ContentParsingError",
+    "FileOperationError",
+    "DataExtractionError",
+    "InvalidInputError",
+    "DatabaseOperationError",
+    "ExportError",
 ]

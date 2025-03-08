@@ -4,7 +4,7 @@ This document provides detailed information on how to use the Skype Parser API f
 
 ## Overview
 
-The Skype Parser API provides a RESTful interface for processing Skype export files. It allows you to upload Skype export files, process them through the ETL pipeline, and retrieve the results.
+The Skype Parser API provides a RESTful interface for processing Skype export files. It allows you to upload Skype export files, process them through the ETL pipeline, and retrieve the results. The API supports both synchronous and asynchronous processing, depending on the file size.
 
 ## API Server Setup
 
@@ -25,6 +25,7 @@ export DB_USER=postgres
 export DB_PASSWORD=your_password
 export CELERY_BROKER_URL=redis://localhost:6379/0
 export CELERY_RESULT_BACKEND=redis://localhost:6379/0
+export SECRET_KEY=your_secure_secret_key
 ```
 
 3. Start Redis (required for asynchronous processing):
@@ -73,10 +74,27 @@ The API server supports the following command-line options:
 - `--redis-url`: Redis URL for Celery (default: redis://localhost:6379/0)
 - `--worker`: Run a Celery worker instead of the API server
 - `--worker-concurrency`: Number of worker processes (default: 2)
+- `--user-file`: Path to the user data file (default: users.json)
+- `--secret-key`: Secret key for session encryption (default: from SECRET_KEY environment variable or random)
+- `--create-user`: Create a new user
+- `--username`: Username for the new user
+- `--password`: Password for the new user
+- `--email`: Email for the new user
+- `--display-name`: Display name for the new user
+- `--list-users`: List all users
+
+## Authentication
+
+The API supports two authentication methods:
+
+1. **API Key Authentication**: For programmatic access, use the `X-API-Key` header with a valid API key.
+2. **Session Authentication**: For web browser access, use the session cookie obtained after logging in through the `/api/login` endpoint.
 
 ## API Endpoints
 
-### Health Check
+### System Endpoints
+
+#### Health Check
 
 ```
 GET /api/health
@@ -84,12 +102,29 @@ GET /api/health
 
 Returns the current status of the API server.
 
-#### Response
+##### Response
 
 ```json
 {
   "status": "ok",
-  "timestamp": "2023-03-05T12:34:56.789012"
+  "timestamp": "2023-03-05T12:34:56.789012",
+  "version": "1.0.0"
+}
+```
+
+#### Version
+
+```
+GET /api/version
+```
+
+Returns the current version of the API.
+
+##### Response
+
+```json
+{
+  "version": "1.0.0"
 }
 ```
 
@@ -212,290 +247,594 @@ Regenerates the API key for the authenticated user.
 }
 ```
 
-### Upload and Process
+### ETL Pipeline
+
+#### Upload and Process
 
 ```
 POST /api/upload
 ```
 
-Uploads a Skype export file and processes it through the ETL pipeline.
+Uploads a Skype export file and processes it through the ETL pipeline. For files larger than the async threshold (default: 50MB), processing will be done asynchronously.
 
-#### Request Headers
+##### Request Headers
 
 - `X-API-Key`: API key for authentication
 
-#### Request Body
+##### Request Body
 
 The request body should be a `multipart/form-data` request with the following fields:
 
 - `file`: The Skype export file (TAR or JSON)
 - `user_display_name` (optional): The display name of the user
 
-#### Response
+##### Response (Synchronous Processing)
 
-The response is a JSON object containing the results of the ETL pipeline:
+For smaller files, the response is a JSON object containing the results of the ETL pipeline:
 
 ```json
 {
-  "extraction": {
-    "user_id": "live:user123",
-    "export_date": "2023-03-05",
-    "conversation_count": 42
-  },
-  "transformation": {
-    "conversation_count": 42,
-    "message_count": 1234
-  },
-  "loading": {
-    "export_id": 123
-  },
+  "success": true,
+  "export_id": 123,
+  "conversations": 42,
+  "message_count": 1234,
+  "phases": {
+    "extract": {
+      "status": "completed",
+      "processed_conversations": 42,
+      "processed_messages": 1234,
+      "duration_seconds": 1.5
+    },
+    "transform": {
+      "status": "completed",
+      "processed_conversations": 42,
+      "processed_messages": 1234,
+      "duration_seconds": 2.3
+    },
+    "load": {
+      "status": "completed",
+      "processed_conversations": 42,
+      "processed_messages": 1234,
+      "duration_seconds": 3.1,
+      "export_id": 123
+    }
+  }
+}
+```
+
+##### Response (Asynchronous Processing)
+
+For larger files, the response contains a task ID that can be used to check the status of the processing:
+
+```json
+{
   "task_id": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
 
-For large files (by default, files larger than 50MB), the API will process the file asynchronously. In this case, the response will be:
-
-```json
-{
-  "task_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "processing",
-  "message": "File is being processed asynchronously",
-  "async": true
-}
-```
-
-The `task_id` field is included in the response and can be used to subscribe to progress updates via WebSocket or to check the task status via the Task Status endpoint.
-
-### Task Status
+#### Task Status
 
 ```
-GET /api/task/<task_id>
+GET /api/status/{task_id}
 ```
 
-Returns the current status of a task.
+Returns the current status of an asynchronous task.
 
-#### Request Headers
+##### Request Headers
 
 - `X-API-Key`: API key for authentication
 
-#### Response
+##### Response
 
 ```json
 {
-  "task_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "completed",
-  "message": "ETL pipeline completed successfully",
-  "current_step": 100,
-  "total_steps": 100,
-  "percent_complete": 100.0,
-  "elapsed_time": 42.5,
-  "timestamp": 1646476800.0
+  "status": "running",
+  "progress": 50,
+  "message": "Processing conversations..."
 }
 ```
 
-## Command-line User Management
+When the task is completed:
 
-The API server provides command-line tools for user management:
-
-### Creating a User
-
-```bash
-python -m src.api.run_api --create-user --username johndoe --password securepassword --email john.doe@example.com --display-name "John Doe"
+```json
+{
+  "status": "completed",
+  "progress": 100,
+  "message": "Processing completed successfully",
+  "export_id": 123
+}
 ```
 
-### Listing Users
+If the task fails:
 
-```bash
-python -m src.api.run_api --list-users
+```json
+{
+  "status": "failed",
+  "progress": 75,
+  "message": "Processing failed",
+  "error": "Error message"
+}
 ```
 
-## WebSocket API
+#### List Exports
 
-The API also provides a WebSocket interface for real-time progress updates. This is implemented using Socket.IO.
+```
+GET /api/exports
+```
 
-### Connecting to the WebSocket Server
+Returns a list of all exports for the authenticated user.
+
+##### Request Headers
+
+- `X-API-Key`: API key for authentication
+
+##### Response
+
+```json
+[
+  {
+    "export_id": 123,
+    "user_id": "live:user123",
+    "export_date": "2023-03-05T12:34:56.789012",
+    "conversation_count": 42,
+    "message_count": 1234
+  },
+  {
+    "export_id": 124,
+    "user_id": "live:user123",
+    "export_date": "2023-03-06T12:34:56.789012",
+    "conversation_count": 43,
+    "message_count": 1235
+  }
+]
+```
+
+### Analysis
+
+#### Get Analysis Data
+
+```
+GET /api/analysis/{export_id}
+```
+
+Returns analysis data for a processed Skype export.
+
+##### Request Headers
+
+- `X-API-Key`: API key for authentication
+
+##### Response
+
+```json
+{
+  "message_count": 1234,
+  "conversation_count": 42,
+  "date_range": {
+    "start": "2022-01-01T00:00:00.000000",
+    "end": "2023-03-05T12:34:56.789012"
+  },
+  "top_contacts": [
+    {
+      "name": "Jane Doe",
+      "message_count": 567
+    },
+    {
+      "name": "John Smith",
+      "message_count": 456
+    },
+    {
+      "name": "Bob Johnson",
+      "message_count": 345
+    }
+  ]
+}
+```
+
+#### Get HTML Report
+
+```
+GET /api/report/{export_id}
+```
+
+Returns an HTML report for a processed Skype export.
+
+##### Request Headers
+
+- `X-API-Key`: API key for authentication
+
+##### Response
+
+The response is an HTML document containing a report of the Skype export data.
+
+## Real-time Updates with Socket.IO
+
+The API also supports real-time updates using Socket.IO. This allows clients to receive progress updates for asynchronous tasks without polling the API.
+
+### Connecting to the Socket.IO Server
 
 ```javascript
-// Connect to the Socket.IO server
-const socket = io();
+const socket = io('http://localhost:5000');
 
-// Handle connection events
 socket.on('connect', () => {
-  console.log('Connected to server');
+  console.log('Connected to Socket.IO server');
 });
 
 socket.on('disconnect', () => {
-  console.log('Disconnected from server');
-});
-
-socket.on('connect_error', (error) => {
-  console.error('Connection error:', error);
+  console.log('Disconnected from Socket.IO server');
 });
 ```
 
 ### Subscribing to Task Updates
 
 ```javascript
-// Subscribe to task updates
-socket.emit('subscribe', { task_id: taskId }, (response) => {
-  if (response && response.error) {
-    console.error('Error subscribing to task:', response.error);
-    return;
-  }
-
-  // Handle initial progress data
-  updateProgressUI(response);
-});
+// Subscribe to updates for a specific task
+socket.emit('subscribe', { task_id: '550e8400-e29b-41d4-a716-446655440000' });
 
 // Listen for task progress updates
-socket.on(`task_progress_${taskId}`, (data) => {
-  // Update UI with progress data
-  updateProgressUI(data);
-
-  // If task is completed or failed, handle accordingly
-  if (data.status === 'completed') {
-    showResults();
-  } else if (data.status === 'failed') {
-    showError(data.message);
-  }
+socket.on('task_progress_550e8400-e29b-41d4-a716-446655440000', (data) => {
+  console.log('Task progress:', data);
 });
 ```
 
-### Progress Data Format
+## Error Handling
 
-The progress data sent via WebSocket has the following format:
+All errors are returned with a JSON object containing an `error` field with a descriptive message. The HTTP status code indicates the type of error:
+
+- 400: Bad Request (invalid input)
+- 401: Unauthorized (invalid credentials)
+- 404: Not Found (resource not found)
+- 413: Payload Too Large (file too large)
+- 429: Too Many Requests (rate limit exceeded)
+- 500: Internal Server Error (server-side error)
+
+Example error response:
 
 ```json
 {
-  "task_id": "550e8400-e29b-41d4-a716-446655440000",
-  "status": "transforming",
-  "message": "Transformed 42 conversations",
-  "current_step": 75,
-  "total_steps": 100,
-  "percent_complete": 75.0,
-  "elapsed_time": 30.2,
-  "timestamp": 1646476800.0
+  "error": "Invalid API key"
 }
 ```
 
-The `status` field can have the following values:
-- `initializing`: The task is being initialized
-- `starting`: The task is starting
-- `extracting`: Data is being extracted from the Skype export file
-- `transforming`: Data is being transformed
-- `loading`: Data is being loaded into the database
-- `completed`: The task has completed successfully
-- `failed`: The task has failed
+## Rate Limiting
 
-## Client Integration
+The API implements rate limiting to prevent abuse. If you exceed the rate limit, you will receive a 429 response with a `Retry-After` header indicating when you can try again.
 
-### JavaScript Example
+## File Size Limits
+
+The API enforces a file size limit of 50MB for uploaded files. If you attempt to upload a larger file, you will receive a 413 response.
+
+## Example Usage
+
+### Using cURL
+
+```bash
+# Register a new user
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"username":"johndoe","password":"securepassword","email":"john.doe@example.com","display_name":"John Doe"}' \
+  http://localhost:5000/api/register
+
+# Log in
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"username":"johndoe","password":"securepassword"}' \
+  http://localhost:5000/api/login
+
+# Upload a file with API key authentication
+curl -X POST \
+  -H "X-API-Key: your_api_key" \
+  -F "file=@path/to/skype_export.tar" \
+  -F "user_display_name=Your Name" \
+  http://localhost:5000/api/upload
+
+# Check task status
+curl -X GET \
+  -H "X-API-Key: your_api_key" \
+  http://localhost:5000/api/status/task_id_from_upload_response
+
+# Get analysis data
+curl -X GET \
+  -H "X-API-Key: your_api_key" \
+  http://localhost:5000/api/analysis/export_id_from_task_status
+
+# Get HTML report
+curl -X GET \
+  -H "X-API-Key: your_api_key" \
+  http://localhost:5000/api/report/export_id_from_task_status
+
+# List all exports
+curl -X GET \
+  -H "X-API-Key: your_api_key" \
+  http://localhost:5000/api/exports
+
+# Get user profile
+curl -X GET \
+  -H "X-API-Key: your_api_key" \
+  http://localhost:5000/api/profile
+
+# Regenerate API key
+curl -X POST \
+  -H "X-API-Key: your_api_key" \
+  http://localhost:5000/api/regenerate-api-key
+
+# Log out
+curl -X POST \
+  -b "session=your_session_cookie" \
+  http://localhost:5000/api/logout
+```
+
+### Using JavaScript (Browser)
 
 ```javascript
-async function uploadSkypeExport(file, userDisplayName, apiKey) {
+// Register a new user
+async function registerUser(username, password, email, displayName) {
+  const response = await fetch('http://localhost:5000/api/register', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      username,
+      password,
+      email,
+      display_name: displayName
+    })
+  });
+  return await response.json();
+}
+
+// Log in
+async function login(username, password) {
+  const response = await fetch('http://localhost:5000/api/login', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      username,
+      password
+    }),
+    credentials: 'include'
+  });
+  return await response.json();
+}
+
+// Upload a file
+async function uploadFile(file, userDisplayName, apiKey) {
   const formData = new FormData();
   formData.append('file', file);
-  formData.append('user_display_name', userDisplayName);
-
-  try {
-    const response = await fetch('/api/upload', {
-      method: 'POST',
-      headers: {
-        'X-API-Key': apiKey
-      },
-      body: formData
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Upload failed');
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error('Error uploading file:', error);
-    throw error;
+  if (userDisplayName) {
+    formData.append('user_display_name', userDisplayName);
   }
+
+  const response = await fetch('http://localhost:5000/api/upload', {
+    method: 'POST',
+    headers: {
+      'X-API-Key': apiKey
+    },
+    body: formData
+  });
+  return await response.json();
+}
+
+// Check task status
+async function checkTaskStatus(taskId, apiKey) {
+  const response = await fetch(`http://localhost:5000/api/status/${taskId}`, {
+    method: 'GET',
+    headers: {
+      'X-API-Key': apiKey
+    }
+  });
+  return await response.json();
+}
+
+// Get analysis data
+async function getAnalysis(exportId, apiKey) {
+  const response = await fetch(`http://localhost:5000/api/analysis/${exportId}`, {
+    method: 'GET',
+    headers: {
+      'X-API-Key': apiKey
+    }
+  });
+  return await response.json();
+}
+
+// Get HTML report
+async function getReport(exportId, apiKey) {
+  const response = await fetch(`http://localhost:5000/api/report/${exportId}`, {
+    method: 'GET',
+    headers: {
+      'X-API-Key': apiKey
+    }
+  });
+  return await response.text();
+}
+
+// List all exports
+async function listExports(apiKey) {
+  const response = await fetch('http://localhost:5000/api/exports', {
+    method: 'GET',
+    headers: {
+      'X-API-Key': apiKey
+    }
+  });
+  return await response.json();
+}
+
+// Get user profile
+async function getProfile(apiKey) {
+  const response = await fetch('http://localhost:5000/api/profile', {
+    method: 'GET',
+    headers: {
+      'X-API-Key': apiKey
+    },
+    credentials: 'include'
+  });
+  return await response.json();
+}
+
+// Regenerate API key
+async function regenerateApiKey(apiKey) {
+  const response = await fetch('http://localhost:5000/api/regenerate-api-key', {
+    method: 'POST',
+    headers: {
+      'X-API-Key': apiKey
+    }
+  });
+  return await response.json();
+}
+
+// Log out
+async function logout() {
+  const response = await fetch('http://localhost:5000/api/logout', {
+    method: 'POST',
+    credentials: 'include'
+  });
+  return await response.json();
 }
 ```
 
-### Python Example
+### Using Python
 
 ```python
 import requests
 
-def upload_skype_export(file_path, user_display_name, api_key, api_url):
-    """
-    Upload a Skype export file to the API.
+# Register a new user
+def register_user(username, password, email, display_name):
+    response = requests.post(
+        'http://localhost:5000/api/register',
+        json={
+            'username': username,
+            'password': password,
+            'email': email,
+            'display_name': display_name
+        }
+    )
+    return response.json()
 
-    Args:
-        file_path: Path to the Skype export file
-        user_display_name: Display name of the user
-        api_key: API key for authentication
-        api_url: URL of the API server
+# Log in
+def login(username, password):
+    response = requests.post(
+        'http://localhost:5000/api/login',
+        json={
+            'username': username,
+            'password': password
+        }
+    )
+    return response.json(), response.cookies
 
-    Returns:
-        dict: Results of the ETL pipeline
-    """
-    with open(file_path, 'rb') as f:
-        files = {'file': f}
-        data = {'user_display_name': user_display_name}
-        headers = {'X-API-Key': api_key}
-
+# Upload a file with API key authentication
+def upload_file(file_path, user_display_name, api_key):
+    with open(file_path, 'rb') as file:
         response = requests.post(
-            f"{api_url}/api/upload",
-            files=files,
-            data=data,
-            headers=headers
+            'http://localhost:5000/api/upload',
+            headers={'X-API-Key': api_key},
+            files={'file': file},
+            data={'user_display_name': user_display_name}
         )
+    return response.json()
 
-        response.raise_for_status()
-        return response.json()
-```
+# Check task status
+def check_task_status(task_id, api_key):
+    response = requests.get(
+        f'http://localhost:5000/api/status/{task_id}',
+        headers={'X-API-Key': api_key}
+    )
+    return response.json()
 
-## Front-end Example
+# Get analysis data
+def get_analysis(export_id, api_key):
+    response = requests.get(
+        f'http://localhost:5000/api/analysis/{export_id}',
+        headers={'X-API-Key': api_key}
+    )
+    return response.json()
 
-A complete front-end example is provided in the `examples/frontend_example` directory. It includes:
+# Get HTML report
+def get_report(export_id, api_key):
+    response = requests.get(
+        f'http://localhost:5000/api/report/{export_id}',
+        headers={'X-API-Key': api_key}
+    )
+    return response.text
 
-- `index.html`: A simple HTML interface for uploading Skype export files
-- `serve.py`: A server script that serves the HTML interface and proxies API requests
+# List all exports
+def list_exports(api_key):
+    response = requests.get(
+        'http://localhost:5000/api/exports',
+        headers={'X-API-Key': api_key}
+    )
+    return response.json()
 
-To run the example:
+# Get user profile
+def get_profile(api_key):
+    response = requests.get(
+        'http://localhost:5000/api/profile',
+        headers={'X-API-Key': api_key}
+    )
+    return response.json()
 
-```bash
-cd examples/frontend_example
-python serve.py --host localhost --port 8080 --api-url http://localhost:5000
-```
+# Regenerate API key
+def regenerate_api_key(api_key):
+    response = requests.post(
+        'http://localhost:5000/api/regenerate-api-key',
+        headers={'X-API-Key': api_key}
+    )
+    return response.json()
 
-Then open a web browser and navigate to `http://localhost:8080`.
+# Log out
+def logout(session_cookie):
+    response = requests.post(
+        'http://localhost:5000/api/logout',
+        cookies={'session': session_cookie}
+    )
+    return response.json()
 
-## Security Considerations
+# Example usage
+if __name__ == '__main__':
+    # Register a new user
+    user_data = register_user('johndoe', 'securepassword', 'john.doe@example.com', 'John Doe')
+    api_key = user_data['api_key']
 
-- Use HTTPS in production to protect API keys and data
-- Generate a strong, random API key
-- Store API keys securely
-- Implement rate limiting to prevent abuse
-- Validate and sanitize all inputs
-- Use proper error handling to avoid leaking sensitive information
+    # Upload a file
+    result = upload_file('path/to/skype_export.tar', 'John Doe', api_key)
 
-## Troubleshooting
+    # If asynchronous processing
+    if 'task_id' in result:
+        task_id = result['task_id']
 
-### Common Issues
+        # Check task status until completed
+        import time
+        while True:
+            status = check_task_status(task_id, api_key)
+            print(f"Status: {status['status']}, Progress: {status.get('progress', 0)}%")
 
-- **File too large**: The default maximum file size is 500MB. You can increase this by modifying the `MAX_CONTENT_LENGTH` constant in `src/api/skype_api.py`.
-- **Database connection error**: Ensure that the database is running and the credentials are correct.
-- **API key error**: Ensure that the API key is set correctly in both the server and client.
+            if status['status'] in ('completed', 'failed'):
+                break
 
-### Logging
+            time.sleep(1)
 
-The API server logs information to the console. You can increase the log level by setting the `LOGLEVEL` environment variable:
+        if status['status'] == 'completed':
+            export_id = status['export_id']
 
-```bash
-export LOGLEVEL=DEBUG
-```
+            # Get analysis data
+            analysis = get_analysis(export_id, api_key)
+            print(f"Analysis: {analysis}")
 
-## Further Reading
+            # Get HTML report
+            report = get_report(export_id, api_key)
+            with open('report.html', 'w') as f:
+                f.write(report)
 
-- [OpenAPI Specification](../docs/API.md)
-- [ETL Pipeline Documentation](../docs/ETL_PIPELINE.md)
-- [Content Extraction Documentation](../docs/CONTENT_EXTRACTION.md)
+    # If synchronous processing
+    elif 'export_id' in result:
+        export_id = result['export_id']
+
+        # Get analysis data
+        analysis = get_analysis(export_id, api_key)
+        print(f"Analysis: {analysis}")
+
+        # Get HTML report
+        report = get_report(export_id, api_key)
+        with open('report.html', 'w') as f:
+            f.write(report)

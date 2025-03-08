@@ -5,39 +5,43 @@ This module provides a Flask-based API for processing Skype export files.
 It includes endpoints for file upload, authentication, and processing status.
 """
 
-import os
 import logging
+import os
 import tempfile
 import uuid
 from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
-from flask import Flask, request, jsonify, g, Response, session
+from flask import Flask, Response, g, jsonify, request, session
 from flask_cors import CORS
 from flask_socketio import SocketIO
-from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.utils import secure_filename
 
-# Import the new ETL pipeline
-from src.db import ETLPipeline, ETLContext
-from src.db.progress_tracker import get_tracker
-from src.parser.exceptions import ValidationError
 from src.api.tasks import submit_task
 from src.api.user_management import get_user_manager
+from src.db.etl.context import ETLContext
+
+# Import the new ETL pipeline
+from src.db.etl.pipeline_manager import ETLPipeline
+from src.db.progress_tracker import get_tracker
+from src.utils.validation import ValidationError
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 # Constants
-ALLOWED_EXTENSIONS = {'tar', 'json'}
+ALLOWED_EXTENSIONS = {"tar", "json"}
 MAX_CONTENT_LENGTH = 500 * 1024 * 1024  # 500 MB
-ASYNC_THRESHOLD = 50 * 1024 * 1024  # 50 MB - Files larger than this will be processed asynchronously
+ASYNC_THRESHOLD = (
+    50 * 1024 * 1024
+)  # 50 MB - Files larger than this will be processed asynchronously
+API_VERSION = "1.0.0"  # Current API version
 
 
 class SkypeParserAPI:
@@ -57,7 +61,7 @@ class SkypeParserAPI:
         enable_cors: bool = True,
         async_threshold: int = ASYNC_THRESHOLD,
         user_file: Optional[str] = None,
-        secret_key: Optional[str] = None
+        secret_key: Optional[str] = None,
     ):
         """
         Initialize the Skype Parser API.
@@ -82,11 +86,13 @@ class SkypeParserAPI:
         self.socketio = SocketIO(self.app, cors_allowed_origins="*")
 
         # Set up file size limit
-        self.app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
+        self.app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
 
         # Set up session
-        self.app.config['SECRET_KEY'] = secret_key or os.environ.get('SECRET_KEY', os.urandom(24).hex())
-        self.app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
+        self.app.config["SECRET_KEY"] = secret_key or os.environ.get(
+            "SECRET_KEY", os.urandom(24).hex()
+        )
+        self.app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=7)
 
         # Set up folders
         self.upload_folder = upload_folder or tempfile.mkdtemp()
@@ -98,7 +104,7 @@ class SkypeParserAPI:
 
         # Store configuration
         self.db_config = db_config
-        self.api_key = api_key or os.environ.get('API_KEY')
+        self.api_key = api_key or os.environ.get("API_KEY")
         self.async_threshold = async_threshold
 
         # Initialize user manager
@@ -121,7 +127,7 @@ class SkypeParserAPI:
             @wraps(f)
             def decorated_function(*args, **kwargs):
                 # Check for API key in header
-                api_key = request.headers.get('X-API-Key')
+                api_key = request.headers.get("X-API-Key")
 
                 # If API key is provided, check if it's valid
                 if api_key:
@@ -133,29 +139,57 @@ class SkypeParserAPI:
                         return f(*args, **kwargs)
 
                 # If no API key is provided or it's invalid, check for session authentication
-                if 'username' in session:
+                if "username" in session:
                     # Get user from session
-                    user = self.user_manager.get_user(session['username'])
+                    user = self.user_manager.get_user(session["username"])
                     if user:
                         # Store user in g for later use
                         g.user = user
                         return f(*args, **kwargs)
 
                 # If no valid authentication is found, return 401
-                return jsonify({'error': 'Unauthorized'}), 401
+                return jsonify({"error": "Unauthorized"}), 401
+
             return decorated_function
 
         # Health check endpoint
-        @self.app.route('/api/health', methods=['GET'])
+        @self.app.route("/api/health", methods=["GET"])
         def health_check():
             """Health check endpoint."""
-            return jsonify({
-                'status': 'ok',
-                'timestamp': datetime.now().isoformat()
-            })
+            return jsonify(
+                {
+                    "status": "ok",
+                    "timestamp": datetime.now().isoformat(),
+                    "version": API_VERSION,
+                }
+            )
+
+        # Versioned health check endpoint
+        @self.app.route("/api/v1/health", methods=["GET"])
+        def health_check_v1():
+            """Health check endpoint (v1)."""
+            return jsonify(
+                {
+                    "status": "ok",
+                    "timestamp": datetime.now().isoformat(),
+                    "version": API_VERSION,
+                }
+            )
+
+        # Version endpoint
+        @self.app.route("/api/version", methods=["GET"])
+        def get_version():
+            """Get API version endpoint."""
+            return jsonify({"version": API_VERSION})
+
+        # Versioned version endpoint
+        @self.app.route("/api/v1/version", methods=["GET"])
+        def get_version_v1():
+            """Get API version endpoint (v1)."""
+            return jsonify({"version": API_VERSION})
 
         # User registration endpoint
-        @self.app.route('/api/register', methods=['POST'])
+        @self.app.route("/api/register", methods=["POST"])
         def register():
             """
             API endpoint for user registration.
@@ -165,39 +199,52 @@ class SkypeParserAPI:
                 data = request.get_json()
 
                 # Check if required fields are present
-                required_fields = ['username', 'password', 'email', 'display_name']
+                required_fields = ["username", "password", "email", "display_name"]
                 for field in required_fields:
                     if field not in data:
-                        return jsonify({'error': f'Missing required field: {field}'}), 400
+                        return (
+                            jsonify({"error": f"Missing required field: {field}"}),
+                            400,
+                        )
 
                 # Register user
                 success = self.user_manager.register_user(
-                    username=data['username'],
-                    password=data['password'],
-                    email=data['email'],
-                    display_name=data['display_name']
+                    username=data["username"],
+                    password=data["password"],
+                    email=data["email"],
+                    display_name=data["display_name"],
                 )
 
                 if not success:
-                    return jsonify({'error': 'Registration failed'}), 400
+                    return jsonify({"error": "Registration failed"}), 400
 
                 # Get user
-                user = self.user_manager.get_user(data['username'])
+                user = self.user_manager.get_user(data["username"])
 
                 # Return user data
-                return jsonify({
-                    'username': user['username'],
-                    'email': user['email'],
-                    'display_name': user['display_name'],
-                    'api_key': user['api_key']
-                })
+                return jsonify(
+                    {
+                        "username": user["username"],
+                        "email": user["email"],
+                        "display_name": user["display_name"],
+                        "api_key": user["api_key"],
+                    }
+                )
 
             except Exception as e:
                 logger.error(f"Error registering user: {e}", exc_info=True)
-                return jsonify({'error': str(e)}), 500
+                return jsonify({"error": str(e)}), 500
+
+        # Versioned user registration endpoint
+        @self.app.route("/api/v1/register", methods=["POST"])
+        def register_v1():
+            """
+            API endpoint for user registration (v1).
+            """
+            return register()
 
         # User login endpoint
-        @self.app.route('/api/login', methods=['POST'])
+        @self.app.route("/api/login", methods=["POST"])
         def login():
             """
             API endpoint for user login.
@@ -207,41 +254,53 @@ class SkypeParserAPI:
                 data = request.get_json()
 
                 # Check if required fields are present
-                required_fields = ['username', 'password']
+                required_fields = ["username", "password"]
                 for field in required_fields:
                     if field not in data:
-                        return jsonify({'error': f'Missing required field: {field}'}), 400
+                        return (
+                            jsonify({"error": f"Missing required field: {field}"}),
+                            400,
+                        )
 
                 # Authenticate user
                 success = self.user_manager.authenticate_user(
-                    username=data['username'],
-                    password=data['password']
+                    username=data["username"], password=data["password"]
                 )
 
                 if not success:
-                    return jsonify({'error': 'Invalid username or password'}), 401
+                    return jsonify({"error": "Invalid username or password"}), 401
 
                 # Get user
-                user = self.user_manager.get_user(data['username'])
+                user = self.user_manager.get_user(data["username"])
 
                 # Set session
                 session.permanent = True
-                session['username'] = user['username']
+                session["username"] = user["username"]
 
                 # Return user data
-                return jsonify({
-                    'username': user['username'],
-                    'email': user['email'],
-                    'display_name': user['display_name'],
-                    'api_key': user['api_key']
-                })
+                return jsonify(
+                    {
+                        "username": user["username"],
+                        "email": user["email"],
+                        "display_name": user["display_name"],
+                        "api_key": user["api_key"],
+                    }
+                )
 
             except Exception as e:
                 logger.error(f"Error logging in user: {e}", exc_info=True)
-                return jsonify({'error': str(e)}), 500
+                return jsonify({"error": str(e)}), 500
+
+        # Versioned user login endpoint
+        @self.app.route("/api/v1/login", methods=["POST"])
+        def login_v1():
+            """
+            API endpoint for user login (v1).
+            """
+            return login()
 
         # User logout endpoint
-        @self.app.route('/api/logout', methods=['POST'])
+        @self.app.route("/api/logout", methods=["POST"])
         def logout():
             """
             API endpoint for user logout.
@@ -249,15 +308,21 @@ class SkypeParserAPI:
             try:
                 # Clear session
                 session.clear()
-
-                return jsonify({'message': 'Logged out successfully'})
-
+                return jsonify({"message": "Logged out successfully"})
             except Exception as e:
                 logger.error(f"Error logging out user: {e}", exc_info=True)
-                return jsonify({'error': str(e)}), 500
+                return jsonify({"error": str(e)}), 500
+
+        # Versioned user logout endpoint
+        @self.app.route("/api/v1/logout", methods=["POST"])
+        def logout_v1():
+            """
+            API endpoint for user logout (v1).
+            """
+            return logout()
 
         # User profile endpoint
-        @self.app.route('/api/profile', methods=['GET'])
+        @self.app.route("/api/profile", methods=["GET"])
         @require_api_key
         def profile():
             """
@@ -268,19 +333,29 @@ class SkypeParserAPI:
                 user = g.user
 
                 # Return user data
-                return jsonify({
-                    'username': user['username'],
-                    'email': user['email'],
-                    'display_name': user['display_name'],
-                    'api_key': user['api_key']
-                })
-
+                return jsonify(
+                    {
+                        "username": user["username"],
+                        "email": user["email"],
+                        "display_name": user["display_name"],
+                        "api_key": user["api_key"],
+                    }
+                )
             except Exception as e:
                 logger.error(f"Error getting user profile: {e}", exc_info=True)
-                return jsonify({'error': str(e)}), 500
+                return jsonify({"error": str(e)}), 500
 
-        # API key regeneration endpoint
-        @self.app.route('/api/regenerate-api-key', methods=['POST'])
+        # Versioned user profile endpoint
+        @self.app.route("/api/v1/profile", methods=["GET"])
+        @require_api_key
+        def profile_v1():
+            """
+            API endpoint for getting user profile (v1).
+            """
+            return profile()
+
+        # Regenerate API key endpoint
+        @self.app.route("/api/regenerate-api-key", methods=["POST"])
         @require_api_key
         def regenerate_api_key():
             """
@@ -290,180 +365,309 @@ class SkypeParserAPI:
                 # Get user from g
                 user = g.user
 
-                # Regenerate API key
-                api_key = self.user_manager.regenerate_api_key(user['username'])
-
-                if not api_key:
-                    return jsonify({'error': 'Failed to regenerate API key'}), 400
+                # Generate new API key
+                new_api_key = self.user_manager.regenerate_api_key(user["username"])
 
                 # Return new API key
-                return jsonify({'api_key': api_key})
-
+                return jsonify({"api_key": new_api_key})
             except Exception as e:
                 logger.error(f"Error regenerating API key: {e}", exc_info=True)
-                return jsonify({'error': str(e)}), 500
+                return jsonify({"error": str(e)}), 500
+
+        # Versioned regenerate API key endpoint
+        @self.app.route("/api/v1/regenerate-api-key", methods=["POST"])
+        @require_api_key
+        def regenerate_api_key_v1():
+            """
+            API endpoint for regenerating API key (v1).
+            """
+            return regenerate_api_key()
 
         # Upload endpoint
-        @self.app.route('/api/upload', methods=['POST'])
+        @self.app.route("/api/upload", methods=["POST"])
         @require_api_key
-        def upload_file():
+        def upload():
             """
-            API endpoint for file upload and processing.
+            API endpoint for uploading and processing a Skype export file.
             """
             try:
-                # Check if a file was uploaded
-                if 'file' not in request.files:
-                    return jsonify({'error': 'No file part'}), 400
+                # Check if file is present
+                if "file" not in request.files:
+                    return jsonify({"error": "No file provided"}), 400
 
-                file = request.files['file']
+                file = request.files["file"]
 
-                # Check if the file is empty
-                if file.filename == '':
-                    return jsonify({'error': 'No file selected'}), 400
+                # Check if file is empty
+                if file.filename == "":
+                    return jsonify({"error": "No file selected"}), 400
 
-                # Check if the file type is allowed
+                # Check if file has allowed extension
                 if not self._allowed_file(file.filename):
-                    return jsonify({'error': 'File type not allowed'}), 400
-
-                # Secure the filename
-                filename = secure_filename(file.filename)
-                unique_filename = f"{uuid.uuid4()}_{filename}"
-                file_path = os.path.join(self.upload_folder, unique_filename)
-
-                # Save the file temporarily
-                file.save(file_path)
+                    return (
+                        jsonify(
+                            {
+                                "error": f'File type not allowed. Allowed types: {", ".join(ALLOWED_EXTENSIONS)}'
+                            }
+                        ),
+                        400,
+                    )
 
                 # Get user display name
-                user_display_name = request.form.get('user_display_name', '')
+                user_display_name = request.form.get(
+                    "user_display_name", g.user.get("display_name", "")
+                )
 
-                # If no user display name is provided, use the user's display name
-                if not user_display_name and hasattr(g, 'user'):
-                    user_display_name = g.user.get('display_name', '')
+                # Save file to temporary location
+                filename = secure_filename(file.filename)
+                file_path = os.path.join(
+                    self.upload_folder, f"{uuid.uuid4()}_{filename}"
+                )
+                file.save(file_path)
 
-                # Get file size
-                file_size = os.path.getsize(file_path)
-
-                # Determine if the file should be processed asynchronously
-                process_async = file_size > self.async_threshold
-
-                if process_async:
-                    # Process the file asynchronously
-                    logger.info(f"Processing file asynchronously (size: {file_size} bytes)")
-
-                    # Submit the task to the task queue
+                # Check if file should be processed asynchronously
+                if os.path.getsize(file_path) > self.async_threshold:
+                    # Submit task for asynchronous processing
                     task_id = submit_task(
                         file_path=file_path,
                         user_display_name=user_display_name,
                         db_config=self.db_config,
                         output_dir=self.output_folder,
-                        cleanup=True
                     )
 
-                    # Return the task ID
-                    return jsonify({
-                        'task_id': task_id,
-                        'status': 'processing',
-                        'message': 'File is being processed asynchronously',
-                        'async': True
-                    })
+                    # Return task ID
+                    return jsonify({"task_id": task_id})
                 else:
-                    # Process the file synchronously
-                    logger.info(f"Processing file synchronously (size: {file_size} bytes)")
-
-                    # Create an ETL context
-                    context = ETLContext(
-                        db_config=self.db_config,
-                        output_dir=self.output_folder
-                    )
-
-                    # Process the file through the ETL pipeline
+                    # Process file synchronously
                     pipeline = ETLPipeline(
-                        context=context
+                        context=ETLContext(
+                            db_config=self.db_config, output_dir=self.output_folder
+                        )
                     )
 
-                    # Run the pipeline with the uploaded file
+                    # Run the pipeline
                     results = pipeline.run_pipeline(
-                        file_path=file_path,
-                        user_display_name=user_display_name
+                        file_path=file_path, user_display_name=user_display_name
                     )
 
-                    # Convert results to the format expected by the API
-                    # This maintains backward compatibility with code that expects the old format
-                    if results.get('success', False):
-                        # Extract conversation and message counts
-                        conversation_count = 0
-                        message_count = 0
-
-                        for phase, stats in results.get('phases', {}).items():
-                            if phase == 'transform' and stats:
-                                conversation_count = stats.get('processed_conversations', 0)
-                                message_count = stats.get('processed_messages', 0)
-
-                        # Add backward compatibility fields
-                        results['conversations'] = conversation_count
-                        results['message_count'] = message_count
-
-                    # Clean up the temporary file
+                    # Clean up the file
                     try:
                         os.remove(file_path)
                     except Exception as e:
-                        logger.warning(f"Failed to remove temporary file {file_path}: {e}")
+                        logger.warning(
+                            f"Failed to clean up temporary file {file_path}: {e}"
+                        )
 
-                    # Return the results
+                    # Return results
                     return jsonify(results)
 
+            except RequestEntityTooLarge:
+                return jsonify({"error": "File too large"}), 413
             except ValidationError as e:
-                logger.error(f"Validation error: {e}", exc_info=True)
-                return jsonify({'error': str(e)}), 400
+                return jsonify({"error": str(e)}), 400
             except Exception as e:
-                logger.error(f"Error processing uploaded file: {e}", exc_info=True)
-                return jsonify({'error': str(e)}), 500
+                logger.error(f"Error processing upload: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+
+        # Versioned upload endpoint
+        @self.app.route("/api/v1/upload", methods=["POST"])
+        @require_api_key
+        def upload_v1():
+            """
+            API endpoint for uploading and processing a Skype export file (v1).
+            """
+            return upload()
 
         # Task status endpoint
-        @self.app.route('/api/task/<task_id>', methods=['GET'])
+        @self.app.route("/api/status/<task_id>", methods=["GET"])
         @require_api_key
-        def get_task_status(task_id):
+        def task_status(task_id):
             """
-            API endpoint for checking task status.
+            API endpoint for checking the status of a task.
             """
-            tracker = get_tracker(task_id)
-            if not tracker:
-                return jsonify({'error': 'Task not found'}), 404
+            try:
+                # Get tracker for task
+                tracker = get_tracker(task_id)
 
-            # Get progress data
-            progress_data = tracker._get_progress_data()
+                # Check if tracker exists
+                if not tracker:
+                    return jsonify({"error": f"Task {task_id} not found"}), 404
 
-            return jsonify(progress_data)
+                # Return status
+                return jsonify(tracker.get_status())
+            except Exception as e:
+                logger.error(f"Error getting task status: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+
+        # Versioned task status endpoint
+        @self.app.route("/api/v1/status/<task_id>", methods=["GET"])
+        @require_api_key
+        def task_status_v1(task_id):
+            """
+            API endpoint for checking the status of a task (v1).
+            """
+            return task_status(task_id)
+
+        # List exports endpoint
+        @self.app.route("/api/exports", methods=["GET"])
+        @require_api_key
+        def list_exports():
+            """
+            API endpoint for listing all exports.
+            """
+            try:
+                # Get user from g
+                user = g.user
+
+                # TODO: Implement listing exports from database
+                # This is a placeholder implementation
+                return jsonify(
+                    [
+                        {
+                            "export_id": 123,
+                            "user_id": user["username"],
+                            "export_date": datetime.now().isoformat(),
+                            "conversation_count": 42,
+                            "message_count": 1234,
+                        }
+                    ]
+                )
+            except Exception as e:
+                logger.error(f"Error listing exports: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+
+        # Versioned list exports endpoint
+        @self.app.route("/api/v1/exports", methods=["GET"])
+        @require_api_key
+        def list_exports_v1():
+            """
+            API endpoint for listing all exports (v1).
+            """
+            return list_exports()
+
+        # Analysis endpoint
+        @self.app.route("/api/analysis/<int:export_id>", methods=["GET"])
+        @require_api_key
+        def analysis(export_id):
+            """
+            API endpoint for getting analysis data for an export.
+            """
+            try:
+                # TODO: Implement getting analysis data from database
+                # This is a placeholder implementation
+                return jsonify(
+                    {
+                        "message_count": 1234,
+                        "conversation_count": 42,
+                        "date_range": {
+                            "start": "2022-01-01T00:00:00.000000",
+                            "end": datetime.now().isoformat(),
+                        },
+                        "top_contacts": [
+                            {"name": "Jane Doe", "message_count": 567},
+                            {"name": "John Smith", "message_count": 456},
+                            {"name": "Bob Johnson", "message_count": 345},
+                        ],
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Error getting analysis data: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+
+        # Versioned analysis endpoint
+        @self.app.route("/api/v1/analysis/<int:export_id>", methods=["GET"])
+        @require_api_key
+        def analysis_v1(export_id):
+            """
+            API endpoint for getting analysis data for an export (v1).
+            """
+            return analysis(export_id)
+
+        # Report endpoint
+        @self.app.route("/api/report/<int:export_id>", methods=["GET"])
+        @require_api_key
+        def report(export_id):
+            """
+            API endpoint for getting an HTML report for an export.
+            """
+            try:
+                # TODO: Implement generating HTML report
+                # This is a placeholder implementation
+                html = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Skype Export Report</title>
+                </head>
+                <body>
+                    <h1>Skype Export Report</h1>
+                    <p>Export ID: {export_id}</p>
+                    <p>Generated at: {datetime.now().isoformat()}</p>
+                    <p>This is a placeholder report.</p>
+                </body>
+                </html>
+                """
+                return Response(html, mimetype="text/html")
+            except Exception as e:
+                logger.error(f"Error generating report: {e}", exc_info=True)
+                return jsonify({"error": str(e)}), 500
+
+        # Versioned report endpoint
+        @self.app.route("/api/v1/report/<int:export_id>", methods=["GET"])
+        @require_api_key
+        def report_v1(export_id):
+            """
+            API endpoint for getting an HTML report for an export (v1).
+            """
+            return report(export_id)
 
     def _setup_error_handlers(self) -> None:
-        """Set up error handlers for the API."""
+        """Set up error handlers."""
+
+        @self.app.errorhandler(400)
+        def bad_request(e):
+            """Handle 400 Bad Request errors."""
+            return jsonify({"error": str(e)}), 400
+
+        @self.app.errorhandler(401)
+        def unauthorized(e):
+            """Handle 401 Unauthorized errors."""
+            return jsonify({"error": "Unauthorized"}), 401
 
         @self.app.errorhandler(404)
-        def page_not_found(e):
-            return jsonify({'error': 'Not found'}), 404
+        def not_found(e):
+            """Handle 404 Not Found errors."""
+            return jsonify({"error": "Not found"}), 404
+
+        @self.app.errorhandler(413)
+        def request_entity_too_large(e):
+            """Handle 413 Request Entity Too Large errors."""
+            return jsonify({"error": "File too large"}), 413
+
+        @self.app.errorhandler(429)
+        def too_many_requests(e):
+            """Handle 429 Too Many Requests errors."""
+            return jsonify({"error": "Too many requests"}), 429
 
         @self.app.errorhandler(500)
-        def server_error(e):
-            return jsonify({'error': 'Internal server error'}), 500
-
-        @self.app.errorhandler(RequestEntityTooLarge)
-        def request_entity_too_large(e):
-            return jsonify({
-                'error': f'File too large. Maximum size is {MAX_CONTENT_LENGTH/(1024*1024)}MB'
-            }), 413
+        def internal_server_error(e):
+            """Handle 500 Internal Server Error errors."""
+            logger.error(f"Internal server error: {e}", exc_info=True)
+            return jsonify({"error": "Internal server error"}), 500
 
     def _setup_socketio_events(self) -> None:
-        """Set up SocketIO events."""
+        """Set up Socket.IO events."""
 
-        @self.socketio.on('connect')
+        @self.socketio.on("connect")
         def handle_connect():
+            """Handle client connection."""
             logger.info(f"Client connected: {request.sid}")
 
-        @self.socketio.on('disconnect')
+        @self.socketio.on("disconnect")
         def handle_disconnect():
+            """Handle client disconnection."""
             logger.info(f"Client disconnected: {request.sid}")
 
-        @self.socketio.on('subscribe')
+        @self.socketio.on("subscribe")
         def handle_subscribe(data):
             """
             Handle client subscription to task updates.
@@ -471,25 +675,19 @@ class SkypeParserAPI:
             Args:
                 data: Dictionary containing task_id
             """
-            task_id = data.get('task_id')
+            task_id = data.get("task_id")
             if not task_id:
-                return {'error': 'No task_id provided'}
+                return {"error": "No task_id provided"}
 
             logger.info(f"Client {request.sid} subscribed to task {task_id}")
 
-            # Get the tracker for this task
+            # Get tracker for task
             tracker = get_tracker(task_id)
             if not tracker:
-                return {'error': 'Task not found'}
+                return {"error": f"Task {task_id} not found"}
 
-            # Add a listener that emits progress updates to this client
-            def emit_progress(progress_data):
-                self.socketio.emit(f'task_progress_{task_id}', progress_data, room=request.sid)
-
-            tracker.add_listener(emit_progress)
-
-            # Return initial progress data
-            return tracker._get_progress_data()
+            # Return current status
+            return tracker.get_status()
 
     def _allowed_file(self, filename: str) -> bool:
         """
@@ -501,10 +699,11 @@ class SkypeParserAPI:
         Returns:
             bool: True if the file has an allowed extension
         """
-        return '.' in filename and \
-               filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+        return (
+            "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+        )
 
-    def run(self, host: str = '0.0.0.0', port: int = 5000, debug: bool = False) -> None:
+    def run(self, host: str = "0.0.0.0", port: int = 5000, debug: bool = False) -> None:
         """
         Run the API server.
 
@@ -515,11 +714,40 @@ class SkypeParserAPI:
         """
         self.socketio.run(self.app, host=host, port=port, debug=debug)
 
-    def get_app(self) -> Flask:
-        """
-        Get the Flask application.
 
-        Returns:
-            Flask: The Flask application
-        """
-        return self.app
+def create_app(
+    db_config: Optional[Dict[str, Any]] = None,
+    upload_dir: Optional[str] = None,
+    output_dir: Optional[str] = None,
+    enable_auth: bool = True,
+    api_key: Optional[str] = None,
+    require_auth: bool = True,
+    user_file: Optional[str] = None,
+    secret_key: Optional[str] = None,
+) -> Flask:
+    """
+    Create a Flask application for the Skype Parser API.
+
+    Args:
+        db_config: Database configuration for the ETL pipeline
+        upload_dir: Directory for temporary file uploads
+        output_dir: Directory for ETL pipeline output
+        enable_auth: Whether to enable authentication
+        api_key: API key for authentication
+        require_auth: Whether to require authentication for all endpoints
+        user_file: Path to the user data file
+        secret_key: Secret key for session encryption
+
+    Returns:
+        Flask: Flask application
+    """
+    api = SkypeParserAPI(
+        upload_folder=upload_dir,
+        output_folder=output_dir,
+        db_config=db_config,
+        api_key=api_key,
+        enable_cors=True,
+        user_file=user_file,
+        secret_key=secret_key,
+    )
+    return api.app

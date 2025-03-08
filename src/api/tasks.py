@@ -6,38 +6,38 @@ using Celery. It handles long-running tasks such as processing large Skype
 export files.
 """
 
-import os
 import logging
+import os
 import tempfile
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 from celery import Celery
-from celery.signals import task_success, task_failure
+from celery.signals import task_failure, task_success
 
 # Import the new ETL pipeline
-from src.db import ETLPipeline, ETLContext
-from src.db.progress_tracker import get_tracker, create_tracker, remove_tracker
+from src.db import ETLContext, ETLPipeline
+from src.db.progress_tracker import create_tracker, get_tracker, remove_tracker
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 # Initialize Celery
-celery_app = Celery('skype_parser')
+celery_app = Celery("skype_parser")
 
 # Configure Celery
 celery_app.conf.update(
-    task_serializer='json',
-    accept_content=['json'],
-    result_serializer='json',
-    timezone='UTC',
+    task_serializer="json",
+    accept_content=["json"],
+    result_serializer="json",
+    timezone="UTC",
     enable_utc=True,
 )
 
-@celery_app.task(bind=True, name='process_skype_export')
+
+@celery_app.task(bind=True, name="process_skype_export")
 def process_skype_export(
     self,
     file_path: str,
@@ -45,7 +45,7 @@ def process_skype_export(
     db_config: Optional[Dict[str, Any]] = None,
     output_dir: Optional[str] = None,
     task_id: Optional[str] = None,
-    cleanup: bool = True
+    cleanup: bool = True,
 ) -> Dict[str, Any]:
     """
     Process a Skype export file asynchronously.
@@ -71,27 +71,36 @@ def process_skype_export(
 
         # Create an ETL context with the task ID
         context = ETLContext(
-            db_config=db_config,
-            output_dir=output_dir,
-            task_id=task_id
+            db_config=db_config, output_dir=output_dir, task_id=task_id
         )
 
         # Initialize the ETL pipeline with the context
-        pipeline = ETLPipeline(
-            context=context
-        )
+        pipeline = ETLPipeline(context=context)
 
         # Run the pipeline
         results = pipeline.run_pipeline(
-            file_path=file_path,
-            user_display_name=user_display_name
+            file_path=file_path, user_display_name=user_display_name
         )
 
         # Add task ID to results
-        results['task_id'] = task_id
+        results["task_id"] = task_id
 
-        # Mark task as complete
-        tracker.complete(message="Processing completed successfully")
+        # Extract export_id if available
+        export_id = None
+        if results.get("success", False):
+            # Try to get export_id from the results
+            export_id = results.get("export_id")
+
+            # If not found directly, try to get it from the load phase
+            if export_id is None and "phases" in results:
+                load_phase = results.get("phases", {}).get("load", {})
+                if load_phase:
+                    export_id = load_phase.get("export_id")
+
+        # Mark task as complete with export_id if available
+        tracker.complete(
+            message="Processing completed successfully", export_id=export_id
+        )
 
         # Clean up the file if requested
         if cleanup and os.path.exists(file_path):
@@ -103,19 +112,19 @@ def process_skype_export(
 
         # Convert results to the format expected by the API
         # This maintains backward compatibility with code that expects the old format
-        if results.get('success', False):
+        if results.get("success", False):
             # Extract conversation and message counts
             conversation_count = 0
             message_count = 0
 
-            for phase, stats in results.get('phases', {}).items():
-                if phase == 'transform' and stats:
-                    conversation_count = stats.get('processed_conversations', 0)
-                    message_count = stats.get('processed_messages', 0)
+            for phase, stats in results.get("phases", {}).items():
+                if phase == "transform" and stats:
+                    conversation_count = stats.get("processed_conversations", 0)
+                    message_count = stats.get("processed_messages", 0)
 
             # Add backward compatibility fields
-            results['conversations'] = conversation_count
-            results['message_count'] = message_count
+            results["conversations"] = conversation_count
+            results["message_count"] = message_count
 
         return results
 
@@ -125,28 +134,26 @@ def process_skype_export(
         # Update the tracker with the error
         tracker = get_tracker(task_id)
         if tracker:
-            tracker.error(str(e))
+            tracker.error(message="Error processing Skype export", error=str(e))
 
         # Return error results
-        return {
-            'success': False,
-            'error': str(e),
-            'task_id': task_id
-        }
+        return {"success": False, "error": str(e), "task_id": task_id}
 
-@task_success.connect(sender='process_skype_export')
+
+@task_success.connect(sender="process_skype_export")
 def on_task_success(sender=None, result=None, **kwargs):
     """
     Handle successful task completion.
     """
-    if result and 'task_id' in result:
-        task_id = result['task_id']
+    if result and "task_id" in result:
+        task_id = result["task_id"]
         logger.info(f"Task {task_id} completed successfully")
 
         # Clean up the tracker
         remove_tracker(task_id)
 
-@task_failure.connect(sender='process_skype_export')
+
+@task_failure.connect(sender="process_skype_export")
 def on_task_failure(sender=None, task_id=None, exception=None, **kwargs):
     """
     Handle task failure.
@@ -156,15 +163,16 @@ def on_task_failure(sender=None, task_id=None, exception=None, **kwargs):
     # Update the tracker with the error
     tracker = get_tracker(task_id)
     if tracker:
-        tracker.error(str(exception))
+        tracker.error(message="Task failed", error=str(exception))
         remove_tracker(task_id)
+
 
 def submit_task(
     file_path: str,
     user_display_name: Optional[str] = None,
     db_config: Optional[Dict[str, Any]] = None,
     output_dir: Optional[str] = None,
-    cleanup: bool = True
+    cleanup: bool = True,
 ) -> str:
     """
     Submit a task to process a Skype export file asynchronously.
@@ -185,7 +193,7 @@ def submit_task(
         user_display_name=user_display_name,
         db_config=db_config,
         output_dir=output_dir,
-        cleanup=cleanup
+        cleanup=cleanup,
     )
 
     # Create a progress tracker for this task

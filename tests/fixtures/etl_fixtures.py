@@ -17,7 +17,7 @@ from src.db.etl.context import ETLContext
 from src.db.etl.extractor import Extractor
 from src.db.etl.loader import Loader
 from src.db.etl.transformer import Transformer
-from src.parser.content_extractor import ContentExtractor
+from src.parser.core_parser import ContentExtractor
 from src.utils.file_handler import FileHandler
 from src.utils.interfaces import (
     ContentExtractorProtocol,
