@@ -6,6 +6,8 @@ that has been processed by the ETL pipeline.
 """
 
 import logging
+import json
+import os
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, timedelta
 
@@ -13,6 +15,63 @@ from src.utils.interfaces import DatabaseConnectionProtocol
 from src.utils.di import get_service
 
 logger = logging.getLogger(__name__)
+
+# Add the generate_report function for backward compatibility
+def generate_report(export_id: int, output_file: Optional[str] = None,
+                    db_connection: Optional[DatabaseConnectionProtocol] = None) -> Dict[str, Any]:
+    """
+    Generate a report for a Skype export.
+
+    This function is a wrapper around SkypeReportGenerator for backward compatibility.
+
+    Args:
+        export_id: The ID of the export to report on
+        output_file: Optional path to save the report to
+        db_connection: Optional database connection to use
+
+    Returns:
+        A dictionary containing the report data
+    """
+    logger.info(f"Generating report for export {export_id}")
+
+    # Create a report generator
+    report_generator = SkypeReportGenerator(db_connection)
+
+    # Get export summary
+    export_summary = report_generator.get_export_summary(export_id)
+
+    # Get conversation statistics
+    conversation_stats = report_generator.get_conversation_statistics(export_id)
+
+    # Get message type distribution
+    message_types = report_generator.get_message_type_distribution(export_id)
+
+    # Get activity by hour
+    activity_by_hour = report_generator.get_activity_by_hour(export_id)
+
+    # Get activity by day of week
+    activity_by_day = report_generator.get_activity_by_day_of_week(export_id)
+
+    # Compile the report
+    report = {
+        "export_summary": export_summary,
+        "conversation_statistics": conversation_stats,
+        "message_type_distribution": message_types,
+        "activity_by_hour": activity_by_hour,
+        "activity_by_day_of_week": activity_by_day
+    }
+
+    # Save the report to a file if requested
+    if output_file:
+        try:
+            os.makedirs(os.path.dirname(output_file), exist_ok=True)
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(report, f, indent=2, default=str)
+            logger.info(f"Report saved to {output_file}")
+        except Exception as e:
+            logger.error(f"Error saving report to {output_file}: {e}")
+
+    return report
 
 class SkypeReportGenerator:
     """

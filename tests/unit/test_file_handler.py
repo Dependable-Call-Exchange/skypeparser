@@ -6,7 +6,7 @@ Tests for the file_handler.py module.
 import os
 import json
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 # Add the parent directory to the path so we can import from src
@@ -15,14 +15,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src.utils.file_handler import (
     read_file,
-    read_file_object,
+    read_file_obj,
     read_tarfile,
-    read_tarfile_object,
     extract_tar_contents,
-    list_tar_contents
+    list_tar_contents,
+    FileHandler,
+    read_tar_file_obj
 )
 from src.utils.validation import ValidationError
 from tests.fixtures import TestBase, patch_validation, create_test_file, create_test_json_file, create_test_tar_file
+from src.utils.interfaces import FileHandlerProtocol
 
 
 class TestFileHandler(TestBase):
@@ -53,8 +55,7 @@ class TestFileHandler(TestBase):
         self.assertEqual(data, self.json_data)
 
         # Test with non-existent file
-        mock_validate_path.side_effect = ValidationError("File does not exist")
-        with self.assertRaises(ValidationError):
+        with self.assertRaises(ValueError):
             read_file(os.path.join(self.test_dir, "nonexistent.json"))
 
         # Reset the mock
@@ -64,19 +65,19 @@ class TestFileHandler(TestBase):
         # Test with non-JSON file
         txt_file = create_test_file(self.test_dir, "test.txt", "test")
 
-        with self.assertRaises(ValidationError):
+        with self.assertRaises(ValueError):
             read_file(txt_file)
 
     def test_read_file_object(self):
         """Test read_file_object function."""
         # Test with valid file object
         with open(self.json_file, "rb") as f:
-            data = read_file_object(f)
+            data = read_file_obj(f)
             self.assertEqual(data, self.json_data)
 
         # Test with invalid file object
         with self.assertRaises(ValidationError):
-            read_file_object(None)
+            read_file_obj(None)
 
     @patch_validation
     def test_read_tarfile_auto_select(self, mock_validate_path):
@@ -101,25 +102,34 @@ class TestFileHandler(TestBase):
 
     def test_read_tarfile_object(self):
         """Test read_tarfile_object function."""
-        # Create a mock for the read_tarfile function to avoid the validation issue
-        with patch('src.utils.file_handler.read_tarfile') as mock_read_tarfile:
-            # Configure the mock to return a known value
-            mock_read_tarfile.return_value = {"file": "1"}
+        # Create a mock for the FileHandler.read_tarfile_object method
+        mock_file_handler = MagicMock()
+        mock_file_handler.read_tarfile_object.return_value = {"file": "1"}
 
+        # Mock the get_service function to return our mock file handler
+        with patch('src.utils.di.get_service', return_value=mock_file_handler) as mock_get_service:
             # Test with valid file object
             with open(self.tar_file, "rb") as f:
-                data = read_tarfile_object(f, auto_select=True)
+                data = read_tar_file_obj(f, auto_select=True)
                 self.assertEqual(data, {"file": "1"})
 
-                # Verify that read_tarfile was called with the right parameters
-                mock_read_tarfile.assert_called_once()
-                args, kwargs = mock_read_tarfile.call_args
-                # The third positional argument should be auto_select=True
-                self.assertEqual(args[2], True)
+                # Verify that get_service was called with FileHandlerProtocol
+                mock_get_service.assert_called_once_with(FileHandlerProtocol)
 
-        # Test with invalid file object
-        with self.assertRaises(ValidationError):
-            read_tarfile_object(None)
+                # Verify that read_tarfile_object was called with the right parameters
+                mock_file_handler.read_tarfile_object.assert_called_once()
+                args, kwargs = mock_file_handler.read_tarfile_object.call_args
+                self.assertEqual(args[0], f)
+                # Check if auto_select is either a positional argument or a keyword argument
+                if len(args) > 1:
+                    self.assertEqual(args[1], True)  # auto_select as positional arg
+                else:
+                    self.assertEqual(kwargs.get('auto_select'), True)  # auto_select as keyword arg
+
+        # Test with invalid file object - we'll use a direct instance of FileHandler for this
+        with self.assertRaises(ValueError):
+            handler = FileHandler()
+            handler.read_tarfile_object(None)
 
     @patch_validation
     def test_extract_tar_contents(self, mock_validate_path):

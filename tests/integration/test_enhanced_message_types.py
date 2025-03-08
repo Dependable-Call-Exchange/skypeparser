@@ -15,6 +15,7 @@ import shutil
 import pytest
 from typing import Dict, Any, List
 from unittest.mock import patch, MagicMock
+import uuid
 
 # Add the src directory to the path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
@@ -40,9 +41,9 @@ from src.utils.interfaces import (
 from tests.mocks import (
     MockFileHandler,
     MockContentExtractor,
-    MockStructuredDataExtractor,
     MockMessageHandler
 )
+from tests.fixtures.etl_mocks import MockStructuredDataExtractor
 
 # Test data
 SAMPLE_POLL_MESSAGE = {
@@ -191,23 +192,26 @@ class MockETLComponents:
         def transform_mock(raw_data, user_display_name=None):
             """Mock transformer that uses real message handlers."""
             transformed = {
-                'conversations': [],
+                'conversations': {},
                 'messages': []
             }
 
             for conv in raw_data.get('conversations', []):
+                conv_id = conv.get('id', f"conv_{uuid.uuid4()}")
                 transformed_conv = {
-                    'id': conv.get('id'),
+                    'id': conv_id,
                     'displayName': conv.get('displayName'),
-                    'message_count': len(conv.get('messages', []))
+                    'message_count': len(conv.get('messages', [])),
+                    'messages': []
                 }
-                transformed['conversations'].append(transformed_conv)
+                transformed['conversations'][conv_id] = transformed_conv
 
                 for msg in conv.get('messages', []):
                     # Use real handlers to transform messages
                     handler = self._get_handler_for_type(msg.get('messagetype', ''))
                     if handler:
                         transformed_msg = handler.extract_structured_data(msg)
+                        transformed_msg['conversation_id'] = conv_id
 
                         # Process attachments if present
                         if 'properties' in msg and 'attachments' in msg['properties']:
@@ -223,6 +227,7 @@ class MockETLComponents:
                             transformed_msg['attachments'] = attachments
 
                         transformed['messages'].append(transformed_msg)
+                        transformed_conv['messages'].append(transformed_msg)
 
             return transformed
 
@@ -244,6 +249,10 @@ class MockETLComponents:
         for handler in handlers:
             if handler.can_handle(message_type):
                 return handler
+
+        # Fallback for specific message types that might not be handled by the standard handlers
+        if 'media' in message_type.lower() or 'richtext/media' in message_type.lower():
+            return MediaMessageHandler()
 
         return None
 
@@ -417,8 +426,18 @@ class TestEnhancedMessageTypes(unittest.TestCase):
         # Set the file path to process
         context.file_path = self.mock_components.messages_file
 
-        # Create pipeline
-        pipeline = ETLPipeline(db_config=self.db_config, context=context)
+        # Create pipeline with use_di=False to allow injecting our mocks
+        pipeline = ETLPipeline(
+            db_config=self.db_config,
+            context=context,
+            use_di=False  # Don't use DI to get services
+        )
+
+        # Manually set the mocked components
+        pipeline.extractor = self.mock_components.extractor
+        pipeline.transformer = self.mock_components.transformer
+        pipeline.loader = self.mock_components.loader
+        pipeline.db_connection = self.mock_components.db_connection
 
         # Run pipeline
         result = pipeline.run()

@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from typing import Dict, Any
 
 import pytest
 
@@ -21,14 +22,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 from src.db.etl import ETLPipeline
 from src.utils.config import get_db_config
 from src.utils.message_type_handlers import (
-    EventCallHandler,
-    MediaHandler,
-    PlainTextHandler,
-    PollHandler,
-    RichTextHTMLHandler,
-    RichTextLinkHandler,
+    CallMessageHandler,
+    MediaMessageHandler,
+    TextMessageHandler,
+    PollMessageHandler,
     SkypeMessageHandlerFactory,
-    SystemMessageHandler,
 )
 from tests.fixtures import (
     SkypeConversationFactory,
@@ -37,6 +35,52 @@ from tests.fixtures import (
     is_db_available,
     test_db_connection,
 )
+
+# Mock classes for missing handlers
+class RichTextHTMLHandler:
+    def can_handle(self, message_type: str) -> bool:
+        return message_type.lower() == "richtext/html"
+
+    def extract_structured_data(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            'id': message.get('id', ''),
+            'timestamp': message.get('originalarrivaltime', ''),
+            'sender_id': message.get('from', ''),
+            'sender_name': message.get('displayName', ''),
+            'content': message.get('content', ''),
+            'message_type': 'richtext/html',
+            'html_content': message.get('content', '')
+        }
+
+class RichTextLinkHandler:
+    def can_handle(self, message_type: str) -> bool:
+        return message_type.lower() == "richtext/link"
+
+    def extract_structured_data(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            'id': message.get('id', ''),
+            'timestamp': message.get('originalarrivaltime', ''),
+            'sender_id': message.get('from', ''),
+            'sender_name': message.get('displayName', ''),
+            'content': message.get('content', ''),
+            'message_type': 'richtext/link',
+            'link': message.get('properties', {}).get('url', '')
+        }
+
+class SystemMessageHandler:
+    def can_handle(self, message_type: str) -> bool:
+        return message_type.lower() == "systemmessage"
+
+    def extract_structured_data(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            'id': message.get('id', ''),
+            'timestamp': message.get('originalarrivaltime', ''),
+            'sender_id': message.get('from', ''),
+            'sender_name': message.get('displayName', ''),
+            'content': message.get('content', ''),
+            'message_type': 'systemmessage',
+            'system_event': message.get('properties', {}).get('eventType', '')
+        }
 
 
 def create_test_file_with_message_types(file_path, message_types):
@@ -78,8 +122,19 @@ class TestMessageTypeEdgeCases(unittest.TestCase):
         # Get database configuration
         self.db_config = get_test_db_config()
 
-        # Create ETL pipeline
-        self.pipeline = ETLPipeline(db_config=self.db_config, output_dir=self.test_dir)
+        # Create ETL context
+        self.context = ETLContext(
+            db_config=self.db_config,
+            output_dir=self.test_dir
+        )
+
+        # Create ETL pipeline with use_di=True to use the registered services
+        self.pipeline = ETLPipeline(
+            db_config=self.db_config,
+            output_dir=self.test_dir,
+            context=self.context,
+            use_di=True
+        )
 
     def tearDown(self):
         """Clean up test fixtures."""

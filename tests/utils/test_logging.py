@@ -127,10 +127,40 @@ class LogCapture:
         if level:
             logs = [log for log in logs if log.get('level') == level]
 
-        return any(
-            message_substring in log.get('message', '')
-            for log in logs
-        )
+        # Check message field
+        if any(message_substring in log.get('message', '') for log in logs):
+            return True
+
+        # Check exception fields
+        for log in logs:
+            if 'exception' in log:
+                exception = log['exception']
+                if message_substring in exception.get('type', ''):
+                    return True
+                if message_substring in exception.get('message', ''):
+                    return True
+                if isinstance(exception.get('traceback'), list):
+                    if any(message_substring in line for line in exception['traceback']):
+                        return True
+                elif isinstance(exception.get('traceback'), str):
+                    if message_substring in exception['traceback']:
+                        return True
+
+        # Check context fields
+        for log in logs:
+            if 'context' in log:
+                context = log['context']
+                if message_substring in str(context):
+                    return True
+
+        # Check extra fields
+        for log in logs:
+            for key, value in log.items():
+                if key not in ['message', 'level', 'logger', 'timestamp', 'module', 'function', 'line', 'exception', 'context']:
+                    if message_substring in str(value):
+                        return True
+
+        return False
 
     def assert_log_matches(self, predicate, message: Optional[str] = None) -> bool:
         """

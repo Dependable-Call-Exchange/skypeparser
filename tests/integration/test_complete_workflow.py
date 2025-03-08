@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 
 from src.db.etl import ETLPipeline
 from src.api.skype_api import create_app
-from src.analysis.reporting import generate_report
+from src.analysis.reporting import SkypeReportGenerator
 from tests.fixtures import (
     BASIC_SKYPE_DATA,
     COMPLEX_SKYPE_DATA,

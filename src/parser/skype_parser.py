@@ -41,12 +41,118 @@ logger = logging.getLogger(__name__)
 ETL_AVAILABLE = False
 if PSYCOPG2_AVAILABLE:
     try:
-        from ..db.etl_pipeline import SkypeETLPipeline
+        from ..db.etl.pipeline_manager import ETLPipeline
         ETL_AVAILABLE = True
     except ImportError:
         logger.warning("ETL pipeline module not available. Database operations will be disabled.")
 else:
     logger.warning("psycopg2 is not available. Database operations will be disabled.")
+
+
+class SkypeETLPipeline:
+    """
+    Wrapper for the ETL pipeline to process Skype export data.
+
+    This class provides a simplified interface for using the ETL pipeline
+    with Skype export data, handling database connections and configuration.
+    """
+
+    def __init__(
+        self,
+        db_name: str,
+        db_user: str,
+        db_password: str = None,
+        db_host: str = "localhost",
+        db_port: int = 5432,
+        output_dir: str = None,
+        memory_limit_mb: int = 1024,
+        parallel_processing: bool = True
+    ):
+        """
+        Initialize the Skype ETL pipeline.
+
+        Args:
+            db_name: Database name
+            db_user: Database user
+            db_password: Database password
+            db_host: Database host
+            db_port: Database port
+            output_dir: Output directory for exported files
+            memory_limit_mb: Memory limit in MB
+            parallel_processing: Whether to use parallel processing
+        """
+        if not ETL_AVAILABLE:
+            raise ImportError(
+                "ETL pipeline is not available. Please ensure psycopg2 is installed."
+            )
+
+        # Create database configuration
+        self.db_config = {
+            "dbname": db_name,
+            "user": db_user,
+            "password": db_password,
+            "host": db_host,
+            "port": db_port
+        }
+
+        # Store other parameters
+        self.output_dir = output_dir
+        self.memory_limit_mb = memory_limit_mb
+        self.parallel_processing = parallel_processing
+
+        # Initialize the ETL pipeline
+        self.pipeline = ETLPipeline(
+            db_config=self.db_config,
+            output_dir=self.output_dir,
+            memory_limit_mb=self.memory_limit_mb,
+            parallel_processing=self.parallel_processing
+        )
+
+        logger.info("Initialized Skype ETL pipeline")
+
+    def run_pipeline(
+        self,
+        input_file: str,
+        is_tar: bool = False,
+        json_index: int = None,
+        output_dir: str = None,
+        user_display_name: str = None
+    ) -> bool:
+        """
+        Run the ETL pipeline on a Skype export file.
+
+        Args:
+            input_file: Path to the input file
+            is_tar: Whether the input file is a TAR archive
+            json_index: Index of the JSON file to extract from TAR (if applicable)
+            output_dir: Output directory for exported files
+            user_display_name: User display name for the export
+
+        Returns:
+            True if the pipeline completed successfully, False otherwise
+        """
+        try:
+            # Override output directory if provided
+            if output_dir:
+                self.pipeline.output_dir = output_dir
+
+            # Run the pipeline
+            result = self.pipeline.run_pipeline(
+                file_path=input_file,
+                user_display_name=user_display_name
+            )
+
+            # Check if the pipeline completed successfully
+            if result and "export_id" in result:
+                logger.info(f"ETL pipeline completed successfully. Export ID: {result['export_id']}")
+                return True
+            else:
+                logger.error("ETL pipeline failed to complete")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error running ETL pipeline: {e}")
+            return False
 
 
 def main():
@@ -57,8 +163,8 @@ def main():
         args = get_commandline_args()
 
         # Validate that the input file exists
-        if not os.path.exists(args.filename):
-            logger.error(f"File not found: {args.filename}")
+        if not os.path.exists(args.input_file):
+            logger.error(f"File not found: {args.input_file}")
             sys.exit(1)
 
         # Create output directory if specified
@@ -77,7 +183,7 @@ def main():
 
         # Read the Skype export file
         try:
-            main_file = read_file(args.filename) if not args.tar else read_tarfile(args.filename, args.select_json)
+            main_file = read_file(args.input_file) if not args.extract_tar else read_tarfile(args.input_file, args.select_json)
         except (json.JSONDecodeError, KeyError, IndexError) as e:
             logger.error(f"Error reading file: {e}")
             sys.exit(1)
@@ -99,8 +205,8 @@ def main():
 
                 # Run the ETL pipeline
                 result = etl.run_pipeline(
-                    input_file=args.filename,
-                    is_tar=args.tar,
+                    input_file=args.input_file,
+                    is_tar=args.extract_tar,
                     json_index=args.select_json,
                     output_dir=args.output_dir,
                     user_display_name=user_display_name
@@ -108,16 +214,16 @@ def main():
 
                 if result:
                     logger.info("ETL pipeline completed successfully.")
-                    if not args.text_output and args.output_format not in ['json', 'csv']:
+                    if not args.text_output and args.format not in ['json', 'csv']:
                         logger.info("\nAll done!")
                         return
                 else:
                     logger.error("ETL pipeline failed.")
-                    if not args.text_output and args.output_format not in ['json', 'csv']:
+                    if not args.text_output and args.format not in ['json', 'csv']:
                         sys.exit(1)
             except Exception as e:
                 logger.error(f"Error in ETL pipeline: {e}")
-                if not args.text_output and args.output_format not in ['json', 'csv']:
+                if not args.text_output and args.format not in ['json', 'csv']:
                     sys.exit(1)
         elif args.store_db and not ETL_AVAILABLE:
             logger.error("Database storage requested but ETL pipeline is not available. "
@@ -174,7 +280,7 @@ def main():
         try:
             export_conversations(
                 structured_data,
-                args.output_format,
+                args.format,
                 args.output_dir or '',
                 args.overwrite,
                 args.skip_existing,
@@ -207,13 +313,14 @@ def get_commandline_args():
         argparse.Namespace: Parsed command-line arguments
     """
     command = argparse.ArgumentParser(description="Parse Skype chat history from JSON or TAR files")
-    command.add_argument('filename',
+    command.add_argument('input_file',
                          help='The path/name to the Skype json/tar file you want to parse')
     command.add_argument('-c', '--choose',
                          action='store_true',
                          help="Use this flag to choose which conversations you'd like to parse interactively")
-    command.add_argument('-t', '--tar',
+    command.add_argument('-t', '--extract-tar',
                          action='store_true',
+                         dest='extract_tar',
                          help='Use this flag to feed in a tar file')
     command.add_argument('-o', '--output-dir',
                          help='Directory to save the output files')
@@ -233,10 +340,10 @@ def get_commandline_args():
     command.add_argument('-v', '--verbose',
                          action='store_true',
                          help='Enable verbose logging')
-    command.add_argument('-f', '--output-format',
-                         choices=['text', 'json', 'csv'],
-                         default='text',
-                         help='Output format (text, json, or csv)')
+    command.add_argument('-f', '--format',
+                         choices=['text', 'json', 'csv', 'all'],
+                         default='all',
+                         help='Output format (text, json, csv, or all)')
     command.add_argument('--text-output',
                          action='store_true',
                          help='Generate text output in addition to structured output')

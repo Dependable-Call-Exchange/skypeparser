@@ -315,12 +315,14 @@ class ETLContext:
 
     @with_context(operation="start_phase")
     @log_call(level=logging.INFO)
-    def start_phase(self, phase_name: str) -> None:
+    def start_phase(self, phase_name: str, total_conversations: Optional[int] = None, total_messages: Optional[int] = None) -> None:
         """
         Start a new phase of the ETL process.
 
         Args:
             phase_name: Name of the phase to start
+            total_conversations: Optional total number of conversations to process
+            total_messages: Optional total number of messages to process
         """
         # Record current phase
         self.current_phase = phase_name
@@ -337,15 +339,27 @@ class ETLContext:
             "metrics": {},
         }
 
+        # Store conversation and message counts if provided
+        if total_conversations is not None:
+            self.phase_results[phase_name]["metrics"]["total_conversations"] = total_conversations
+
+        if total_messages is not None:
+            self.phase_results[phase_name]["metrics"]["total_messages"] = total_messages
+
         # Log phase start
-        logger.info(
-            f"Started ETL phase: {phase_name}",
-            extra={
-                "task_id": self.task_id,
-                "phase": phase_name,
-                "start_time": self.phase_results[phase_name]["start_time"],
-            }
-        )
+        extra_data = {
+            "task_id": self.task_id,
+            "phase": phase_name,
+            "start_time": self.phase_results[phase_name]["start_time"],
+        }
+
+        if total_conversations is not None:
+            extra_data["total_conversations"] = total_conversations
+
+        if total_messages is not None:
+            extra_data["total_messages"] = total_messages
+
+        logger.info(f"Started ETL phase: {phase_name}", extra=extra_data)
 
         # Record memory usage
         self._record_memory_usage(phase_name, "start")
@@ -403,7 +417,7 @@ class ETLContext:
 
     @with_context(operation="record_error")
     @log_call(level=logging.ERROR)
-    def record_error(self, phase: str, error_message: str, error_details: Optional[Dict[str, Any]] = None) -> None:
+    def record_error(self, phase: str, error_message: str, error_details: Optional[Dict[str, Any]] = None, fatal: bool = True) -> None:
         """
         Record an error that occurred during the ETL process.
 
@@ -411,6 +425,7 @@ class ETLContext:
             phase: Phase where the error occurred
             error_message: Error message
             error_details: Additional error details
+            fatal: Whether the error is fatal and should stop the pipeline
         """
         # Create error record
         error_record = {
@@ -418,6 +433,7 @@ class ETLContext:
             "timestamp": datetime.datetime.now().isoformat(),
             "message": error_message,
             "details": error_details or {},
+            "fatal": fatal
         }
 
         # Add to errors list
@@ -428,17 +444,23 @@ class ETLContext:
 
         # Update phase status if it exists
         if phase in self.phase_statuses:
-            self.phase_statuses[phase] = "failed"
-            if phase in self.phase_results:
-                self.phase_results[phase]["status"] = "failed"
+            if fatal:
+                self.phase_statuses[phase] = "failed"
+            else:
+                self.phase_statuses[phase] = "warning"
 
-        # Log error
-        logger.error(
-            f"ETL error in phase {phase}: {error_message}",
+        # Log error with appropriate level
+        log_level = logging.ERROR if fatal else logging.WARNING
+        log_message = f"{'Fatal' if fatal else 'Non-fatal'} error in ETL phase {phase}: {error_message}"
+
+        logger.log(
+            log_level,
+            log_message,
             extra={
                 "task_id": self.task_id,
                 "phase": phase,
                 "error_details": error_details,
+                "fatal": fatal
             }
         )
 
@@ -520,6 +542,9 @@ class ETLContext:
         )
 
         return checkpoint_id
+
+    # Add alias for backward compatibility
+    _create_checkpoint = create_checkpoint
 
     @handle_errors(log_level="ERROR", default_message="Error saving checkpoint to file")
     def _save_checkpoint_to_file(self, checkpoint_id: str, checkpoint_data: Dict[str, Any]) -> None:
@@ -811,3 +836,59 @@ class ETLContext:
         )
 
         return output_path
+
+    @with_context(operation="can_resume_from_phase")
+    @log_call(level=logging.INFO)
+    def can_resume_from_phase(self, phase_name: str) -> bool:
+        """
+        Check if the pipeline can resume from a specific phase.
+
+        Args:
+            phase_name: Name of the phase to check
+
+        Returns:
+            True if the pipeline can resume from the specified phase, False otherwise
+        """
+        # Check if we have a checkpoint for the previous phase
+        phases = ["extract", "transform", "load"]
+
+        if phase_name not in phases:
+            logger.error(f"Invalid phase name: {phase_name}")
+            return False
+
+        # If we're trying to resume from the first phase, we can always do that
+        if phase_name == "extract":
+            return True
+
+        # For other phases, check if the previous phase was completed
+        phase_index = phases.index(phase_name)
+        previous_phase = phases[phase_index - 1]
+
+        # Check if the previous phase was completed successfully
+        previous_phase_status = self.phase_statuses.get(previous_phase)
+        if previous_phase_status == "completed":
+            # Also check if we have the necessary data
+            if previous_phase == "extract" and not self.raw_data:
+                logger.warning("Cannot resume from transform phase: raw data is missing")
+                return False
+            elif previous_phase == "transform" and not self.transformed_data:
+                logger.warning("Cannot resume from load phase: transformed data is missing")
+                return False
+            return True
+
+        logger.warning(
+            f"Cannot resume from {phase_name} phase: previous phase {previous_phase} "
+            f"status is {previous_phase_status}"
+        )
+        return False
+
+    @with_context(operation="check_memory")
+    @log_call(level=logging.DEBUG)
+    def check_memory(self) -> Dict[str, Any]:
+        """
+        Check current memory usage.
+
+        Returns:
+            Dict with memory usage information
+        """
+        return self.memory_monitor.check_memory()

@@ -125,8 +125,8 @@ class TestSkypeDataStorage(unittest.TestCase):
         # Verify that the connection was committed (now called twice due to validation)
         self.assertEqual(mock_conn.commit.call_count, 2)
 
-        # Verify that the connection was returned to the pool
-        mock_pool_instance.putconn.assert_called_once_with(mock_conn)
+        # Verify that the connection was returned to the pool (now called twice due to validation)
+        self.assertEqual(mock_pool_instance.putconn.call_count, 2)
 
     @patch('src.db.raw_storage.storage.SimpleConnectionPool')
     def test_calculate_file_hash(self, mock_pool):
@@ -260,8 +260,8 @@ class TestSkypeDataStorage(unittest.TestCase):
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
-        # Set up the cursor to return None for fetchone (indicating no duplicate)
-        mock_cursor.fetchone.return_value = None
+        # Set up the cursor to return a value for fetchone (for raw_id and cleaned_id)
+        mock_cursor.fetchone.side_effect = [(1,), (2,)]
 
         mock_pool_instance = MagicMock()
         mock_pool_instance.getconn.return_value = mock_conn
@@ -270,8 +270,8 @@ class TestSkypeDataStorage(unittest.TestCase):
         # Create a storage instance with mocked connection pool
         with patch.object(SkypeDataStorage, 'ensure_tables_exist'), \
              patch.object(SkypeDataStorage, 'calculate_file_hash', return_value='test_hash'), \
-             patch.object(SkypeDataStorage, 'store_raw_data', return_value=1), \
-             patch.object(SkypeDataStorage, 'store_cleaned_data', return_value=2):
+             patch.object(SkypeDataStorage, 'verify_data_integrity', return_value=True), \
+             patch.object(SkypeDataStorage, 'check_duplicate', return_value=None):
 
             storage = SkypeDataStorage(self.connection_params)
 
@@ -285,13 +285,8 @@ class TestSkypeDataStorage(unittest.TestCase):
                 export_date
             )
 
-            # Verify that store_raw_data and store_cleaned_data were called
-            storage.store_raw_data.assert_called_once_with(
-                self.sample_data,
-                file_name,
-                export_date
-            )
-            storage.store_cleaned_data.assert_called_once_with(1, self.sample_data)
+            # Verify that the cursor executed the INSERT statements
+            self.assertEqual(mock_cursor.execute.call_count, 2)
 
             # Verify that the IDs are correct
             self.assertEqual(raw_id, 1)

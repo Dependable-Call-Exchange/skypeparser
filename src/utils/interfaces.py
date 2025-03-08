@@ -129,25 +129,41 @@ class FileHandlerProtocol(Protocol):
         """
         ...
 
-    def read_file_object(self, file_obj: BinaryIO) -> Dict[str, Any]:
+    def read_file_object(self, file_obj: BinaryIO, file_name: Optional[str] = None) -> Dict[str, Any]:
         """
         Read data from a file object.
 
         Args:
             file_obj: File-like object
+            file_name: Optional name of the file
 
         Returns:
             The data read from the file object
         """
         ...
 
-    def read_tarfile(self, file_path: str, auto_select: bool = False) -> Dict[str, Any]:
+    def read_tarfile(self, file_path: str, auto_select: bool = False, select_json: Optional[int] = None) -> Dict[str, Any]:
         """
         Read data from a tar file.
 
         Args:
             file_path: Path to the tar file
             auto_select: Whether to automatically select the main data file
+            select_json: Index of the JSON file to select (0-based)
+
+        Returns:
+            The data read from the tar file
+        """
+        ...
+
+    def read_tarfile_object(self, file_obj: BinaryIO, auto_select: bool = False, select_json: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Read data from a tar file object.
+
+        Args:
+            file_obj: File object for the tar file
+            auto_select: Whether to automatically select the main data file
+            select_json: Index of the JSON file to select (0-based)
 
         Returns:
             The data read from the tar file

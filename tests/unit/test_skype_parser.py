@@ -96,8 +96,14 @@ class TestSkypeParser(unittest.TestCase):
             db_password=None,
             db_host=None,
             db_port=None,
-            username=None,
-            verbose=False
+            user_display_name=None,
+            verbose=False,
+            choose=False,
+            select_conversations=None,
+            select_json=None,
+            overwrite=False,
+            skip_existing=False,
+            text_output=False
         )
 
         # Mock the read_file function to return our sample data
@@ -124,13 +130,21 @@ class TestSkypeParser(unittest.TestCase):
         mock_export.return_value = True
 
         # Call the main function
-        with patch('sys.argv', ['skype_parser.py', self.sample_json_path, '-o', self.temp_dir, '-f', 'json']):
+        with patch('sys.argv', ['skype_parser.py', self.sample_json_path, '-o', self.temp_dir, '-f', 'json']), \
+             patch('os.path.exists', return_value=True):
             main()
 
         # Verify that the functions were called with the correct arguments
         mock_read.assert_called_once_with(self.sample_json_path)
-        mock_parse.assert_called_once_with(self.sample_skype_data, None)
-        mock_export.assert_called_once_with(structured_data, 'json', self.temp_dir)
+        mock_parse.assert_called_once_with(self.sample_skype_data, 'Me')
+        mock_export.assert_called_once_with(
+            structured_data,
+            'json',
+            self.temp_dir,
+            False,
+            False,
+            False
+        )
 
     @patch('argparse.ArgumentParser.parse_args')
     @patch('src.parser.skype_parser.read_tarfile')
@@ -150,8 +164,14 @@ class TestSkypeParser(unittest.TestCase):
             db_password=None,
             db_host=None,
             db_port=None,
-            username=None,
-            verbose=False
+            user_display_name=None,
+            verbose=False,
+            choose=False,
+            select_conversations=None,
+            select_json=None,
+            overwrite=False,
+            skip_existing=False,
+            text_output=False
         )
 
         # Mock the read_tarfile function to return our sample data
@@ -178,13 +198,21 @@ class TestSkypeParser(unittest.TestCase):
         mock_export.return_value = True
 
         # Call the main function
-        with patch('sys.argv', ['skype_parser.py', self.sample_tar_path, '-t', '-o', self.temp_dir, '-f', 'json']):
+        with patch('sys.argv', ['skype_parser.py', self.sample_tar_path, '-t', '-o', self.temp_dir, '-f', 'json']), \
+             patch('os.path.exists', return_value=True):
             main()
 
         # Verify that the functions were called with the correct arguments
-        mock_read_tar.assert_called_once_with(self.sample_tar_path)
-        mock_parse.assert_called_once_with(self.sample_skype_data, None)
-        mock_export.assert_called_once_with(structured_data, 'json', self.temp_dir)
+        mock_read_tar.assert_called_once_with(self.sample_tar_path, None)
+        mock_parse.assert_called_once_with(self.sample_skype_data, 'Me')
+        mock_export.assert_called_once_with(
+            structured_data,
+            'json',
+            self.temp_dir,
+            False,
+            False,
+            False
+        )
 
     @patch('argparse.ArgumentParser.parse_args')
     @patch('src.parser.skype_parser.SkypeETLPipeline')
@@ -204,8 +232,14 @@ class TestSkypeParser(unittest.TestCase):
             db_password='test_password',
             db_host='localhost',
             db_port=5432,
-            username=None,
-            verbose=False
+            user_display_name=None,
+            verbose=False,
+            choose=False,
+            select_conversations=None,
+            select_json=None,
+            overwrite=False,
+            skip_existing=False,
+            text_output=False
         )
 
         # Mock the read_file function to return our sample data
@@ -230,19 +264,30 @@ class TestSkypeParser(unittest.TestCase):
 
         # Mock the ETL pipeline
         mock_etl_instance = MagicMock()
+        mock_etl_instance.run_pipeline.return_value = True
         mock_etl.return_value = mock_etl_instance
 
         # Set ETL_AVAILABLE to True for this test
-        with patch('src.parser.skype_parser.ETL_AVAILABLE', True):
-            # Call the main function
-            with patch('sys.argv', ['skype_parser.py', self.sample_json_path, '--store-db', '--db-name', 'test_db', '--db-user', 'test_user']):
-                main()
+        with patch('src.parser.skype_parser.ETL_AVAILABLE', True), \
+             patch('sys.argv', ['skype_parser.py', self.sample_json_path, '--store-db', '--db-name', 'test_db', '--db-user', 'test_user']), \
+             patch('os.path.exists', return_value=True):
+            main()
 
-        # Verify that the functions were called with the correct arguments
-        mock_read.assert_called_once_with(self.sample_json_path)
-        mock_parse.assert_called_once_with(self.sample_skype_data, None)
-        mock_etl.assert_called_once()
-        mock_etl_instance.process.assert_called_once_with(structured_data)
+        # Verify that the ETL pipeline was initialized and run
+        mock_etl.assert_called_once_with(
+            db_name='test_db',
+            db_user='test_user',
+            db_password='test_password',
+            db_host='localhost',
+            db_port=5432
+        )
+        mock_etl_instance.run_pipeline.assert_called_once_with(
+            input_file=self.sample_json_path,
+            is_tar=False,
+            json_index=None,
+            output_dir=None,
+            user_display_name='Me'
+        )
 
     def test_get_commandline_args(self):
         """Test get_commandline_args function."""

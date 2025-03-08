@@ -38,7 +38,7 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
             "module": record.module,
-            "function": record.funcName,
+            "function": record.funcName or "",  # Ensure function is always a string
             "line": record.lineno
         }
 
@@ -49,32 +49,24 @@ class JsonFormatter(logging.Formatter):
 
         # Add exception info if available
         if record.exc_info:
+            exc_type, exc_value, exc_traceback = record.exc_info
             log_data["exception"] = {
-                "type": record.exc_info[0].__name__,
-                "message": str(record.exc_info[1]),
-                "traceback": self.formatException(record.exc_info)
+                "type": exc_type.__name__ if exc_type else "",
+                "message": str(exc_value) if exc_value else "",
+                "traceback": traceback.format_exception(exc_type, exc_value, exc_traceback) if exc_traceback else []
             }
 
         # Add extra fields from record
-        if hasattr(record, 'extra'):
-            log_data["extra"] = record.extra
-
-        # Add metrics if available
-        if hasattr(record, 'metrics'):
-            log_data["metrics"] = record.metrics
-
-        # Add any other custom attributes
         for key, value in record.__dict__.items():
-            if key not in {
+            if key not in [
                 "args", "asctime", "created", "exc_info", "exc_text", "filename",
                 "funcName", "id", "levelname", "levelno", "lineno", "module",
                 "msecs", "message", "msg", "name", "pathname", "process",
-                "processName", "relativeCreated", "stack_info", "thread", "threadName",
-                "extra", "metrics", "context"
-            }:
+                "processName", "relativeCreated", "stack_info", "thread", "threadName"
+            ] and not key.startswith("_"):
                 log_data[key] = value
 
-        return json.dumps(log_data)
+        return json.dumps(log_data, default=str)
 
 
 def initialize_logging(
@@ -155,7 +147,7 @@ def get_logger(name: str) -> logging.Logger:
 
 
 def set_context(key: str, value: Any) -> None:
-    """Set a value in the current logging context.
+    """Set a value in the current context.
 
     Args:
         key: Context key
@@ -172,11 +164,13 @@ def get_context_data() -> Dict[str, Any]:
     Returns:
         Dictionary of context data
     """
-    return getattr(_context, "data", {})
+    if not hasattr(_context, "data"):
+        _context.data = {}
+    return _context.data.copy()
 
 
 def get_context_value(key: str, default: Any = None) -> Any:
-    """Get a value from the current logging context.
+    """Get a value from the current context.
 
     Args:
         key: Context key
@@ -185,8 +179,9 @@ def get_context_value(key: str, default: Any = None) -> Any:
     Returns:
         Context value or default
     """
-    context_data = get_context_data()
-    return context_data.get(key, default)
+    if not hasattr(_context, "data"):
+        return default
+    return _context.data.get(key, default)
 
 
 def clear_context() -> None:
@@ -196,7 +191,7 @@ def clear_context() -> None:
 
 
 def update_context(**kwargs) -> None:
-    """Update multiple context values at once.
+    """Update context with multiple values.
 
     Args:
         **kwargs: Context key-value pairs
@@ -219,26 +214,24 @@ class LogContext:
         self.previous_context = {}
 
     def __enter__(self):
-        """Set context values on enter."""
+        """Enter context and set values."""
         # Save previous context values
+        self.previous_context = {}
         for key in self.kwargs:
             if hasattr(_context, "data") and key in _context.data:
                 self.previous_context[key] = _context.data[key]
 
         # Set new context values
-        for key, value in self.kwargs.items():
-            set_context(key, value)
-
+        update_context(**self.kwargs)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Restore previous context values on exit."""
+        """Exit context and restore previous values."""
         if hasattr(_context, "data"):
             # Remove keys that weren't in the previous context
             for key in self.kwargs:
-                if key not in self.previous_context:
-                    if key in _context.data:
-                        del _context.data[key]
+                if key not in self.previous_context and key in _context.data:
+                    del _context.data[key]
 
             # Restore previous values
             for key, value in self.previous_context.items():
@@ -280,8 +273,8 @@ def log_execution_time(logger: Optional[logging.Logger] = None, level: int = log
     """Decorator for logging function execution time.
 
     Args:
-        logger: Logger to use (if None, uses the module logger)
-        level: Logging level for the execution time message
+        logger: Logger to use (defaults to module logger)
+        level: Log level to use
 
     Returns:
         Decorated function
@@ -294,41 +287,29 @@ def log_execution_time(logger: Optional[logging.Logger] = None, level: int = log
             if logger is None:
                 logger = get_logger(func.__module__)
 
-            # Get function details for context
-            module_name = func.__module__
-            function_name = func.__qualname__
+            # Get function name with class if method
+            if args and hasattr(args[0], "__class__") and hasattr(args[0].__class__, func.__name__):
+                func_name = f"{args[0].__class__.__name__}.{func.__name__}"
+            else:
+                func_name = f"{func.__module__}.{func.__name__}"
 
-            # Start timer
+            # Measure execution time
             start_time = time.time()
-
-            # Execute function
             try:
                 result = func(*args, **kwargs)
-                success = True
-            except Exception as e:
-                success = False
-                raise
+                return result
             finally:
-                # Calculate execution time
                 end_time = time.time()
                 duration_ms = (end_time - start_time) * 1000
-
-                # Log execution time
-                status = "completed" if success else "failed"
                 logger.log(
                     level,
-                    f"{function_name} {status} in {duration_ms:.2f} ms",
+                    f"{func_name} completed in {duration_ms:.2f} ms",
                     extra={
-                        "metrics": {
-                            "duration_ms": duration_ms,
-                            "function": function_name,
-                            "module": module_name,
-                            "success": success
-                        }
+                        "function_name": func_name,
+                        "duration_ms": duration_ms,
+                        "call_module": func.__module__
                     }
                 )
-
-            return result
         return cast(F, wrapper)
     return decorator
 
@@ -337,8 +318,8 @@ def log_call(logger: Optional[logging.Logger] = None, level: int = logging.DEBUG
     """Decorator for logging function calls.
 
     Args:
-        logger: Logger to use (if None, uses the module logger)
-        level: Logging level for the call message
+        logger: Logger to use (defaults to module logger)
+        level: Log level to use
 
     Returns:
         Decorated function
@@ -351,25 +332,45 @@ def log_call(logger: Optional[logging.Logger] = None, level: int = logging.DEBUG
             if logger is None:
                 logger = get_logger(func.__module__)
 
-            # Format arguments for logging
-            args_repr = [repr(a) for a in args]
-            kwargs_repr = [f"{k}={repr(v)}" for k, v in kwargs.items()]
-            signature = ", ".join(args_repr + kwargs_repr)
+            # Format args and kwargs for logging
+            args_str = [repr(arg) for arg in args]
+            kwargs_str = [f"{key}={repr(value)}" for key, value in kwargs.items()]
+            all_args = args_str + kwargs_str
+            args_formatted = ", ".join(all_args)
 
-            # Log function call
+            # Get function name with class if method
+            if args and hasattr(args[0], "__class__") and hasattr(args[0].__class__, func.__name__):
+                func_name = f"{args[0].__class__.__name__}.{func.__name__}"
+            else:
+                func_name = f"{func.__module__}.{func.__name__}"
+
+            # Log the call
             logger.log(
                 level,
-                f"Calling {func.__qualname__}({signature})",
+                f"Calling {func_name}({args_formatted})",
                 extra={
-                    "function": func.__qualname__,
-                    "module": func.__module__,
-                    "args": args_repr,
-                    "kwargs": kwargs_repr
+                    "function_name": func_name,
+                    "args_str": args_str,
+                    "kwargs_str": kwargs_str,
+                    "call_module": func.__module__
                 }
             )
 
-            # Execute function
-            return func(*args, **kwargs)
+            # Call the function
+            result = func(*args, **kwargs)
+
+            # Log the return
+            logger.log(
+                level,
+                f"{func_name} returned {repr(result)}",
+                extra={
+                    "function_name": func_name,
+                    "result": repr(result),
+                    "call_module": func.__module__
+                }
+            )
+
+            return result
         return cast(F, wrapper)
     return decorator
 
@@ -381,20 +382,18 @@ def handle_errors(
     reraise=True,
     default_return=None,
 ):
-    """
-    Decorator for handling and logging errors.
+    """Decorator for handling and logging errors.
 
     Args:
-        logger: Logger to use (if None, a logger will be created based on the module name)
-        log_level: Log level to use for error messages
-        default_message: Default message to log if no specific message is provided
-        reraise: Whether to re-raise the exception after logging
-        default_return: Default value to return if an exception occurs and reraise is False
+        logger: Logger to use (defaults to module logger)
+        log_level: Log level for error messages
+        default_message: Default message to log
+        reraise: Whether to reraise the exception
+        default_return: Default return value if exception is caught and not reraised
 
     Returns:
-        Decorator function
+        Decorated function
     """
-
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -404,63 +403,32 @@ def handle_errors(
                 logger = get_logger(func.__module__)
 
             # Get log level
-            level = getattr(logging, log_level)
+            level = getattr(logging, log_level) if isinstance(log_level, str) else log_level
 
             try:
                 return func(*args, **kwargs)
             except Exception as e:
-                # Get function name
-                func_name = func.__qualname__
+                # Format error message
+                error_message = f"{default_message}: {str(e)}"
 
-                # Get exception details
-                exc_type = type(e).__name__
-                exc_message = str(e)
-                exc_traceback = traceback.format_exc()
+                # Get traceback
+                exc_info = sys.exc_info()
 
-                # Log error
-                logger.log(
-                    level,
-                    f"{default_message}: {exc_message}",
-                    exc_info=True,
-                    extra={
-                        "exception_type": exc_type,
-                        "exception_message": exc_message,
-                        "error_function": func_name,
-                        "error_module": func.__module__,
-                    }
+                # Log error with exception info
+                logger.log(level, error_message, exc_info=exc_info)
+
+                # Add error details to context
+                update_context(
+                    error=str(e),
+                    error_type=e.__class__.__name__,
+                    error_traceback=traceback.format_exception(*exc_info)
                 )
 
-                # Record metrics
-                if hasattr(logger, "metrics"):
-                    logger.metrics["errors"] = logger.metrics.get("errors", 0) + 1
-                    logger.metrics["last_error"] = {
-                        "type": exc_type,
-                        "message": exc_message,
-                        "function": func_name,
-                        "timestamp": datetime.datetime.now().isoformat(),
-                    }
-
-                # Log execution time
-                end_time = time.time()
-                if hasattr(wrapper, "_start_time"):
-                    duration_ms = (end_time - wrapper._start_time) * 1000
-                    logger.info(
-                        f"{func_name} failed in {duration_ms:.2f} ms",
-                        extra={
-                            "metrics": {
-                                "duration_ms": duration_ms,
-                                "success": False,
-                            }
-                        }
-                    )
-
-                # Re-raise or return default
+                # Reraise or return default
                 if reraise:
                     raise
                 return default_return
-
         return wrapper
-
     return decorator
 
 

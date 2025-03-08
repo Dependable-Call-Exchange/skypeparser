@@ -33,9 +33,15 @@ class TestFileUtils(unittest.TestCase):
         with open(self.json_path, 'w') as f:
             f.write('{"test": "data"}')
 
+        # Create a valid tar file
+        import tarfile
         self.tar_path = os.path.join(self.temp_dir.name, 'test.tar')
-        with open(self.tar_path, 'w') as f:
-            f.write('dummy tar content')
+        with tarfile.open(self.tar_path, 'w') as tar:
+            # Add a file to the tar archive
+            file_path = os.path.join(self.temp_dir.name, 'file_for_tar.txt')
+            with open(file_path, 'w') as f:
+                f.write('This file will be added to the tar archive')
+            tar.add(file_path, arcname='file_for_tar.txt')
 
         self.txt_path = os.path.join(self.temp_dir.name, 'test.txt')
         with open(self.txt_path, 'w') as f:

@@ -20,8 +20,77 @@ from src.utils.interfaces import (
 from src.utils.di import get_service, get_service_provider
 from .context import ETLContext
 
+import psutil
+
 # Configure logger
 logger = logging.getLogger(__name__)
+
+class MemoryMonitor:
+    """
+    Monitor memory usage during ETL operations.
+
+    This class provides utilities to check memory usage and ensure
+    that operations don't exceed specified memory limits.
+    """
+
+    def __init__(self, memory_limit_mb: int = 1024):
+        """
+        Initialize the memory monitor.
+
+        Args:
+            memory_limit_mb: Maximum memory usage allowed in MB
+        """
+        self.memory_limit_mb = memory_limit_mb
+        self.memory_limit_bytes = memory_limit_mb * 1024 * 1024
+        self.logger = logging.getLogger(__name__)
+
+    def check_memory(self) -> Dict[str, Any]:
+        """
+        Check current memory usage.
+
+        Returns:
+            Dict with memory usage information
+        """
+        process = psutil.Process(os.getpid())
+        memory_info = process.memory_info()
+        current_usage_mb = memory_info.rss / (1024 * 1024)
+
+        memory_data = {
+            "current_usage_mb": current_usage_mb,
+            "limit_mb": self.memory_limit_mb,
+            "percentage": (current_usage_mb / self.memory_limit_mb) * 100,
+            "exceeded": current_usage_mb > self.memory_limit_mb
+        }
+
+        if memory_data["exceeded"]:
+            self.logger.warning(
+                f"Memory usage exceeded: {memory_data['current_usage_mb']:.2f}MB "
+                f"(limit: {self.memory_limit_mb}MB)"
+            )
+
+        return memory_data
+
+    def is_memory_available(self, required_mb: float) -> bool:
+        """
+        Check if there's enough memory available for an operation.
+
+        Args:
+            required_mb: Required memory in MB for the operation
+
+        Returns:
+            True if enough memory is available, False otherwise
+        """
+        memory_data = self.check_memory()
+        available_mb = self.memory_limit_mb - memory_data["current_usage_mb"]
+
+        if available_mb < required_mb:
+            self.logger.warning(
+                f"Not enough memory available. Required: {required_mb:.2f}MB, "
+                f"Available: {available_mb:.2f}MB"
+            )
+            return False
+
+        return True
 
 class ETLPipeline:
     """
@@ -788,3 +857,21 @@ class ETLPipeline:
                 error_report['context']['load_progress'] = getattr(self.context.progress_tracker, 'load_progress', {})
 
         return error_report
+
+    def run(self) -> Dict[str, Any]:
+        """Run the ETL pipeline using the context's file_path.
+
+        This is a convenience method that calls run_pipeline with the file_path
+        from the context.
+
+        Returns:
+            Dictionary containing the results of the pipeline run
+        """
+        if not hasattr(self.context, 'file_path') or self.context.file_path is None:
+            raise ValueError("Context file_path is not set")
+
+        user_display_name = getattr(self.context, 'user_display_name', None)
+        return self.run_pipeline(
+            file_path=self.context.file_path,
+            user_display_name=user_display_name
+        )

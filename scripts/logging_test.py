@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-Test Logging Script
+Logging Test Script
 
 This script runs the tests for the centralized logging system.
+It has been renamed from test_logging.py to logging_test.py to avoid
+namespace conflicts with the actual test module in tests/utils/test_logging.py.
 """
 
 import os

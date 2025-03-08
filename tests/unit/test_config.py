@@ -105,13 +105,27 @@ class TestConfig(unittest.TestCase):
 
     def test_load_config_from_file(self):
         """Test loading configuration from a file."""
-        config = load_config(config_file=self.config_file)
-        self.assertEqual(config['database']['host'], 'test-host')
-        self.assertEqual(config['database']['port'], 5555)
-        self.assertEqual(config['output']['directory'], 'test-output')
-        self.assertEqual(config['output']['overwrite'], True)
-        self.assertEqual(config['logging']['level'], 'DEBUG')
-        self.assertEqual(config['logging']['file'], 'test.log')
+        # Mock environment variables to ensure they don't override the test config
+        with patch.dict(os.environ, {
+            'POSTGRES_HOST': '',
+            'POSTGRES_PORT': '',
+            'POSTGRES_DB': '',
+            'POSTGRES_USER': '',
+            'POSTGRES_PASSWORD': '',
+            'OUTPUT_DIR': '',
+            'OUTPUT_OVERWRITE': '',
+            'LOG_LEVEL': '',
+            'LOG_FILE': ''
+        }, clear=True):
+            # Patch os.path.exists to ensure only our test config file is found
+            with patch('os.path.exists', side_effect=lambda path: path == self.config_file):
+                config = load_config(config_file=self.config_file)
+                self.assertEqual(config['database']['host'], 'test-host')
+                self.assertEqual(config['database']['port'], 5555)
+                self.assertEqual(config['output']['directory'], 'test-output')
+                self.assertEqual(config['output']['overwrite'], True)
+                self.assertEqual(config['logging']['level'], 'DEBUG')
+                self.assertEqual(config['logging']['file'], 'test.log')
 
     def test_load_config_message_types(self):
         """Test loading message types configuration."""
@@ -122,9 +136,26 @@ class TestConfig(unittest.TestCase):
 
     def test_load_config_both_files(self):
         """Test loading configuration from both files."""
-        config = load_config(config_file=self.config_file, message_types_file=self.message_types_file)
-        self.assertEqual(config['database']['host'], 'test-host')
-        self.assertEqual(config['message_types']['Test/Type1'], 'Test description 1')
+        # Mock environment variables to ensure they don't override the test config
+        with patch.dict(os.environ, {
+            'POSTGRES_HOST': '',
+            'POSTGRES_PORT': '',
+            'POSTGRES_DB': '',
+            'POSTGRES_USER': '',
+            'POSTGRES_PASSWORD': '',
+            'OUTPUT_DIR': '',
+            'OUTPUT_OVERWRITE': '',
+            'LOG_LEVEL': '',
+            'LOG_FILE': ''
+        }, clear=True):
+            # Patch os.path.exists to ensure only our test config files are found
+            def mock_exists(path):
+                return path in [self.config_file, self.message_types_file]
+
+            with patch('os.path.exists', side_effect=mock_exists):
+                config = load_config(config_file=self.config_file, message_types_file=self.message_types_file)
+                self.assertEqual(config['database']['host'], 'test-host')
+                self.assertEqual(config['message_types']['Test/Type1'], 'Test description 1')
 
     @patch.dict(os.environ, {
         'POSTGRES_HOST': 'env-host',
@@ -152,13 +183,27 @@ class TestConfig(unittest.TestCase):
 
     def test_get_db_config(self):
         """Test getting database configuration."""
-        config = load_config(config_file=self.config_file)
-        db_config = get_db_config(config)
-        self.assertEqual(db_config['host'], 'test-host')
-        self.assertEqual(db_config['port'], 5555)
-        self.assertEqual(db_config['dbname'], 'test-db')
-        self.assertEqual(db_config['user'], 'test-user')
-        self.assertEqual(db_config['password'], 'test-password')
+        # Mock environment variables to ensure they don't override the test config
+        with patch.dict(os.environ, {
+            'POSTGRES_HOST': '',
+            'POSTGRES_PORT': '',
+            'POSTGRES_DB': '',
+            'POSTGRES_USER': '',
+            'POSTGRES_PASSWORD': '',
+            'OUTPUT_DIR': '',
+            'OUTPUT_OVERWRITE': '',
+            'LOG_LEVEL': '',
+            'LOG_FILE': ''
+        }, clear=True):
+            # Patch os.path.exists to ensure only our test config file is found
+            with patch('os.path.exists', side_effect=lambda path: path == self.config_file):
+                config = load_config(config_file=self.config_file)
+                db_config = get_db_config(config)
+                self.assertEqual(db_config['host'], 'test-host')
+                self.assertEqual(db_config['port'], 5555)
+                self.assertEqual(db_config['dbname'], 'test-db')
+                self.assertEqual(db_config['user'], 'test-user')
+                self.assertEqual(db_config['password'], 'test-password')
 
     def test_get_message_type_description_known(self):
         """Test getting a known message type description."""

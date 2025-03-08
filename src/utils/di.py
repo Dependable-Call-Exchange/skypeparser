@@ -8,7 +8,7 @@ and improve testability.
 """
 
 import logging
-from typing import Dict, Any, Type, Callable, TypeVar, Optional, cast, get_type_hints
+from typing import Dict, Any, Type, Callable, TypeVar, Optional, cast, get_type_hints, Union
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -33,16 +33,19 @@ class ServiceProvider:
         self._transients: Dict[Type, Type] = {}
         self._factories: Dict[Type, Callable[..., Any]] = {}
 
-    def register_singleton(self, service_type: Type[T], instance: T) -> None:
+    def register_singleton(self, service_type: Union[Type[T], str], instance: T) -> None:
         """
         Register a singleton service with a pre-created instance.
 
         Args:
-            service_type: The type/interface to register
+            service_type: The type/interface to register or a string name
             instance: The instance to use for this service
         """
         self._singletons[service_type] = instance
-        logger.debug(f"Registered singleton for {service_type.__name__}")
+        if isinstance(service_type, type):
+            logger.debug(f"Registered singleton for {service_type.__name__}")
+        else:
+            logger.debug(f"Registered singleton for {service_type}")
 
     def register_singleton_class(self, service_type: Type[T], implementation_type: Type[T]) -> None:
         """
@@ -85,12 +88,12 @@ class ServiceProvider:
         self._factories[service_type] = factory
         logger.debug(f"Registered factory for {service_type.__name__}")
 
-    def get(self, service_type: Type[T]) -> T:
+    def get(self, service_type: Union[Type[T], str]) -> T:
         """
         Resolve a service by its type.
 
         Args:
-            service_type: The type/interface to resolve
+            service_type: The type/interface to resolve or a string name
 
         Returns:
             An instance of the requested service
@@ -117,7 +120,10 @@ class ServiceProvider:
             return factory()
 
         # Service not found
-        raise KeyError(f"No registration found for {service_type.__name__}")
+        if isinstance(service_type, type):
+            raise KeyError(f"No registration found for {service_type.__name__}")
+        else:
+            raise KeyError(f"No registration found for {service_type}")
 
     def _create_instance(self, implementation_type: Type[T]) -> T:
         """
@@ -171,14 +177,17 @@ def get_service_provider() -> ServiceProvider:
     """
     return _global_provider
 
-def get_service(service_type: Type[T]) -> T:
+def get_service(service_type: Union[Type[T], str]) -> T:
     """
-    Resolve a service from the global service provider.
+    Get a service from the global service provider.
 
     Args:
-        service_type: The type/interface to resolve
+        service_type: The type/interface to resolve or a string name
 
     Returns:
         An instance of the requested service
+
+    Raises:
+        KeyError: If the service type is not registered
     """
     return _global_provider.get(service_type)
