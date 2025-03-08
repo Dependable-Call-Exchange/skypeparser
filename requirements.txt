@@ -11,6 +11,7 @@ requests>=2.32.3 # For downloading attachments
 tqdm>=4.67.1  # For progress reporting
 ijson>=3.3.0  # For streaming JSON parsing
 jsonschema>=4.23.0
+psutil>=7.0.0  # For system metrics monitoring
 
 # Visualization dependencies (optional)
 

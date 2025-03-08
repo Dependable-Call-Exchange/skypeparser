@@ -6,21 +6,23 @@ This test suite provides comprehensive testing for the Skype Parser Web API,
 including authentication, error handling, and edge cases.
 """
 
+import json
 import os
 import sys
-import unittest
 import tempfile
-import json
 import time
-import pytest
+import unittest
 from unittest.mock import patch
 
+import pytest
+
 # Add the src directory to the path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 # Conditionally import FastAPI TestClient
 try:
     from fastapi.testclient import TestClient
+
     HAS_FASTAPI = True
 except ImportError:
     HAS_FASTAPI = False
@@ -30,9 +32,9 @@ from src.utils.config import get_db_config
 from tests.fixtures import (
     BASIC_SKYPE_DATA,
     COMPLEX_SKYPE_DATA,
-    test_db_connection,
+    SkypeDataFactory,
     is_db_available,
-    SkypeDataFactory
+    test_db_connection,
 )
 
 
@@ -50,8 +52,8 @@ class TestWebAPIEnhanced(unittest.TestCase):
 
         # Set up temporary directories
         self.temp_dir = tempfile.mkdtemp()
-        self.test_dir = os.path.join(self.temp_dir, 'test_output')
-        self.upload_dir = os.path.join(self.temp_dir, 'uploads')
+        self.test_dir = os.path.join(self.temp_dir, "test_output")
+        self.upload_dir = os.path.join(self.temp_dir, "uploads")
         os.makedirs(self.test_dir, exist_ok=True)
         os.makedirs(self.upload_dir, exist_ok=True)
 
@@ -59,23 +61,23 @@ class TestWebAPIEnhanced(unittest.TestCase):
         self.db_config = get_test_db_config()
 
         # Create test files
-        self.sample_file = os.path.join(self.temp_dir, 'sample.json')
-        with open(self.sample_file, 'w') as f:
+        self.sample_file = os.path.join(self.temp_dir, "sample.json")
+        with open(self.sample_file, "w") as f:
             json.dump(BASIC_SKYPE_DATA, f)
 
-        self.complex_file = os.path.join(self.temp_dir, 'complex.json')
-        with open(self.complex_file, 'w') as f:
+        self.complex_file = os.path.join(self.temp_dir, "complex.json")
+        with open(self.complex_file, "w") as f:
             json.dump(COMPLEX_SKYPE_DATA, f)
 
         # Create corrupted file
-        self.corrupted_file = os.path.join(self.temp_dir, 'corrupted.json')
-        with open(self.corrupted_file, 'w') as f:
+        self.corrupted_file = os.path.join(self.temp_dir, "corrupted.json")
+        with open(self.corrupted_file, "w") as f:
             f.write('{"this_is_not": "valid_json')
 
         # Create empty file
-        self.empty_file = os.path.join(self.temp_dir, 'empty.json')
-        with open(self.empty_file, 'w') as f:
-            f.write('')
+        self.empty_file = os.path.join(self.temp_dir, "empty.json")
+        with open(self.empty_file, "w") as f:
+            f.write("")
 
         # Create app with authentication enabled
         self.app = create_app(
@@ -83,8 +85,8 @@ class TestWebAPIEnhanced(unittest.TestCase):
             upload_dir=self.upload_dir,
             output_dir=self.test_dir,
             enable_auth=True,
-            api_key='test_api_key_123',
-            require_auth=True
+            api_key="test_api_key_123",
+            require_auth=True,
         )
 
         # Create app without authentication for some tests
@@ -93,7 +95,7 @@ class TestWebAPIEnhanced(unittest.TestCase):
             upload_dir=self.upload_dir,
             output_dir=self.test_dir,
             enable_auth=False,
-            require_auth=False
+            require_auth=False,
         )
 
         # Create test clients
@@ -104,6 +106,7 @@ class TestWebAPIEnhanced(unittest.TestCase):
         """Clean up test fixtures."""
         # Remove temporary directory
         import shutil
+
         shutil.rmtree(self.temp_dir)
 
     def test_health_check_endpoints(self):
@@ -127,10 +130,9 @@ class TestWebAPIEnhanced(unittest.TestCase):
         self.assertIn("Authentication", response.json()["error"])
 
         # Attempt to upload without authentication
-        with open(self.sample_file, 'rb') as f:
+        with open(self.sample_file, "rb") as f:
             response = self.client.post(
-                "/api/upload",
-                files={"file": ("test.json", f, "application/json")}
+                "/api/upload", files={"file": ("test.json", f, "application/json")}
             )
         self.assertEqual(response.status_code, 401)
 
@@ -138,17 +140,16 @@ class TestWebAPIEnhanced(unittest.TestCase):
         """Test successful authentication."""
         # Access protected endpoint with valid API key
         response = self.client.get(
-            "/api/exports",
-            headers={"X-API-Key": "test_api_key_123"}
+            "/api/exports", headers={"X-API-Key": "test_api_key_123"}
         )
         self.assertEqual(response.status_code, 200)
 
         # Upload with valid API key
-        with open(self.sample_file, 'rb') as f:
+        with open(self.sample_file, "rb") as f:
             response = self.client.post(
                 "/api/upload",
                 files={"file": ("test.json", f, "application/json")},
-                headers={"X-API-Key": "test_api_key_123"}
+                headers={"X-API-Key": "test_api_key_123"},
             )
         self.assertEqual(response.status_code, 200)
         self.assertIn("task_id", response.json())
@@ -156,10 +157,7 @@ class TestWebAPIEnhanced(unittest.TestCase):
     def test_authentication_invalid_key(self):
         """Test authentication with invalid API key."""
         # Access protected endpoint with invalid API key
-        response = self.client.get(
-            "/api/exports",
-            headers={"X-API-Key": "invalid_key"}
-        )
+        response = self.client.get("/api/exports", headers={"X-API-Key": "invalid_key"})
         self.assertEqual(response.status_code, 401)
         self.assertIn("error", response.json())
         self.assertIn("Invalid API key", response.json()["error"])
@@ -167,11 +165,11 @@ class TestWebAPIEnhanced(unittest.TestCase):
     def test_file_upload_and_processing(self):
         """Test successful file upload and processing."""
         # Upload file with authentication
-        with open(self.sample_file, 'rb') as f:
+        with open(self.sample_file, "rb") as f:
             response = self.client.post(
                 "/api/upload",
                 files={"file": ("test.json", f, "application/json")},
-                headers={"X-API-Key": "test_api_key_123"}
+                headers={"X-API-Key": "test_api_key_123"},
             )
 
         # Verify upload success
@@ -186,8 +184,7 @@ class TestWebAPIEnhanced(unittest.TestCase):
 
         while retry_count < max_retries:
             status_response = self.client.get(
-                f"/api/status/{task_id}",
-                headers={"X-API-Key": "test_api_key_123"}
+                f"/api/status/{task_id}", headers={"X-API-Key": "test_api_key_123"}
             )
             self.assertEqual(status_response.status_code, 200)
             status = status_response.json().get("status")
@@ -207,16 +204,14 @@ class TestWebAPIEnhanced(unittest.TestCase):
 
         # Get analysis data
         analysis_response = self.client.get(
-            f"/api/analysis/{export_id}",
-            headers={"X-API-Key": "test_api_key_123"}
+            f"/api/analysis/{export_id}", headers={"X-API-Key": "test_api_key_123"}
         )
         self.assertEqual(analysis_response.status_code, 200)
         self.assertIn("message_count", analysis_response.json())
 
         # Get report
         report_response = self.client.get(
-            f"/api/report/{export_id}",
-            headers={"X-API-Key": "test_api_key_123"}
+            f"/api/report/{export_id}", headers={"X-API-Key": "test_api_key_123"}
         )
         self.assertEqual(report_response.status_code, 200)
         self.assertEqual(report_response.headers.get("content-type"), "text/html")
@@ -224,10 +219,9 @@ class TestWebAPIEnhanced(unittest.TestCase):
     def test_upload_invalid_file(self):
         """Test upload of invalid files."""
         # Upload corrupted JSON file
-        with open(self.corrupted_file, 'rb') as f:
+        with open(self.corrupted_file, "rb") as f:
             response = self.client_no_auth.post(
-                "/api/upload",
-                files={"file": ("corrupted.json", f, "application/json")}
+                "/api/upload", files={"file": ("corrupted.json", f, "application/json")}
             )
 
         # Verify upload succeeds (validation happens during processing)
@@ -251,16 +245,19 @@ class TestWebAPIEnhanced(unittest.TestCase):
             time.sleep(1)
 
         # Verify processing failed
-        self.assertIn(status, ("failed", "error"), "Processing should have failed with corrupted file")
+        self.assertIn(
+            status,
+            ("failed", "error"),
+            "Processing should have failed with corrupted file",
+        )
         self.assertIn("error", status_response.json())
 
     def test_upload_empty_file(self):
         """Test upload of empty file."""
         # Upload empty file
-        with open(self.empty_file, 'rb') as f:
+        with open(self.empty_file, "rb") as f:
             response = self.client_no_auth.post(
-                "/api/upload",
-                files={"file": ("empty.json", f, "application/json")}
+                "/api/upload", files={"file": ("empty.json", f, "application/json")}
             )
 
         # Verify upload succeeds (validation happens during processing)
@@ -284,7 +281,9 @@ class TestWebAPIEnhanced(unittest.TestCase):
             time.sleep(1)
 
         # Verify processing failed
-        self.assertIn(status, ("failed", "error"), "Processing should have failed with empty file")
+        self.assertIn(
+            status, ("failed", "error"), "Processing should have failed with empty file"
+        )
 
     def test_error_handling_invalid_task_id(self):
         """Test error handling for invalid task ID."""
@@ -308,10 +307,9 @@ class TestWebAPIEnhanced(unittest.TestCase):
     def test_exports_listing(self):
         """Test listing of exports."""
         # Upload file to create an export
-        with open(self.sample_file, 'rb') as f:
+        with open(self.sample_file, "rb") as f:
             response = self.client_no_auth.post(
-                "/api/upload",
-                files={"file": ("test.json", f, "application/json")}
+                "/api/upload", files={"file": ("test.json", f, "application/json")}
             )
 
         # Get task ID
@@ -350,15 +348,15 @@ class TestWebAPIEnhanced(unittest.TestCase):
     def test_file_upload_with_metadata(self):
         """Test file upload with additional metadata."""
         # Upload file with metadata
-        with open(self.sample_file, 'rb') as f:
+        with open(self.sample_file, "rb") as f:
             response = self.client_no_auth.post(
                 "/api/upload",
                 files={"file": ("test.json", f, "application/json")},
                 data={
                     "user_display_name": "API Test User",
                     "description": "Test upload with metadata",
-                    "tags": "test,api,metadata"
-                }
+                    "tags": "test,api,metadata",
+                },
             )
 
         # Verify upload success
@@ -383,7 +381,9 @@ class TestWebAPIEnhanced(unittest.TestCase):
             time.sleep(1)
 
         # Verify processing completed
-        self.assertIsNotNone(export_id, "Export ID should be available after processing")
+        self.assertIsNotNone(
+            export_id, "Export ID should be available after processing"
+        )
 
         # Get export details
         export_response = self.client_no_auth.get(f"/api/export/{export_id}")
@@ -400,21 +400,21 @@ class TestWebAPIEnhanced(unittest.TestCase):
         task_ids = []
 
         # File 1
-        with open(self.sample_file, 'rb') as f:
+        with open(self.sample_file, "rb") as f:
             response = self.client_no_auth.post(
                 "/api/upload",
                 files={"file": ("file1.json", f, "application/json")},
-                data={"user_display_name": "Concurrent User 1"}
+                data={"user_display_name": "Concurrent User 1"},
             )
             self.assertEqual(response.status_code, 200)
             task_ids.append(response.json()["task_id"])
 
         # File 2
-        with open(self.complex_file, 'rb') as f:
+        with open(self.complex_file, "rb") as f:
             response = self.client_no_auth.post(
                 "/api/upload",
                 files={"file": ("file2.json", f, "application/json")},
-                data={"user_display_name": "Concurrent User 2"}
+                data={"user_display_name": "Concurrent User 2"},
             )
             self.assertEqual(response.status_code, 200)
             task_ids.append(response.json()["task_id"])
@@ -439,8 +439,11 @@ class TestWebAPIEnhanced(unittest.TestCase):
             time.sleep(1)
 
         # Verify all tasks completed
-        self.assertEqual(completed_count, len(task_ids),
-                       f"Not all tasks completed. Completed: {completed_count}, Total: {len(task_ids)}")
+        self.assertEqual(
+            completed_count,
+            len(task_ids),
+            f"Not all tasks completed. Completed: {completed_count}, Total: {len(task_ids)}",
+        )
 
     def test_api_rate_limiting(self):
         """Test API rate limiting."""
@@ -452,8 +455,10 @@ class TestWebAPIEnhanced(unittest.TestCase):
             responses.append(response.status_code)
 
         # All responses should be successful (rate limit should be reasonable)
-        self.assertTrue(all(status == 200 for status in responses),
-                      "Rate limiting should not affect reasonable request rates")
+        self.assertTrue(
+            all(status == 200 for status in responses),
+            "Rate limiting should not affect reasonable request rates",
+        )
 
     def test_api_input_validation(self):
         """Test API input validation."""
@@ -463,16 +468,14 @@ class TestWebAPIEnhanced(unittest.TestCase):
 
         # Test with empty file field
         response = self.client_no_auth.post(
-            "/api/upload",
-            files={"file": ("", "", "application/json")}
+            "/api/upload", files={"file": ("", "", "application/json")}
         )
         self.assertEqual(response.status_code, 400)  # Bad Request
 
         # Test with wrong file type
-        with open(self.sample_file, 'rb') as f:
+        with open(self.sample_file, "rb") as f:
             response = self.client_no_auth.post(
-                "/api/upload",
-                files={"file": ("test.txt", f, "text/plain")}
+                "/api/upload", files={"file": ("test.txt", f, "text/plain")}
             )
 
         # File type validation may or may not be enforced, depends on implementation
@@ -490,10 +493,7 @@ class TestWebAPIEnhanced(unittest.TestCase):
         self.assertIsInstance(response.json()["error"], str)
 
         # Get authentication error
-        response = self.client.get(
-            "/api/exports",
-            headers={"X-API-Key": "wrong-key"}
-        )
+        response = self.client.get("/api/exports", headers={"X-API-Key": "wrong-key"})
         self.assertEqual(response.status_code, 401)
 
         # Verify error response format
@@ -505,8 +505,9 @@ class TestWebAPIEnhanced(unittest.TestCase):
 def get_test_db_config():
     """Get database configuration for testing."""
     from tests.fixtures import get_test_db_config
+
     return get_test_db_config()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

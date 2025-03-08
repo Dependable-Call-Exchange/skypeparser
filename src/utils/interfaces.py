@@ -186,7 +186,7 @@ class DatabaseConnectionProtocol(Protocol):
         """
         ...
 
-    def close(self) -> None:
+    def disconnect(self) -> None:
         """Close the database connection."""
         ...
 
@@ -210,6 +210,72 @@ class DatabaseConnectionProtocol(Protocol):
         Args:
             query: SQL query to execute
             params_list: List of parameter dictionaries
+        """
+        ...
+
+    def fetch_one(self, query: str, params: Optional[Dict[str, Any]] = None) -> Optional[Tuple]:
+        """
+        Execute a query and fetch one result.
+
+        Args:
+            query: SQL query to execute
+            params: Parameters for the query
+
+        Returns:
+            A single result row or None if no results
+        """
+        ...
+
+    def commit(self) -> None:
+        """
+        Commit the current transaction.
+        """
+        ...
+
+    def rollback(self) -> None:
+        """
+        Rollback the current transaction.
+        """
+        ...
+
+
+class ConnectionPoolProtocol(Protocol):
+    """Protocol for database connection pools."""
+
+    def get_connection(self) -> Tuple[Any, Any]:
+        """
+        Get a connection from the pool.
+
+        Returns:
+            A tuple containing (connection, cursor)
+
+        Raises:
+            Exception: If unable to get a connection from the pool
+        """
+        ...
+
+    def release_connection(self, conn: Any, cursor: Any) -> None:
+        """
+        Release a connection back to the pool.
+
+        Args:
+            conn: The connection to release
+            cursor: The cursor to close
+        """
+        ...
+
+    def close_all(self) -> None:
+        """
+        Close all connections in the pool.
+        """
+        ...
+
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Get statistics about the connection pool.
+
+        Returns:
+            Dictionary with pool statistics
         """
         ...
 

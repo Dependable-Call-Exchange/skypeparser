@@ -8,17 +8,63 @@ including raw exports, conversations, and messages.
 import datetime
 import json
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+import os
+import sys
+import time
+from typing import Any, Dict, List, Optional, Tuple, Union
+import psycopg2
+from psycopg2.extensions import ISOLATION_LEVEL_READ_COMMITTED
 
 from src.utils.di import get_service
 from src.utils.interfaces import DatabaseConnectionProtocol, LoaderProtocol
 from src.utils.validation import validate_db_config
+from src.utils.new_structured_logging import (
+    get_logger,
+    log_execution_time,
+    log_call,
+    handle_errors,
+    with_context,
+    LogContext,
+    log_database_query,
+    log_metrics
+)
 
 from .context import ETLContext
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
-# Database schema definitions
+# Default schema path
+DEFAULT_SCHEMA_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+    "schemas",
+    "database_schema.sql"
+)
+
+# Default indexes for optimization
+DEFAULT_INDEXES = [
+    """
+    CREATE INDEX IF NOT EXISTS idx_messages_conversation_timestamp
+    ON public.skype_messages(conversation_id, timestamp)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_messages_sender
+    ON public.skype_messages(sender_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_messages_type
+    ON public.skype_messages(message_type)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_conversations_export_id
+    ON public.skype_conversations(export_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_messages_content_gin
+    ON public.skype_messages USING gin(to_tsvector('english', content))
+    """
+]
+
+# Fallback schema definitions if schema file is not available
 RAW_EXPORTS_TABLE = """
 CREATE TABLE IF NOT EXISTS public.skype_raw_exports (
     export_id SERIAL PRIMARY KEY,
@@ -63,7 +109,7 @@ CREATE TABLE IF NOT EXISTS public.skype_messages (
 
 
 class Loader(LoaderProtocol):
-    """Handles loading of transformed Skype data into the database."""
+    """Handles loading transformed Skype data into the database."""
 
     def __init__(
         self,
@@ -71,378 +117,907 @@ class Loader(LoaderProtocol):
         db_config: Optional[Dict[str, Any]] = None,
         batch_size: int = 100,
         db_connection: Optional[DatabaseConnectionProtocol] = None,
+        max_retries: int = 3,
+        retry_delay: float = 1.0,
+        schema_file: Optional[str] = None,
     ):
-        """Initialize the Loader.
+        """
+        Initialize the loader.
 
         Args:
-            context: Shared ETL context object
-            db_config: Database configuration (used if context not provided)
-            batch_size: Number of records to insert in a single batch
-            db_connection: Optional database connection
+            context: ETL context
+            db_config: Database configuration
+            batch_size: Batch size for database operations
+            db_connection: Database connection
+            max_retries: Maximum number of retries for database operations
+            retry_delay: Delay between retries in seconds
+            schema_file: Path to database schema file
         """
+        # Initialize metrics
+        self._metrics = {
+            "start_time": None,
+            "end_time": None,
+            "rows_inserted": 0,
+            "conversations_inserted": 0,
+            "messages_inserted": 0,
+            "batch_sizes": [],
+            "query_times": [],
+        }
+
+        # Set context
         self.context = context
-        self.db_config = db_config if context is None else context.db_config
+
+        # Set database configuration
+        if db_config is None and context is not None:
+            db_config = context.db_config
+        self.db_config = db_config
+
+        # Set batch size
+        if batch_size is None and context is not None:
+            batch_size = context.batch_size
         self.batch_size = batch_size
-        self.db_connection = db_connection or get_service(DatabaseConnectionProtocol)
-        self._conn = None
-        self._cursor = None
 
+        # Set database connection
+        self.db_connection = db_connection
+        if self.db_connection is None:
+            # Get database connection from service registry if available
+            try:
+                self.db_connection = get_service("db_connection")
+            except (ImportError, KeyError):
+                self.db_connection = None
+
+        # Set retry parameters
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+
+        # Set schema file
+        self.schema_file = schema_file or DEFAULT_SCHEMA_PATH
+
+        # Log initialization
+        logger.info(
+            "Initialized Loader",
+            extra={
+                "batch_size": self.batch_size,
+                "max_retries": self.max_retries,
+                "retry_delay": self.retry_delay,
+                "schema_file": self.schema_file,
+            }
+        )
+
+    @handle_errors(log_level="ERROR", default_message="Error connecting to database")
     def connect_db(self) -> None:
-        """Connect to the database and create tables if they don't exist."""
-        logger.info("Connecting to database")
+        """Connect to the database."""
+        # Skip if already connected
+        if self.db_connection is not None and hasattr(self.db_connection, "closed") and not self.db_connection.closed:
+            logger.debug("Already connected to database")
+            return
 
-        # Connect to the database
-        self.db_connection.connect()
+        # Validate database configuration
+        if self.db_config is None:
+            raise ValueError("Database configuration is required")
 
-        # Create tables
-        self._create_tables()
+        # Log connection attempt
+        logger.info(
+            "Connecting to database",
+            extra={
+                "host": self.db_config.get("host", "localhost"),
+                "port": self.db_config.get("port", 5432),
+                "database": self.db_config.get("database", "postgres"),
+                "user": self.db_config.get("user", "postgres"),
+            }
+        )
 
-        logger.info("Database connection established")
+        # Connect to database
+        start_time = time.time()
+        try:
+            self.db_connection = psycopg2.connect(**self.db_config)
+            self.db_connection.set_isolation_level(ISOLATION_LEVEL_READ_COMMITTED)
 
+            # Log successful connection
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(
+                "Connected to database",
+                extra={
+                    "metrics": {
+                        "duration_ms": duration_ms,
+                        "host": self.db_config.get("host", "localhost"),
+                        "database": self.db_config.get("database", "postgres"),
+                    }
+                }
+            )
+        except Exception as e:
+            # Log connection error
+            duration_ms = (time.time() - start_time) * 1000
+            logger.error(
+                f"Error connecting to database: {e}",
+                exc_info=True,
+                extra={
+                    "metrics": {
+                        "duration_ms": duration_ms,
+                        "host": self.db_config.get("host", "localhost"),
+                        "database": self.db_config.get("database", "postgres"),
+                    },
+                    "error": str(e),
+                }
+            )
+            raise
+
+    @handle_errors(log_level="ERROR", default_message="Error closing database connection")
     def close_db(self) -> None:
         """Close the database connection."""
-        logger.info("Closing database connection")
+        if self.db_connection is not None and hasattr(self.db_connection, "closed") and not self.db_connection.closed:
+            logger.debug("Closing database connection")
+            self.db_connection.close()
+            logger.info("Database connection closed")
 
-        if self.db_connection:
-            self.db_connection.disconnect()
+    @handle_errors(log_level="ERROR", default_message="Error checking database health")
+    def _check_db_health(self) -> None:
+        """Check database health."""
+        if self.db_connection is None:
+            raise ValueError("Database connection is not initialized")
 
-        logger.info("Database connection closed")
+        # Execute a simple query to check database health
+        start_time = time.time()
+        with self.db_connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+            result = cursor.fetchone()
 
+        # Log health check
+        duration_ms = (time.time() - start_time) * 1000
+        logger.debug(
+            "Database health check successful",
+            extra={
+                "metrics": {
+                    "duration_ms": duration_ms,
+                    "result": result[0] if result else None,
+                }
+            }
+        )
+
+    @handle_errors(log_level="ERROR", default_message="Error creating database tables")
     def _create_tables(self) -> None:
-        """Create database tables if they don't exist."""
-        logger.info("Creating database tables if they don't exist")
+        """Create database tables."""
+        if self.db_connection is None:
+            raise ValueError("Database connection is not initialized")
 
-        # Execute table creation queries
-        self.db_connection.execute(RAW_EXPORTS_TABLE)
-        self.db_connection.execute(CONVERSATIONS_TABLE)
-        self.db_connection.execute(MESSAGES_TABLE)
+        # Read schema file
+        with open(self.schema_file, "r") as f:
+            schema_sql = f.read()
 
+        # Execute schema SQL
+        start_time = time.time()
+        with self.db_connection.cursor() as cursor:
+            cursor.execute(schema_sql)
+        self.db_connection.commit()
+
+        # Log table creation
+        duration_ms = (time.time() - start_time) * 1000
+        logger.info(
+            "Created database tables",
+            extra={
+                "metrics": {
+                    "duration_ms": duration_ms,
+                    "schema_file": self.schema_file,
+                }
+            }
+        )
+
+    @handle_errors(log_level="ERROR", default_message="Error creating database indexes")
+    def _create_indexes(self) -> None:
+        """Create database indexes."""
+        if self.db_connection is None:
+            raise ValueError("Database connection is not initialized")
+
+        # Execute index creation SQL
+        start_time = time.time()
+        with self.db_connection.cursor() as cursor:
+            for index_sql in DEFAULT_INDEXES:
+                cursor.execute(index_sql)
+        self.db_connection.commit()
+
+        # Log index creation
+        duration_ms = (time.time() - start_time) * 1000
+        logger.info(
+            "Created database indexes",
+            extra={
+                "metrics": {
+                    "duration_ms": duration_ms,
+                    "index_count": len(DEFAULT_INDEXES),
+                }
+            }
+        )
+
+    @log_execution_time(level=logging.INFO)
+    @with_context(operation="load")
     def load(
         self,
         raw_data: Dict[str, Any],
         transformed_data: Dict[str, Any],
         file_source: Optional[str] = None,
     ) -> int:
-        """Load transformed data into the database.
+        """
+        Load transformed data into the database.
 
         Args:
-            raw_data: Raw data from the extraction phase
-            transformed_data: Transformed data from the transformation phase
-            file_source: Original file source (path or name)
+            raw_data: Raw data from the extractor
+            transformed_data: Transformed data from the transformer
+            file_source: Source file path
 
         Returns:
-            The export ID of the loaded data
-
-        Raises:
-            ValueError: If the input data is invalid
-            Exception: If there's an error during loading
+            Export ID
         """
-        # Validate input data
-        self._validate_input_data(raw_data, transformed_data)
-
-        # Validate database connection
-        self._validate_database_connection()
-
-        # Begin transaction
-        self._begin_transaction()
+        # Start timer
+        self._metrics["start_time"] = time.time()
 
         try:
-            # Store raw export data
-            export_id = self._store_raw_export(raw_data, file_source)
+            # Validate input data
+            self._validate_input_data(raw_data, transformed_data)
 
-            # Store conversations
-            self._store_conversations(transformed_data, export_id)
+            # Connect to database if not already connected
+            self._validate_database_connection()
 
-            # Store messages
-            self._store_messages(transformed_data)
+            # Create tables and indexes if they don't exist
+            self._create_tables()
+            self._create_indexes()
 
-            # Commit transaction
-            self._commit_transaction()
+            # Begin transaction
+            self._begin_transaction()
 
-            # Update context if available
-            if self.context:
-                self.context.set_export_id(export_id)
-                self.context.set_phase_status("load", "completed")
+            try:
+                # Store raw export
+                export_id = self._store_raw_export(raw_data, file_source)
 
-            logger.info(f"Data loaded successfully with export ID: {export_id}")
-            return export_id
+                # Store conversations and messages
+                with LogContext(export_id=export_id):
+                    self._store_conversations(transformed_data, export_id)
+                    self._store_messages(transformed_data)
+
+                # Commit transaction
+                self._commit_transaction()
+
+                # Update context if available
+                if self.context is not None:
+                    self.context.export_id = export_id
+
+                # End timer
+                self._metrics["end_time"] = time.time()
+
+                # Calculate comprehensive metrics
+                duration_ms = (self._metrics["end_time"] - self._metrics["start_time"]) * 1000
+                avg_batch_size = sum(self._metrics["batch_sizes"]) / len(self._metrics["batch_sizes"]) if self._metrics["batch_sizes"] else 0
+                avg_query_time_ms = sum(self._metrics["query_times"]) / len(self._metrics["query_times"]) if self._metrics["query_times"] else 0
+                total_queries = len(self._metrics["query_times"])
+
+                # Calculate throughput metrics
+                messages_per_second = (self._metrics["messages_inserted"] / duration_ms) * 1000 if duration_ms > 0 else 0
+                conversations_per_second = (self._metrics["conversations_inserted"] / duration_ms) * 1000 if duration_ms > 0 else 0
+
+                # Log success with basic info
+                logger.info(
+                    f"Data loaded successfully with export ID: {export_id}",
+                    extra={
+                        "export_id": export_id,
+                        "file_source": file_source
+                    }
+                )
+
+                # Log detailed metrics separately for better analysis
+                log_metrics(
+                    logger,
+                    {
+                        "duration_ms": duration_ms,
+                        "rows_inserted": self._metrics["rows_inserted"],
+                        "conversations_inserted": self._metrics["conversations_inserted"],
+                        "messages_inserted": self._metrics["messages_inserted"],
+                        "avg_batch_size": avg_batch_size,
+                        "avg_query_time_ms": avg_query_time_ms,
+                        "total_queries": total_queries,
+                        "messages_per_second": messages_per_second,
+                        "conversations_per_second": conversations_per_second,
+                        "max_batch_size": max(self._metrics["batch_sizes"]) if self._metrics["batch_sizes"] else 0,
+                        "min_batch_size": min(self._metrics["batch_sizes"]) if self._metrics["batch_sizes"] else 0,
+                        "max_query_time_ms": max(self._metrics["query_times"]) if self._metrics["query_times"] else 0,
+                        "min_query_time_ms": min(self._metrics["query_times"]) if self._metrics["query_times"] else 0,
+                        "export_id": export_id
+                    },
+                    level=logging.INFO,
+                    message=f"Load operation metrics for export ID: {export_id}"
+                )
+
+                return export_id
+
+            except Exception as e:
+                # Rollback transaction on error
+                self._rollback_transaction()
+                raise
 
         except Exception as e:
-            # Rollback transaction on error
-            self._rollback_transaction()
+            # Calculate partial metrics for error analysis
+            end_time = time.time()
+            duration_ms = (end_time - (self._metrics["start_time"] or end_time)) * 1000
 
-            # Log error
-            logger.error(f"Error loading data: {e}")
+            # Log error with detailed context
+            logger.error(
+                f"Error loading data: {e}",
+                exc_info=True,
+                extra={
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                    "file_source": file_source,
+                    "phase": "load",
+                    "metrics": {
+                        "duration_ms": duration_ms,
+                        "rows_inserted": self._metrics["rows_inserted"],
+                        "conversations_inserted": self._metrics["conversations_inserted"],
+                        "messages_inserted": self._metrics["messages_inserted"],
+                        "progress_percentage": (
+                            (self._metrics["conversations_inserted"] / len(transformed_data.get("conversations", {}))) * 100
+                            if transformed_data and "conversations" in transformed_data and len(transformed_data["conversations"]) > 0
+                            else 0
+                        )
+                    }
+                }
+            )
 
-            # Update context if available
-            if self.context:
-                self.context.record_error("load", str(e))
+            # Record error in context if available
+            if self.context is not None:
+                self.context.record_error(
+                    "load",
+                    f"Error loading data: {e}",
+                    {
+                        "error_type": type(e).__name__,
+                        "file_source": file_source,
+                        "metrics": {
+                            "duration_ms": duration_ms,
+                            "rows_inserted": self._metrics["rows_inserted"],
+                            "conversations_inserted": self._metrics["conversations_inserted"],
+                            "messages_inserted": self._metrics["messages_inserted"]
+                        }
+                    }
+                )
 
-            # Re-raise exception
             raise
 
+    @handle_errors(log_level="ERROR", default_message="Error validating input data")
     def _validate_input_data(
         self, raw_data: Dict[str, Any], transformed_data: Dict[str, Any]
     ) -> None:
-        """Validate input data for loading.
+        """
+        Validate input data.
 
         Args:
-            raw_data: Raw data from the extraction phase
-            transformed_data: Transformed data from the transformation phase
+            raw_data: Raw data from the extractor
+            transformed_data: Transformed data from the transformer
 
         Raises:
-            ValueError: If the input data is invalid
+            ValueError: If input data is invalid
         """
-        # Check that raw_data is a dictionary
+        # Validate raw data
         if not isinstance(raw_data, dict):
-            error_msg = f"Raw data must be a dictionary, got {type(raw_data).__name__}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            raise ValueError("Raw data must be a dictionary")
+        if "messages" not in raw_data:
+            raise ValueError("Raw data must contain 'messages' key")
 
-        # Check that transformed_data is a dictionary
+        # Validate transformed data
         if not isinstance(transformed_data, dict):
-            error_msg = f"Transformed data must be a dictionary, got {type(transformed_data).__name__}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+            raise ValueError("Transformed data must be a dictionary")
+        if "conversations" not in transformed_data:
+            raise ValueError("Transformed data must contain 'conversations' key")
+        if "messages" not in transformed_data:
+            raise ValueError("Transformed data must contain 'messages' key")
 
-        # Check that transformed_data contains required keys
-        required_keys = ["user_id", "export_date", "conversations"]
-        missing_keys = [key for key in required_keys if key not in transformed_data]
-        if missing_keys:
-            error_msg = (
-                f"Transformed data missing required keys: {', '.join(missing_keys)}"
-            )
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+        # Log validation success
+        logger.debug(
+            "Input data validated",
+            extra={
+                "raw_data_keys": list(raw_data.keys()),
+                "transformed_data_keys": list(transformed_data.keys()),
+                "conversation_count": len(transformed_data["conversations"]),
+                "message_count": sum(len(msgs) for msgs in transformed_data["messages"].values()),
+            }
+        )
 
-        # Check that conversations is a dictionary
-        if not isinstance(transformed_data["conversations"], dict):
-            error_msg = "Transformed data 'conversations' must be a dictionary"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-
-        # Check that at least one conversation exists
-        if not transformed_data["conversations"]:
-            logger.warning("No conversations found in transformed data")
-
+    @handle_errors(log_level="ERROR", default_message="Error validating database connection")
     def _validate_database_connection(self) -> None:
-        """Validate database connection.
+        """
+        Validate database connection.
 
         Raises:
-            ValueError: If the database connection is invalid
+            ValueError: If database connection is invalid
         """
-        if not self.db_connection:
-            error_msg = "Database connection not initialized"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+        # Connect to database if not already connected
+        if self.db_connection is None:
+            self.connect_db()
 
+        # Check database health
+        self._check_db_health()
+
+    @with_context(operation="store_raw_export")
+    @handle_errors(log_level="ERROR", default_message="Error storing raw export")
     def _store_raw_export(
         self, raw_data: Dict[str, Any], file_source: Optional[str] = None
     ) -> int:
-        """Store raw export data in the database.
+        """
+        Store raw export data.
 
         Args:
-            raw_data: Raw data from the extraction phase
-            file_source: Original file source (path or name)
+            raw_data: Raw data from the extractor
+            file_source: Source file path
 
         Returns:
-            The export ID of the stored data
+            Export ID
         """
-        logger.info("Storing raw export data")
+        # Prepare data
+        export_data = {
+            "raw_data": json.dumps(raw_data),
+            "file_source": file_source,
+            "import_date": datetime.datetime.now().isoformat(),
+            "user_id": self.context.user_id if self.context else None,
+            "user_display_name": self.context.user_display_name if self.context else None,
+            "export_date": self.context.export_date if self.context else None,
+        }
 
-        # Get user ID and export date from context or use defaults
-        user_id = (
-            self.context.user_id
-            if self.context
-            and hasattr(self.context, "user_id")
-            and self.context.user_id is not None
-            else "unknown_user"
-        )
-        export_date = (
-            self.context.export_date
-            if self.context
-            and hasattr(self.context, "export_date")
-            and self.context.export_date is not None
-            else datetime.datetime.now().isoformat()
-        )
-
-        # Insert raw export data
+        # Insert export
         query = """
-        INSERT INTO public.skype_raw_exports (user_id, export_date, raw_data, file_source)
-        VALUES (%s, %s, %s, %s)
-        RETURNING export_id
+        INSERT INTO public.skype_exports
+        (raw_data, file_source, import_date, user_id, user_display_name, export_date)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id
         """
-
-        # Convert raw_data to JSON string
-        raw_data_json = json.dumps(raw_data)
+        params = (
+            export_data["raw_data"],
+            export_data["file_source"],
+            export_data["import_date"],
+            export_data["user_id"],
+            export_data["user_display_name"],
+            export_data["export_date"],
+        )
 
         # Execute query
-        result = self.db_connection.fetch_one(
-            query, (user_id, export_date, raw_data_json, file_source)
+        start_time = time.time()
+        with self.db_connection.cursor() as cursor:
+            cursor.execute(query, params)
+            export_id = cursor.fetchone()[0]
+
+        # Update metrics
+        duration_ms = (time.time() - start_time) * 1000
+        self._metrics["rows_inserted"] += 1
+        self._metrics["query_times"].append(duration_ms)
+
+        # Log query
+        log_database_query(
+            logger,
+            query,
+            {
+                "raw_data": "<truncated>",
+                "file_source": export_data["file_source"],
+                "import_date": export_data["import_date"],
+                "user_id": export_data["user_id"],
+                "user_display_name": export_data["user_display_name"],
+                "export_date": export_data["export_date"],
+            },
+            duration_ms,
+            1,
+            logging.DEBUG
         )
 
-        # Get export ID
-        export_id = result[0]
+        # Log export storage
+        logger.info(
+            f"Stored raw export with ID: {export_id}",
+            extra={
+                "export_id": export_id,
+                "file_source": file_source,
+                "metrics": {
+                    "duration_ms": duration_ms,
+                    "raw_data_size_bytes": len(export_data["raw_data"]),
+                }
+            }
+        )
 
-        logger.info(f"Raw export data stored with ID: {export_id}")
         return export_id
 
+    @with_context(operation="store_conversations")
+    @handle_errors(log_level="ERROR", default_message="Error storing conversations")
     def _store_conversations(
         self, transformed_data: Dict[str, Any], export_id: int
     ) -> None:
-        """Store conversations in the database.
+        """
+        Store conversations.
 
         Args:
-            transformed_data: Transformed data from the transformation phase
-            export_id: Export ID to associate with the conversations
+            transformed_data: Transformed data from the transformer
+            export_id: Export ID
         """
-        logger.info("Storing conversations")
+        # Get conversations
+        conversations = transformed_data.get("conversations", {})
 
-        # Get conversations from transformed data
-        conversations = transformed_data["conversations"]
+        # Track metrics
+        start_time = time.time()
+        conversation_sizes = []
+        conversation_types = {}
 
-        # Insert each conversation
+        # Log start
+        logger.info(
+            f"Storing {len(conversations)} conversations for export ID: {export_id}",
+            extra={
+                "export_id": export_id,
+                "conversation_count": len(conversations),
+            }
+        )
+
+        # Store each conversation
         for conv_id, conv_data in conversations.items():
+            # Track conversation size and type for metrics
+            conv_size = len(json.dumps(conv_data))
+            conversation_sizes.append(conv_size)
+
+            # Track conversation type distribution
+            conv_type = conv_data.get("type", "unknown")
+            conversation_types[conv_type] = conversation_types.get(conv_type, 0) + 1
+
+            # Insert the conversation
             self._insert_conversation(conv_id, conv_data, export_id)
 
-        logger.info(f"Stored {len(conversations)} conversations")
+            # Update progress in context if available
+            if self.context is not None:
+                self.context.update_progress(
+                    "store_conversations",
+                    list(conversations.keys()).index(conv_id) + 1,
+                    len(conversations),
+                    "conversations"
+                )
 
+        # Calculate metrics
+        duration_ms = (time.time() - start_time) * 1000
+        avg_conv_size = sum(conversation_sizes) / len(conversation_sizes) if conversation_sizes else 0
+
+        # Log completion with basic info
+        logger.info(
+            f"Stored {len(conversations)} conversations for export ID: {export_id}",
+            extra={
+                "export_id": export_id,
+                "conversation_count": len(conversations),
+            }
+        )
+
+        # Log detailed metrics separately
+        log_metrics(
+            logger,
+            {
+                "conversations_inserted": len(conversations),
+                "duration_ms": duration_ms,
+                "conversations_per_second": (len(conversations) / duration_ms) * 1000 if duration_ms > 0 else 0,
+                "avg_conversation_size_bytes": avg_conv_size,
+                "min_conversation_size_bytes": min(conversation_sizes) if conversation_sizes else 0,
+                "max_conversation_size_bytes": max(conversation_sizes) if conversation_sizes else 0,
+                "total_conversation_data_kb": sum(conversation_sizes) / 1024 if conversation_sizes else 0,
+                "conversation_type_distribution": conversation_types,
+                "export_id": export_id
+            },
+            level=logging.INFO,
+            message=f"Conversation storage metrics for export ID: {export_id}"
+        )
+
+    @handle_errors(log_level="ERROR", default_message="Error inserting conversation")
     def _insert_conversation(
         self, conv_id: str, conv_data: Dict[str, Any], export_id: int
     ) -> None:
-        """Insert a conversation into the database.
+        """
+        Insert a conversation.
 
         Args:
             conv_id: Conversation ID
             conv_data: Conversation data
-            export_id: Export ID to associate with the conversation
+            export_id: Export ID
         """
-        # Extract conversation data
-        display_name = conv_data.get("display_name", "")
-        first_message_time = conv_data.get("first_message_time")
-        last_message_time = conv_data.get("last_message_time")
-        message_count = len(conv_data.get("messages", []))
+        # Prepare data
+        conversation = {
+            "id": conv_id,
+            "export_id": export_id,
+            "display_name": conv_data.get("displayName", ""),
+            "type": conv_data.get("type", ""),
+            "version": conv_data.get("version", 0),
+            "properties": json.dumps(conv_data.get("properties", {})),
+            "thread_properties": json.dumps(conv_data.get("threadProperties", {})),
+            "members": json.dumps(conv_data.get("members", [])),
+        }
 
         # Insert conversation
         query = """
         INSERT INTO public.skype_conversations
-        (conversation_id, display_name, export_id, first_message_time, last_message_time, message_count)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        ON CONFLICT (conversation_id)
-        DO UPDATE SET
-            display_name = EXCLUDED.display_name,
-            export_id = EXCLUDED.export_id,
-            first_message_time = EXCLUDED.first_message_time,
-            last_message_time = EXCLUDED.last_message_time,
-            message_count = EXCLUDED.message_count,
-            updated_at = CURRENT_TIMESTAMP
+        (id, export_id, display_name, type, version, properties, thread_properties, members)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (id) DO UPDATE SET
+        export_id = EXCLUDED.export_id,
+        display_name = EXCLUDED.display_name,
+        type = EXCLUDED.type,
+        version = EXCLUDED.version,
+        properties = EXCLUDED.properties,
+        thread_properties = EXCLUDED.thread_properties,
+        members = EXCLUDED.members
         """
-
-        # Execute query
-        self.db_connection.execute(
-            query,
-            (
-                conv_id,
-                display_name,
-                export_id,
-                first_message_time,
-                last_message_time,
-                message_count,
-            ),
+        params = (
+            conversation["id"],
+            conversation["export_id"],
+            conversation["display_name"],
+            conversation["type"],
+            conversation["version"],
+            conversation["properties"],
+            conversation["thread_properties"],
+            conversation["members"],
         )
 
+        # Execute query
+        start_time = time.time()
+        with self.db_connection.cursor() as cursor:
+            cursor.execute(query, params)
+
+        # Update metrics
+        duration_ms = (time.time() - start_time) * 1000
+        self._metrics["rows_inserted"] += 1
+        self._metrics["conversations_inserted"] += 1
+        self._metrics["query_times"].append(duration_ms)
+
+        # Log query
+        log_database_query(
+            logger,
+            query,
+            {
+                "id": conversation["id"],
+                "export_id": conversation["export_id"],
+                "display_name": conversation["display_name"],
+                "type": conversation["type"],
+                "version": conversation["version"],
+                "properties": "<truncated>",
+                "thread_properties": "<truncated>",
+                "members": "<truncated>",
+            },
+            duration_ms,
+            1,
+            logging.DEBUG
+        )
+
+    @with_context(operation="store_messages")
+    @handle_errors(log_level="ERROR", default_message="Error storing messages")
     def _store_messages(self, transformed_data: Dict[str, Any]) -> None:
-        """Store messages in the database.
+        """
+        Store messages.
 
         Args:
-            transformed_data: Transformed data from the transformation phase
+            transformed_data: Transformed data from the transformer
         """
-        logger.info("Storing messages")
+        # Get messages
+        messages_by_conversation = transformed_data.get("messages", {})
+        total_message_count = sum(len(msgs) for msgs in messages_by_conversation.values())
 
-        # Get conversations from transformed data
-        conversations = transformed_data["conversations"]
+        # Log start
+        logger.info(
+            f"Storing {total_message_count} messages for {len(messages_by_conversation)} conversations",
+            extra={
+                "conversation_count": len(messages_by_conversation),
+                "message_count": total_message_count,
+            }
+        )
 
-        # Track total messages
-        total_messages = 0
-
-        # Insert messages for each conversation
-        for conv_id, conv_data in conversations.items():
-            messages = conv_data.get("messages", [])
-            if messages:
+        # Store messages for each conversation
+        for conv_id, messages in messages_by_conversation.items():
+            with LogContext(conversation_id=conv_id):
                 self._insert_messages(conv_id, messages)
-                total_messages += len(messages)
 
-        logger.info(f"Stored {total_messages} messages")
+        # Log completion
+        logger.info(
+            f"Stored {total_message_count} messages for {len(messages_by_conversation)} conversations",
+            extra={
+                "conversation_count": len(messages_by_conversation),
+                "message_count": total_message_count,
+                "metrics": {
+                    "messages_inserted": total_message_count,
+                }
+            }
+        )
 
+    @handle_errors(log_level="ERROR", default_message="Error inserting messages")
     def _insert_messages(self, conv_id: str, messages: List[Dict[str, Any]]) -> None:
-        """Insert messages into the database.
+        """
+        Insert messages for a conversation.
 
         Args:
             conv_id: Conversation ID
-            messages: List of messages to insert
+            messages: List of messages
+        """
+        # Log start
+        logger.debug(
+            f"Inserting {len(messages)} messages for conversation: {conv_id}",
+            extra={
+                "conversation_id": conv_id,
+                "message_count": len(messages),
+            }
+        )
+
+        # Calculate optimal batch size
+        batch_size = self._calculate_optimal_batch_size(messages)
+
+        # Insert messages in batches
+        for i in range(0, len(messages), batch_size):
+            batch = messages[i:i+batch_size]
+            self._insert_message_batch(conv_id, batch)
+
+            # Log batch progress
+            logger.debug(
+                f"Inserted batch of {len(batch)} messages for conversation: {conv_id}",
+                extra={
+                    "conversation_id": conv_id,
+                    "batch_size": len(batch),
+                    "progress": f"{min(i+batch_size, len(messages))}/{len(messages)}",
+                }
+            )
+
+    @handle_errors(log_level="ERROR", default_message="Error calculating optimal batch size")
+    def _calculate_optimal_batch_size(self, messages: List[Dict[str, Any]]) -> int:
+        """
+        Calculate optimal batch size based on message size.
+
+        Args:
+            messages: List of messages
+
+        Returns:
+            Optimal batch size
+        """
+        # Use default batch size if no messages
+        if not messages:
+            logger.debug(
+                "No messages to calculate batch size, using default",
+                extra={"default_batch_size": self.batch_size}
+            )
+            return self.batch_size
+
+        # Calculate average message size
+        avg_message_size = sum(len(json.dumps(msg)) for msg in messages) / len(messages)
+
+        # Calculate optimal batch size (target ~1MB per batch)
+        target_batch_size_bytes = 1024 * 1024  # 1MB
+        optimal_batch_size = max(1, min(self.batch_size, int(target_batch_size_bytes / avg_message_size)))
+
+        # Log calculation with metrics
+        log_metrics(
+            logger,
+            {
+                "avg_message_size_bytes": avg_message_size,
+                "default_batch_size": self.batch_size,
+                "optimal_batch_size": optimal_batch_size,
+                "target_batch_size_bytes": target_batch_size_bytes,
+                "message_count": len(messages),
+                "size_reduction_percent": ((self.batch_size - optimal_batch_size) / self.batch_size) * 100 if optimal_batch_size < self.batch_size else 0,
+                "estimated_batch_size_kb": (optimal_batch_size * avg_message_size) / 1024
+            },
+            level=logging.DEBUG,
+            message=f"Calculated optimal batch size: {optimal_batch_size}"
+        )
+
+        return optimal_batch_size
+
+    @handle_errors(log_level="ERROR", default_message="Error inserting message batch")
+    def _insert_message_batch(self, conv_id: str, messages: List[Dict[str, Any]]) -> None:
+        """
+        Insert a batch of messages.
+
+        Args:
+            conv_id: Conversation ID
+            messages: List of messages
         """
         if not messages:
             return
 
-        # Prepare batch
-        batch = []
-        for msg in messages:
-            # Handle reactions and attachments that might be MagicMock objects
-            reactions = msg.get("reactions", {})
-            attachments = msg.get("attachments", [])
-
-            # Check if reactions is a MagicMock object
-            if (
-                hasattr(reactions, "__class__")
-                and reactions.__class__.__name__ == "MagicMock"
-            ):
-                reactions = {}
-
-            # Check if attachments is a MagicMock object
-            if (
-                hasattr(attachments, "__class__")
-                and attachments.__class__.__name__ == "MagicMock"
-            ):
-                attachments = []
-
-            batch.append(
-                (
-                    conv_id,
-                    msg.get("timestamp", ""),
-                    msg.get("sender_id", ""),
-                    msg.get("sender_name", ""),
-                    msg.get("content", ""),
-                    msg.get("html_content", ""),
-                    msg.get("message_type", "text"),
-                    msg.get("is_edited", False),
-                    msg.get("is_deleted", False),
-                    json.dumps(reactions),
-                    json.dumps(attachments),
-                )
-            )
-
-        # Insert batch
+        # Prepare query
         query = """
         INSERT INTO public.skype_messages
-        (conversation_id, timestamp, sender_id, sender_name, content, html_content,
-         message_type, is_edited, is_deleted, reactions, attachments)
+        (id, conversation_id, sender_id, sender_display_name, timestamp, content, message_type, properties)
         VALUES %s
+        ON CONFLICT (id) DO UPDATE SET
+        conversation_id = EXCLUDED.conversation_id,
+        sender_id = EXCLUDED.sender_id,
+        sender_display_name = EXCLUDED.sender_display_name,
+        timestamp = EXCLUDED.timestamp,
+        content = EXCLUDED.content,
+        message_type = EXCLUDED.message_type,
+        properties = EXCLUDED.properties
         """
 
-        # Execute batch insert using execute_batch
-        self.db_connection.execute_batch(query, batch)
+        # Prepare values
+        values = []
+        for msg in messages:
+            values.append((
+                msg.get("id", ""),
+                conv_id,
+                msg.get("senderId", ""),
+                msg.get("senderDisplayName", ""),
+                msg.get("timestamp", ""),
+                msg.get("content", ""),
+                msg.get("messageType", ""),
+                json.dumps(msg.get("properties", {})),
+            ))
 
+        # Execute query
+        start_time = time.time()
+        with self.db_connection.cursor() as cursor:
+            # Use execute_values for efficient batch insert
+            from psycopg2.extras import execute_values
+            execute_values(cursor, query, values)
+
+        # Calculate metrics
+        duration_ms = (time.time() - start_time) * 1000
+        self._metrics["rows_inserted"] += len(messages)
+        self._metrics["messages_inserted"] += len(messages)
+        self._metrics["batch_sizes"].append(len(messages))
+        self._metrics["query_times"].append(duration_ms)
+
+        # Log query with detailed metrics
+        log_database_query(
+            logger,
+            query,
+            {"values_count": len(values), "conversation_id": conv_id},
+            duration_ms,
+            len(messages),
+            logging.DEBUG
+        )
+
+        # Log batch metrics separately for better analysis
+        log_metrics(
+            logger,
+            {
+                "batch_size": len(messages),
+                "query_duration_ms": duration_ms,
+                "avg_message_size_bytes": sum(len(json.dumps(msg)) for msg in messages) / max(1, len(messages)),
+                "total_batch_size_kb": sum(len(json.dumps(msg)) for msg in messages) / 1024,
+                "messages_per_second": (len(messages) / duration_ms) * 1000 if duration_ms > 0 else 0
+            },
+            level=logging.DEBUG,
+            message=f"Message batch metrics for conversation {conv_id}"
+        )
+
+    @with_context(operation="begin_transaction")
+    @handle_errors(log_level="ERROR", default_message="Error beginning transaction")
     def _begin_transaction(self) -> None:
         """Begin a database transaction."""
         logger.debug("Beginning database transaction")
-        # Transaction is handled by the database connection
+        try:
+            self.db_connection.autocommit = False
+        except Exception as e:
+            logger.error(
+                f"Error beginning transaction: {e}",
+                exc_info=True,
+                extra={"error": str(e)}
+            )
+            raise
 
+    @with_context(operation="commit_transaction")
+    @handle_errors(log_level="ERROR", default_message="Error committing transaction")
     def _commit_transaction(self) -> None:
         """Commit the current database transaction."""
         logger.debug("Committing database transaction")
-        # Transaction is handled by the database connection
+        try:
+            self.db_connection.commit()
+            logger.info("Transaction committed successfully")
+        except Exception as e:
+            logger.error(
+                f"Error committing transaction: {e}",
+                exc_info=True,
+                extra={"error": str(e)}
+            )
+            raise
 
+    @with_context(operation="rollback_transaction")
+    @handle_errors(log_level="ERROR", default_message="Error rolling back transaction")
     def _rollback_transaction(self) -> None:
         """Rollback the current database transaction."""
         logger.debug("Rolling back database transaction")
-        # Transaction is handled by the database connection
+        try:
+            self.db_connection.rollback()
+            logger.info("Transaction rolled back successfully")
+        except Exception as e:
+            logger.error(
+                f"Error rolling back transaction: {e}",
+                exc_info=True,
+                extra={"error": str(e)}
+            )
+            # Don't raise here as we're already in an error handler

@@ -9,6 +9,7 @@ for each database operation.
 
 import logging
 import time
+import threading
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -17,150 +18,288 @@ from psycopg2 import pool
 from psycopg2.extras import DictCursor, execute_batch
 
 from src.utils.error_handling import ErrorContext, handle_errors, report_error
-from src.utils.interfaces import DatabaseConnectionProtocol
+from src.utils.interfaces import DatabaseConnectionProtocol, ConnectionPoolProtocol
 from src.utils.structured_logging import get_logger, log_execution_time
 
 # Set up logger
 logger = get_logger(__name__)
 
 
-class ConnectionPool:
+class PostgresConnectionPool(ConnectionPoolProtocol):
     """
-    A pool of database connections that can be reused.
+    A connection pool for PostgreSQL database connections.
 
-    This class manages a pool of database connections, improving performance
-    by avoiding the overhead of creating new connections for each operation.
+    This class provides a thread-safe connection pool that manages
+    database connections efficiently, reducing the overhead of
+    creating new connections for each operation.
     """
 
-    _instance = None
-
-    @classmethod
-    def get_instance(
-        cls, db_config: Dict[str, Any], min_conn: int = 1, max_conn: int = 5
+    def __init__(
+        self,
+        db_config: Dict[str, Any],
+        min_connections: int = 1,
+        max_connections: int = 10,
+        connection_timeout: float = 30.0,
+        idle_timeout: float = 600.0,
+        max_age: float = 3600.0,
     ):
-        """
-        Get or create a singleton instance of the connection pool.
-
-        Args:
-            db_config: Database configuration
-            min_conn: Minimum number of connections in the pool
-            max_conn: Maximum number of connections in the pool
-
-        Returns:
-            ConnectionPool instance
-        """
-        if cls._instance is None:
-            cls._instance = cls(db_config, min_conn, max_conn)
-        return cls._instance
-
-    def __init__(self, db_config: Dict[str, Any], min_conn: int = 1, max_conn: int = 5):
         """
         Initialize the connection pool.
 
         Args:
-            db_config: Database configuration
-            min_conn: Minimum number of connections in the pool
-            max_conn: Maximum number of connections in the pool
+            db_config: Database configuration dictionary
+            min_connections: Minimum number of connections to keep in the pool
+            max_connections: Maximum number of connections allowed in the pool
+            connection_timeout: Timeout in seconds when acquiring a connection
+            idle_timeout: Time in seconds after which idle connections are closed
+            max_age: Maximum age of a connection in seconds before it's recycled
         """
-        with ErrorContext(component="ConnectionPool", operation="initialization"):
-            self.db_config = db_config
-            self.min_conn = min_conn
-            self.max_conn = max_conn
+        self.db_config = db_config
+        self.min_connections = min_connections
+        self.max_connections = max_connections
+        self.connection_timeout = connection_timeout
+        self.idle_timeout = idle_timeout
+        self.max_age = max_age
 
-            # Set up connection parameters
-            self.conn_params = {
-                "dbname": db_config.get("dbname", "skype_archive"),
-                "user": db_config.get("user", "postgres"),
-                "password": db_config.get("password", ""),
-                "host": db_config.get("host", "localhost"),
-                "port": db_config.get("port", 5432),
-            }
+        # Connection tracking
+        self.pool = None
+        self.lock = threading.RLock()
+        self.connection_timestamps = {}
+        self.in_use_connections = set()
 
+        # Initialize the pool
+        self._initialize_pool()
+
+        # Start maintenance thread
+        self._start_maintenance_thread()
+
+        logger.info(f"Initialized PostgreSQL connection pool with {min_connections}-{max_connections} connections")
+
+    def _initialize_pool(self) -> None:
+        """Initialize the connection pool."""
+        try:
             # Create the connection pool
-            self.pool = psycopg2.pool.ThreadedConnectionPool(
-                minconn=min_conn, maxconn=max_conn, **self.conn_params
+            self.pool = pool.ThreadedConnectionPool(
+                minconn=self.min_connections,
+                maxconn=self.max_connections,
+                **self.db_config
             )
 
-            logger.info(
-                f"Connection pool initialized with {min_conn}-{max_conn} connections"
-            )
+            # Initialize connection timestamps
+            current_time = time.time()
+            for _ in range(self.min_connections):
+                conn = self.pool.getconn()
+                self.connection_timestamps[id(conn)] = current_time
+                self.pool.putconn(conn)
 
-    @contextmanager
-    def get_connection(self):
+            logger.info(f"Connection pool initialized with {self.min_connections} connections")
+        except Exception as e:
+            logger.error(f"Failed to initialize connection pool: {e}")
+            raise
+
+    def _start_maintenance_thread(self) -> None:
+        """Start a background thread for pool maintenance."""
+        maintenance_thread = threading.Thread(
+            target=self._maintenance_worker,
+            daemon=True,
+            name="ConnectionPoolMaintenance"
+        )
+        maintenance_thread.start()
+        logger.debug("Connection pool maintenance thread started")
+
+    def _maintenance_worker(self) -> None:
+        """Background worker that performs pool maintenance."""
+        while True:
+            try:
+                # Sleep for a while before performing maintenance
+                time.sleep(60)  # Check every minute
+
+                with self.lock:
+                    self._cleanup_idle_connections()
+                    self._recycle_old_connections()
+            except Exception as e:
+                logger.error(f"Error in connection pool maintenance: {e}")
+
+    def _cleanup_idle_connections(self) -> None:
+        """Close idle connections that exceed the idle timeout."""
+        if not self.pool:
+            return
+
+        current_time = time.time()
+        connections_to_close = []
+
+        # Identify idle connections to close
+        for conn_id, timestamp in list(self.connection_timestamps.items()):
+            if (conn_id not in self.in_use_connections and
+                current_time - timestamp > self.idle_timeout and
+                len(self.connection_timestamps) > self.min_connections):
+                connections_to_close.append(conn_id)
+
+        # Close identified connections
+        for conn_id in connections_to_close:
+            try:
+                # Find the connection object
+                for conn in self.pool._pool:
+                    if id(conn) == conn_id:
+                        self.pool._pool.remove(conn)
+                        conn.close()
+                        del self.connection_timestamps[conn_id]
+                        logger.debug(f"Closed idle connection (idle for {current_time - timestamp:.1f}s)")
+                        break
+            except Exception as e:
+                logger.warning(f"Error closing idle connection: {e}")
+
+    def _recycle_old_connections(self) -> None:
+        """Recycle connections that exceed the maximum age."""
+        if not self.pool:
+            return
+
+        current_time = time.time()
+        connections_to_recycle = []
+
+        # Identify old connections to recycle
+        for conn_id, timestamp in list(self.connection_timestamps.items()):
+            if (conn_id not in self.in_use_connections and
+                current_time - timestamp > self.max_age):
+                connections_to_recycle.append(conn_id)
+
+        # Recycle identified connections
+        for conn_id in connections_to_recycle:
+            try:
+                # Find the connection object
+                for conn in self.pool._pool:
+                    if id(conn) == conn_id:
+                        self.pool._pool.remove(conn)
+                        conn.close()
+
+                        # Create a new connection
+                        new_conn = psycopg2.connect(**self.db_config)
+                        self.pool._pool.append(new_conn)
+                        self.connection_timestamps[id(new_conn)] = current_time
+
+                        del self.connection_timestamps[conn_id]
+                        logger.debug(f"Recycled old connection (age: {current_time - timestamp:.1f}s)")
+                        break
+            except Exception as e:
+                logger.warning(f"Error recycling old connection: {e}")
+
+    def get_connection(self) -> Tuple[Any, DictCursor]:
         """
         Get a connection from the pool.
 
-        This context manager automatically returns the connection to the pool when done.
-
-        Yields:
-            A connection from the pool
+        Returns:
+            A tuple containing (connection, cursor)
 
         Raises:
-            psycopg2.Error: If a database error occurs
+            Exception: If unable to get a connection from the pool
         """
+        if not self.pool:
+            self._initialize_pool()
+
+        start_time = time.time()
         conn = None
+
         try:
-            # Get a connection from the pool
-            conn = self.pool.getconn()
+            # Try to get a connection with timeout
+            while time.time() - start_time < self.connection_timeout:
+                try:
+                    with self.lock:
+                        conn = self.pool.getconn()
+                        self.in_use_connections.add(id(conn))
+                        self.connection_timestamps[id(conn)] = time.time()
+                        break
+                except pool.PoolError:
+                    # Pool is exhausted, wait and retry
+                    time.sleep(0.1)
 
-            # Set autocommit to False for transaction control
-            conn.autocommit = False
+            if conn is None:
+                raise Exception(f"Timed out waiting for database connection after {self.connection_timeout}s")
 
-            # Yield the connection
-            yield conn
+            # Create a cursor
+            cursor = conn.cursor(cursor_factory=DictCursor)
+
+            logger.debug(f"Acquired connection from pool (waited {time.time() - start_time:.3f}s)")
+            return conn, cursor
 
         except Exception as e:
-            # Log the error and re-raise
-            logger.error(f"Error getting connection from pool: {e}")
+            # If we got a connection but failed to create a cursor, return it to the pool
+            if conn:
+                with self.lock:
+                    self.in_use_connections.remove(id(conn))
+                    self.pool.putconn(conn)
+
+            logger.error(f"Failed to get connection from pool: {e}")
             raise
 
-        finally:
-            # Return the connection to the pool
-            if conn:
-                self.pool.putconn(conn)
-
-    @contextmanager
-    def get_cursor(self, cursor_factory=DictCursor):
+    def release_connection(self, conn: Any, cursor: Any) -> None:
         """
-        Get a cursor for executing database operations.
-
-        This context manager automatically handles connection and transaction management.
+        Release a connection back to the pool.
 
         Args:
-            cursor_factory: Factory for creating cursor objects
-
-        Yields:
-            A cursor for executing database operations
-
-        Raises:
-            psycopg2.Error: If a database error occurs
+            conn: The connection to release
+            cursor: The cursor to close
         """
-        with self.get_connection() as conn:
-            # Create a cursor
-            cursor = conn.cursor(cursor_factory=cursor_factory)
+        if not conn:
+            return
 
-            try:
-                # Yield the cursor
-                yield cursor
-
-                # Commit the transaction
-                conn.commit()
-
-            except Exception as e:
-                # Rollback the transaction on error
-                conn.rollback()
-                logger.error(f"Error executing database operation: {e}")
-                raise
-
-            finally:
-                # Close the cursor
+        try:
+            # Close the cursor
+            if cursor:
                 cursor.close()
 
-    def close(self):
+            with self.lock:
+                # Update the timestamp
+                self.connection_timestamps[id(conn)] = time.time()
+
+                # Remove from in-use set
+                if id(conn) in self.in_use_connections:
+                    self.in_use_connections.remove(id(conn))
+
+                # Return to the pool
+                self.pool.putconn(conn)
+
+            logger.debug("Released connection back to pool")
+        except Exception as e:
+            logger.error(f"Error releasing connection: {e}")
+
+            # Try to close the connection if it can't be returned to the pool
+            try:
+                conn.close()
+            except:
+                pass
+
+    def close_all(self) -> None:
         """Close all connections in the pool."""
-        if self.pool:
-            self.pool.closeall()
-            logger.info("Closed all connections in the pool")
+        if not self.pool:
+            return
+
+        logger.info("Closing all connections in the pool")
+
+        with self.lock:
+            try:
+                self.pool.closeall()
+                self.connection_timestamps.clear()
+                self.in_use_connections.clear()
+                self.pool = None
+                logger.info("All connections closed")
+            except Exception as e:
+                logger.error(f"Error closing connections: {e}")
+
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Get statistics about the connection pool.
+
+        Returns:
+            Dictionary with pool statistics
+        """
+        with self.lock:
+            return {
+                "min_connections": self.min_connections,
+                "max_connections": self.max_connections,
+                "current_connections": len(self.connection_timestamps) if self.pool else 0,
+                "in_use_connections": len(self.in_use_connections) if self.pool else 0,
+                "available_connections": (len(self.connection_timestamps) - len(self.in_use_connections)) if self.pool else 0,
+            }
 
 
 class PooledDatabaseConnection(DatabaseConnectionProtocol):
@@ -181,7 +320,7 @@ class PooledDatabaseConnection(DatabaseConnectionProtocol):
             max_conn: Maximum number of connections in the pool
         """
         self.db_config = db_config
-        self.pool = ConnectionPool.get_instance(db_config, min_conn, max_conn)
+        self.pool = PostgresConnectionPool(db_config, min_conn, max_conn)
         self.transaction_active = False
         self.cursor = None
         self.conn = None
@@ -214,7 +353,7 @@ class PooledDatabaseConnection(DatabaseConnectionProtocol):
 
         # If a connection is allocated, return it to the pool
         if self.conn:
-            self.pool.putconn(self.conn)
+            self.pool.release_connection(self.conn, self.cursor)
             self.conn = None
 
     @log_execution_time(logger)
@@ -235,7 +374,7 @@ class PooledDatabaseConnection(DatabaseConnectionProtocol):
         with ErrorContext(
             component="PooledDatabaseConnection", operation="execute", query=query
         ):
-            with self.pool.get_cursor() as cursor:
+            with self.pool.get_connection()[1] as cursor:
                 # Execute the query
                 cursor.execute(query, params)
 
@@ -261,7 +400,7 @@ class PooledDatabaseConnection(DatabaseConnectionProtocol):
         with ErrorContext(
             component="PooledDatabaseConnection", operation="execute_batch", query=query
         ):
-            with self.pool.get_cursor() as cursor:
+            with self.pool.get_connection()[1] as cursor:
                 # Execute the batch
                 execute_batch(cursor, query, params_list)
 
@@ -276,11 +415,8 @@ class PooledDatabaseConnection(DatabaseConnectionProtocol):
             raise ValueError("Transaction already active")
 
         # Get a connection from the pool
-        self.conn = self.pool.getconn()
+        self.conn, self.cursor = self.pool.get_connection()
         self.conn.autocommit = False
-
-        # Create a cursor
-        self.cursor = self.conn.cursor(cursor_factory=DictCursor)
 
         # Mark transaction as active
         self.transaction_active = True
@@ -304,7 +440,7 @@ class PooledDatabaseConnection(DatabaseConnectionProtocol):
         # Clean up
         self.cursor.close()
         self.cursor = None
-        self.pool.putconn(self.conn)
+        self.pool.release_connection(self.conn, self.cursor)
         self.conn = None
         self.transaction_active = False
 
@@ -327,7 +463,7 @@ class PooledDatabaseConnection(DatabaseConnectionProtocol):
         # Clean up
         self.cursor.close()
         self.cursor = None
-        self.pool.putconn(self.conn)
+        self.pool.release_connection(self.conn, self.cursor)
         self.conn = None
         self.transaction_active = False
 

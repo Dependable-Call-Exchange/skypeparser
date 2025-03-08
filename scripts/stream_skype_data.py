@@ -36,7 +36,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from src.parser.core_parser import parse_skype_data_streaming, stream_conversations
 from src.utils.di import get_service
 from src.utils.interfaces import FileHandlerProtocol
-from src.utils.service_registry import register_all_services
+from src.utils.service_registry import register_core_services
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -211,8 +211,8 @@ def main() -> None:
     logger.info(f"Starting streaming process for {args.file}")
     logger.info(f"User display name: {args.user}")
 
-    # Register services
-    register_all_services()
+    # Register core services (no database needed for streaming)
+    register_core_services()
 
     # Get FileHandler service
     file_handler = get_service(FileHandlerProtocol)

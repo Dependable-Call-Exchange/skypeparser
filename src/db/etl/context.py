@@ -13,11 +13,23 @@ import logging
 import os
 import pickle
 import uuid
+import time
 from typing import Any, BinaryIO, ClassVar, Dict, List, Optional, Type
+
+from src.utils.new_structured_logging import (
+    get_logger,
+    log_execution_time,
+    log_call,
+    handle_errors,
+    with_context,
+    LogContext,
+    log_metrics,
+    get_system_metrics
+)
 
 from .utils import MemoryMonitor, ProgressTracker
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # Custom JSON encoder for datetime objects
@@ -35,6 +47,20 @@ class ETLContext:
     This class centralizes state management across the ETL pipeline components,
     including configuration, progress tracking, memory monitoring, and telemetry.
     It also provides checkpointing capabilities for resuming failed operations.
+
+    The context maintains the following state:
+    - Configuration parameters (db_config, output_dir, etc.)
+    - Progress tracking for conversations and messages
+    - Memory usage monitoring
+    - Phase results and status tracking
+    - Error recording and reporting
+    - Checkpointing for resumable operations
+
+    Phase statuses are tracked in the `phase_statuses` dictionary with the following values:
+    - 'in_progress': The phase is currently running
+    - 'completed': The phase completed successfully
+    - 'warning': The phase completed with non-fatal warnings
+    - 'failed': The phase failed with errors
     """
 
     # Class variables for checkpoint serialization
@@ -50,6 +76,7 @@ class ETLContext:
         "start_time",
         "current_phase",
         "phase_results",
+        "phase_statuses",
         "checkpoints",
         "errors",
         "export_id",
@@ -149,6 +176,7 @@ class ETLContext:
         # State tracking
         self.current_phase: Optional[str] = None
         self.phase_results: Dict[str, Dict[str, Any]] = {}
+        self.phase_statuses: Dict[str, Any] = {}
         self.checkpoints: Dict[str, Dict[str, Any]] = {}
         self.errors: List[Dict[str, Any]] = []
 
@@ -167,8 +195,33 @@ class ETLContext:
             "errors": 0,
         }
 
-        logger.info(f"Initialized ETL context with task ID: {self.task_id}")
+        # Create output directory if it doesn't exist
+        if self.output_dir and not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir, exist_ok=True)
+            logger.info(f"Created output directory: {self.output_dir}")
 
+        # Create attachments directory if needed
+        if self.download_attachments and self.attachments_dir and not os.path.exists(self.attachments_dir):
+            os.makedirs(self.attachments_dir, exist_ok=True)
+            logger.info(f"Created attachments directory: {self.attachments_dir}")
+
+        # Log initialization
+        logger.info(
+            f"Initialized ETL context with task ID: {self.task_id}",
+            extra={
+                "task_id": self.task_id,
+                "user_id": self.user_id,
+                "output_dir": self.output_dir,
+                "parallel_processing": self.parallel_processing,
+                "chunk_size": self.chunk_size,
+                "batch_size": self.batch_size,
+                "max_workers": self.max_workers,
+                "memory_limit_mb": self.memory_limit_mb,
+                "download_attachments": self.download_attachments,
+            }
+        )
+
+    @handle_errors(log_level="ERROR", default_message="Error validating configuration")
     def _validate_configuration(
         self,
         db_config: Dict[str, Any],
@@ -208,549 +261,553 @@ class ETLContext:
                 validate_db_config(db_config)
         except Exception as e:
             if not in_test_env:
+                logger.error(
+                    f"Invalid database configuration: {str(e)}",
+                    exc_info=True,
+                    extra={"db_config": {k: v for k, v in db_config.items() if k != "password"}}
+                )
                 raise ValueError(f"Invalid database configuration: {str(e)}")
             else:
                 logger.warning(
-                    f"Database configuration validation skipped in test environment: {str(e)}"
+                    f"Database configuration validation skipped in test environment: {str(e)}",
+                    extra={"db_config": {k: v for k, v in db_config.items() if k != "password"}}
                 )
 
         # Validate output directory
         if output_dir is not None and not isinstance(output_dir, str):
+            logger.error(
+                "Output directory must be a string",
+                extra={"output_dir": output_dir}
+            )
             raise ValueError("Output directory must be a string")
 
         # Validate memory limit
         if not isinstance(memory_limit_mb, int) or memory_limit_mb <= 0:
+            logger.error(
+                "Memory limit must be a positive integer",
+                extra={"memory_limit_mb": memory_limit_mb}
+            )
             raise ValueError("Memory limit must be a positive integer")
 
         # Validate chunk size
         if not isinstance(chunk_size, int) or chunk_size <= 0:
+            logger.error(
+                "Chunk size must be a positive integer",
+                extra={"chunk_size": chunk_size}
+            )
             raise ValueError("Chunk size must be a positive integer")
 
         # Validate batch size
         if not isinstance(batch_size, int) or batch_size <= 0:
+            logger.error(
+                "Batch size must be a positive integer",
+                extra={"batch_size": batch_size}
+            )
             raise ValueError("Batch size must be a positive integer")
 
         # Validate max workers
-        if max_workers is not None and (
-            not isinstance(max_workers, int) or max_workers <= 0
-        ):
+        if max_workers is not None and (not isinstance(max_workers, int) or max_workers <= 0):
+            logger.error(
+                "Max workers must be a positive integer",
+                extra={"max_workers": max_workers}
+            )
             raise ValueError("Max workers must be a positive integer")
 
-        logger.info("All configuration parameters validated successfully")
-
-    def start_phase(
-        self, phase_name: str, total_conversations: int = 0, total_messages: int = 0
-    ) -> None:
+    @with_context(operation="start_phase")
+    @log_call(level=logging.INFO)
+    def start_phase(self, phase_name: str) -> None:
         """
-        Start a new phase in the ETL pipeline.
+        Start a new phase of the ETL process.
 
         Args:
-            phase_name: Name of the phase (extract, transform, load)
-            total_conversations: Total number of conversations to process
-            total_messages: Total number of messages to process
+            phase_name: Name of the phase to start
         """
+        # Record current phase
         self.current_phase = phase_name
-        self.progress_tracker.start_phase(
-            phase_name, total_conversations, total_messages
-        )
 
-        # Record phase start in metrics
-        self.metrics["duration"][phase_name] = {
-            "start": datetime.datetime.now(),
-            "end": None,
-            "duration_seconds": None,
+        # Initialize phase status
+        self.phase_statuses[phase_name] = "in_progress"
+
+        # Initialize phase results
+        self.phase_results[phase_name] = {
+            "start_time": datetime.datetime.now().isoformat(),
+            "end_time": None,
+            "duration": None,
+            "status": "in_progress",
+            "metrics": {},
         }
 
-        logger.info(f"Starting {phase_name} phase")
+        # Log phase start
+        logger.info(
+            f"Started ETL phase: {phase_name}",
+            extra={
+                "task_id": self.task_id,
+                "phase": phase_name,
+                "start_time": self.phase_results[phase_name]["start_time"],
+            }
+        )
 
-    def end_phase(self, result: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        # Record memory usage
+        self._record_memory_usage(phase_name, "start")
+
+    @with_context(operation="end_phase")
+    @log_call(level=logging.INFO)
+    def end_phase(self, phase_name: str, status: str = "completed") -> None:
         """
-        End the current phase and record results.
+        End a phase of the ETL process.
 
         Args:
-            result: Optional result data for the phase as a dictionary. This should contain
-                   metrics or information about the completed phase that will be merged with
-                   the statistics from the progress tracker. Common keys include 'status',
-                   'conversations_processed', and 'messages_processed'.
+            phase_name: Name of the phase to end
+            status: Status of the phase (completed, warning, failed)
+        """
+        # Check if phase exists
+        if phase_name not in self.phase_results:
+            logger.warning(
+                f"Attempted to end non-existent phase: {phase_name}",
+                extra={"task_id": self.task_id, "phase": phase_name}
+            )
+            return
+
+        # Record end time
+        end_time = datetime.datetime.now()
+        self.phase_results[phase_name]["end_time"] = end_time.isoformat()
+
+        # Calculate duration
+        start_time = datetime.datetime.fromisoformat(
+            self.phase_results[phase_name]["start_time"]
+        )
+        duration = (end_time - start_time).total_seconds()
+        self.phase_results[phase_name]["duration"] = duration
+
+        # Update status
+        self.phase_results[phase_name]["status"] = status
+        self.phase_statuses[phase_name] = status
+
+        # Record in metrics
+        self.metrics["duration"][phase_name] = duration
+
+        # Record memory usage
+        self._record_memory_usage(phase_name, "end")
+
+        # Log phase end
+        logger.info(
+            f"Ended ETL phase: {phase_name} with status: {status}",
+            extra={
+                "task_id": self.task_id,
+                "phase": phase_name,
+                "status": status,
+                "duration": duration,
+                "metrics": self.phase_results[phase_name].get("metrics", {}),
+            }
+        )
+
+    @with_context(operation="record_error")
+    @log_call(level=logging.ERROR)
+    def record_error(self, phase: str, error_message: str, error_details: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Record an error that occurred during the ETL process.
+
+        Args:
+            phase: Phase where the error occurred
+            error_message: Error message
+            error_details: Additional error details
+        """
+        # Create error record
+        error_record = {
+            "phase": phase,
+            "timestamp": datetime.datetime.now().isoformat(),
+            "message": error_message,
+            "details": error_details or {},
+        }
+
+        # Add to errors list
+        self.errors.append(error_record)
+
+        # Update metrics
+        self.metrics["errors"] += 1
+
+        # Update phase status if it exists
+        if phase in self.phase_statuses:
+            self.phase_statuses[phase] = "failed"
+            if phase in self.phase_results:
+                self.phase_results[phase]["status"] = "failed"
+
+        # Log error
+        logger.error(
+            f"ETL error in phase {phase}: {error_message}",
+            extra={
+                "task_id": self.task_id,
+                "phase": phase,
+                "error_details": error_details,
+            }
+        )
+
+    @with_context(operation="create_checkpoint")
+    @log_execution_time(level=logging.INFO)
+    def create_checkpoint(self, checkpoint_id: Optional[str] = None) -> str:
+        """
+        Create a checkpoint of the current ETL state.
+
+        Args:
+            checkpoint_id: Optional ID for the checkpoint (generated if not provided)
 
         Returns:
-            Dict[str, Any]: Dictionary containing statistics about the completed phase
-
-        Raises:
-            ValueError: If result is provided but is not a dictionary
+            Checkpoint ID
         """
-        if not self.current_phase:
-            logger.warning("Attempting to end a phase when no phase is active")
-            return {}
+        # Generate checkpoint ID if not provided
+        if checkpoint_id is None:
+            checkpoint_id = str(uuid.uuid4())
 
-        # Validate result type if provided
-        if result is not None and not isinstance(result, dict):
-            error_msg = (
-                f"Phase result must be a dictionary, got {type(result).__name__}"
-            )
-            logger.error(error_msg)
-            raise ValueError(error_msg)
-
-        # Get statistics from progress tracker
-        stats = self.progress_tracker.finish_phase()
-
-        # Record phase end in metrics
-        phase_name = self.current_phase
-        end_time = datetime.datetime.now()
-        self.metrics["duration"][phase_name]["end"] = end_time
-        self.metrics["duration"][phase_name]["duration_seconds"] = stats[
-            "duration_seconds"
-        ]
-
-        # Store processed items metrics
-        self.metrics["processed_items"][phase_name] = {
-            "conversations": stats["processed_conversations"],
-            "messages": stats["processed_messages"],
+        # Create checkpoint data
+        checkpoint_data = {
+            "id": checkpoint_id,
+            "timestamp": datetime.datetime.now().isoformat(),
+            "task_id": self.task_id,
+            "current_phase": self.current_phase,
+            "phase_statuses": self.phase_statuses.copy(),
+            "serialized_attributes": {},
+            "serialized_data": {},
         }
 
-        # Combine stats with result
-        if result:
-            stats.update(result)
+        # Serialize attributes
+        for attr in self.SERIALIZABLE_ATTRIBUTES:
+            if hasattr(self, attr):
+                value = getattr(self, attr)
+                if isinstance(value, (dict, list, str, int, float, bool)) or value is None:
+                    checkpoint_data["serialized_attributes"][attr] = value
+                else:
+                    try:
+                        # Try to convert to JSON-serializable format
+                        checkpoint_data["serialized_attributes"][attr] = json.loads(
+                            json.dumps(value, cls=DateTimeEncoder)
+                        )
+                    except (TypeError, json.JSONDecodeError):
+                        logger.warning(
+                            f"Could not serialize attribute {attr} for checkpoint",
+                            extra={"task_id": self.task_id, "checkpoint_id": checkpoint_id}
+                        )
 
-        # Store phase result
-        self.phase_results[phase_name] = stats
+        # Serialize data attributes
+        for attr in self.DATA_ATTRIBUTES:
+            if hasattr(self, attr) and getattr(self, attr) is not None:
+                try:
+                    # Serialize data to base64-encoded pickle
+                    data = getattr(self, attr)
+                    serialized = base64.b64encode(pickle.dumps(data)).decode("utf-8")
+                    checkpoint_data["serialized_data"][attr] = serialized
+                except Exception as e:
+                    logger.warning(
+                        f"Could not serialize data attribute {attr} for checkpoint: {str(e)}",
+                        extra={"task_id": self.task_id, "checkpoint_id": checkpoint_id}
+                    )
 
-        # Create checkpoint for this phase
-        self._create_checkpoint(phase_name)
+        # Store checkpoint
+        self.checkpoints[checkpoint_id] = checkpoint_data
 
+        # Save checkpoint to file if output directory is specified
+        if self.output_dir:
+            self._save_checkpoint_to_file(checkpoint_id, checkpoint_data)
+
+        # Log checkpoint creation
         logger.info(
-            f"Completed {phase_name} phase in {stats['duration_seconds']:.2f} seconds"
+            f"Created ETL checkpoint: {checkpoint_id}",
+            extra={
+                "task_id": self.task_id,
+                "checkpoint_id": checkpoint_id,
+                "current_phase": self.current_phase,
+                "phase_statuses": self.phase_statuses,
+            }
         )
 
-        # Reset current phase
-        self.current_phase = None
+        return checkpoint_id
 
-        return stats
+    @handle_errors(log_level="ERROR", default_message="Error saving checkpoint to file")
+    def _save_checkpoint_to_file(self, checkpoint_id: str, checkpoint_data: Dict[str, Any]) -> None:
+        """
+        Save a checkpoint to a file.
 
-    def update_progress(self, conversations: int = 0, messages: int = 0) -> None:
+        Args:
+            checkpoint_id: Checkpoint ID
+            checkpoint_data: Checkpoint data
+        """
+        # Create checkpoint file path
+        checkpoint_file = os.path.join(self.output_dir, f"checkpoint_{checkpoint_id}.json")
+
+        # Save checkpoint to file
+        with open(checkpoint_file, "w") as f:
+            json.dump(checkpoint_data, f, cls=DateTimeEncoder, indent=2)
+
+        # Log checkpoint save
+        logger.info(
+            f"Saved checkpoint to file: {checkpoint_file}",
+            extra={
+                "task_id": self.task_id,
+                "checkpoint_id": checkpoint_id,
+                "checkpoint_file": checkpoint_file,
+            }
+        )
+
+    @with_context(operation="restore_checkpoint")
+    @log_execution_time(level=logging.INFO)
+    def restore_checkpoint(self, checkpoint_id: str) -> bool:
+        """
+        Restore the ETL state from a checkpoint.
+
+        Args:
+            checkpoint_id: ID of the checkpoint to restore
+
+        Returns:
+            True if the checkpoint was restored successfully, False otherwise
+        """
+        # Check if checkpoint exists in memory
+        if checkpoint_id in self.checkpoints:
+            checkpoint_data = self.checkpoints[checkpoint_id]
+        else:
+            # Try to load checkpoint from file
+            checkpoint_file = os.path.join(self.output_dir, f"checkpoint_{checkpoint_id}.json")
+            if not os.path.exists(checkpoint_file):
+                logger.error(
+                    f"Checkpoint file not found: {checkpoint_file}",
+                    extra={"task_id": self.task_id, "checkpoint_id": checkpoint_id}
+                )
+                return False
+
+            try:
+                with open(checkpoint_file, "r") as f:
+                    checkpoint_data = json.load(f)
+            except Exception as e:
+                logger.error(
+                    f"Error loading checkpoint file: {str(e)}",
+                    exc_info=True,
+                    extra={"task_id": self.task_id, "checkpoint_id": checkpoint_id}
+                )
+                return False
+
+        # Restore serialized attributes
+        for attr, value in checkpoint_data.get("serialized_attributes", {}).items():
+            if attr in self.SERIALIZABLE_ATTRIBUTES:
+                setattr(self, attr, value)
+
+        # Restore serialized data
+        for attr, serialized in checkpoint_data.get("serialized_data", {}).items():
+            if attr in self.DATA_ATTRIBUTES:
+                try:
+                    # Deserialize data from base64-encoded pickle
+                    data = pickle.loads(base64.b64decode(serialized))
+                    setattr(self, attr, data)
+                except Exception as e:
+                    logger.error(
+                        f"Error deserializing data attribute {attr} from checkpoint: {str(e)}",
+                        exc_info=True,
+                        extra={"task_id": self.task_id, "checkpoint_id": checkpoint_id}
+                    )
+                    return False
+
+        # Restore current phase
+        self.current_phase = checkpoint_data.get("current_phase")
+
+        # Restore phase statuses
+        self.phase_statuses = checkpoint_data.get("phase_statuses", {}).copy()
+
+        # Log checkpoint restoration
+        logger.info(
+            f"Restored ETL state from checkpoint: {checkpoint_id}",
+            extra={
+                "task_id": self.task_id,
+                "checkpoint_id": checkpoint_id,
+                "current_phase": self.current_phase,
+                "phase_statuses": self.phase_statuses,
+            }
+        )
+
+        return True
+
+    @with_context(operation="record_memory_usage")
+    def _record_memory_usage(self, phase: str, stage: str) -> None:
+        """
+        Record current memory usage.
+
+        Args:
+            phase: Current phase
+            stage: Stage within the phase (start, end)
+        """
+        # Get memory usage
+        memory_usage = get_system_metrics()
+
+        # Add to metrics
+        self.metrics["memory_usage"].append({
+            "timestamp": datetime.datetime.now().isoformat(),
+            "phase": phase,
+            "stage": stage,
+            "memory_rss_mb": memory_usage["memory_rss_mb"],
+            "memory_vms_mb": memory_usage["memory_vms_mb"],
+            "cpu_percent": memory_usage["cpu_percent"],
+        })
+
+        # Log memory usage
+        logger.debug(
+            f"Memory usage at {stage} of phase {phase}: {memory_usage['memory_rss_mb']:.2f} MB (RSS)",
+            extra={
+                "task_id": self.task_id,
+                "phase": phase,
+                "stage": stage,
+                "metrics": {
+                    "memory_rss_mb": memory_usage["memory_rss_mb"],
+                    "memory_vms_mb": memory_usage["memory_vms_mb"],
+                    "cpu_percent": memory_usage["cpu_percent"],
+                }
+            }
+        )
+
+        # Check memory limit
+        if memory_usage["memory_rss_mb"] > self.memory_limit_mb:
+            logger.warning(
+                f"Memory usage exceeds limit: {memory_usage['memory_rss_mb']:.2f} MB > {self.memory_limit_mb} MB",
+                extra={
+                    "task_id": self.task_id,
+                    "phase": phase,
+                    "memory_rss_mb": memory_usage["memory_rss_mb"],
+                    "memory_limit_mb": self.memory_limit_mb,
+                }
+            )
+            # Trigger garbage collection
+            import gc
+            gc.collect()
+
+    @with_context(operation="update_progress")
+    @log_call(level=logging.DEBUG)
+    def update_progress(self, phase: str, current: int, total: int, item_type: str = "items") -> None:
         """
         Update progress for the current phase.
 
         Args:
-            conversations: Number of conversations processed
-            messages: Number of messages processed
+            phase: Current phase
+            current: Current progress
+            total: Total items to process
+            item_type: Type of items being processed
         """
-        if conversations > 0:
-            self.progress_tracker.update_conversation_progress(conversations)
+        # Update progress tracker
+        self.progress_tracker.update(phase, current, total)
 
-        if messages > 0:
-            self.progress_tracker.update_message_progress(messages)
+        # Calculate percentage
+        percentage = int((current / total) * 100) if total > 0 else 0
 
-    def check_memory(self) -> None:
-        """
-        Check memory usage and trigger garbage collection if needed.
-        """
-        self.memory_monitor.check_memory()
-
-        # Record memory usage in metrics
-        if hasattr(self.memory_monitor, "last_memory_mb"):
-            self.metrics["memory_usage"].append(
-                {
-                    "timestamp": datetime.datetime.now(),
-                    "memory_mb": self.memory_monitor.last_memory_mb,
+        # Log progress
+        if current % max(1, int(total / 10)) == 0 or current == total:
+            logger.info(
+                f"Progress for phase {phase}: {current}/{total} {item_type} ({percentage}%)",
+                extra={
+                    "task_id": self.task_id,
+                    "phase": phase,
+                    "current": current,
+                    "total": total,
+                    "percentage": percentage,
+                    "item_type": item_type,
                 }
             )
 
-    def record_error(self, phase: str, error: Exception, fatal: bool = False) -> None:
-        """
-        Record an error that occurred during processing.
-
-        Args:
-            phase: The phase where the error occurred
-            error: The exception that was raised
-            fatal: Whether this error is fatal to the pipeline
-        """
-        # Import here to avoid circular imports
-        from src.utils.error_handling import (
-            get_error_severity,
-            is_fatal_error,
-            report_error,
-        )
-
-        # Check if error is considered fatal by our classification system
-        if not fatal:
-            fatal = is_fatal_error(error)
-
-        # Get error severity
-        severity = get_error_severity(error)
-        severity_name = (
-            "CRITICAL" if fatal else "ERROR" if severity >= 40 else "WARNING"
-        )
-
-        # Create error info
-        error_info = {
-            "phase": phase,
-            "timestamp": datetime.datetime.now(),
-            "error_type": type(error).__name__,
-            "error_message": str(error),
-            "fatal": fatal,
-            "severity": severity_name,
+        # Update processed items in metrics
+        if phase not in self.metrics["processed_items"]:
+            self.metrics["processed_items"][phase] = {}
+        self.metrics["processed_items"][phase] = {
+            "current": current,
+            "total": total,
+            "percentage": percentage,
+            "item_type": item_type,
+            "last_updated": datetime.datetime.now().isoformat(),
         }
 
-        # Add to errors list
-        self.errors.append(error_info)
-        self.metrics["errors"] += 1
-
-        # Add context for error reporting
-        additional_context = {
-            "phase": phase,
-            "context_id": id(self),
-            "task_id": self.task_id,
-            "user_id": self.user_id,
-            "export_id": self.export_id,
-        }
-
-        # Report the error with our error handling system
-        report_error(
-            error=error,
-            log_level=severity_name,
-            include_traceback=True,
-            additional_context=additional_context,
-        )
-
-    def _create_checkpoint(self, phase_name: str) -> None:
-        """
-        Create a checkpoint after completing a phase.
-
-        Args:
-            phase_name: Name of the completed phase
-        """
-        checkpoint = {
-            "phase": phase_name,
-            "timestamp": datetime.datetime.now(),
-            "metrics": {
-                "conversations": self.metrics["processed_items"]
-                .get(phase_name, {})
-                .get("conversations", 0),
-                "messages": self.metrics["processed_items"]
-                .get(phase_name, {})
-                .get("messages", 0),
-            },
-        }
-
-        # Store references to data based on phase
-        if phase_name == "extract":
-            checkpoint["raw_data_available"] = self.raw_data is not None
-        elif phase_name == "transform":
-            checkpoint["transformed_data_available"] = self.transformed_data is not None
-        elif phase_name == "load":
-            checkpoint["export_id"] = self.export_id
-
-        self.checkpoints[phase_name] = checkpoint
-        logger.info(f"Created checkpoint for {phase_name} phase")
-
-    def can_resume_from_phase(self, phase_name: str) -> bool:
-        """
-        Check if the pipeline can resume from a specific phase.
-
-        Args:
-            phase_name: Name of the phase to resume from
-
-        Returns:
-            bool: True if the pipeline can resume from this phase
-        """
-        if phase_name not in self.checkpoints:
-            return False
-
-        checkpoint = self.checkpoints[phase_name]
-
-        if phase_name == "extract":
-            return checkpoint.get("raw_data_available", False)
-        elif phase_name == "transform":
-            return checkpoint.get("transformed_data_available", False)
-
-        return False
-
+    @with_context(operation="get_summary")
+    @log_execution_time(level=logging.DEBUG)
     def get_summary(self) -> Dict[str, Any]:
         """
         Get a summary of the ETL process.
 
         Returns:
-            Dict containing summary information about the ETL process
+            Dictionary with ETL process summary
         """
+        # Calculate overall duration
         end_time = datetime.datetime.now()
-        total_duration = (end_time - self.start_time).total_seconds()
+        duration = (end_time - self.start_time).total_seconds()
 
-        return {
+        # Create summary
+        summary = {
             "task_id": self.task_id,
             "start_time": self.start_time.isoformat(),
             "end_time": end_time.isoformat(),
-            "total_duration_seconds": total_duration,
-            "phases": self.phase_results,
+            "duration": duration,
+            "phases": self.phase_statuses.copy(),
+            "errors": len(self.errors),
+            "user_id": self.user_id,
+            "user_display_name": self.user_display_name,
+            "export_date": self.export_date,
             "export_id": self.export_id,
-            "error_count": len(self.errors),
-            "fatal_error": any(e["fatal"] for e in self.errors),
+            "metrics": {
+                "duration": self.metrics["duration"],
+                "processed_items": self.metrics["processed_items"],
+                "errors": self.metrics["errors"],
+                "memory_usage": {
+                    "current_rss_mb": get_system_metrics()["memory_rss_mb"],
+                    "peak_rss_mb": max(
+                        [m.get("memory_rss_mb", 0) for m in self.metrics["memory_usage"]]
+                        if self.metrics["memory_usage"]
+                        else [0]
+                    ),
+                },
+            },
         }
 
-    def set_file_source(
-        self, file_path: Optional[str] = None, file_obj: Optional[BinaryIO] = None
-    ) -> None:
-        """
-        Set the file source for the ETL process.
-
-        Args:
-            file_path: Path to the input file
-            file_obj: File-like object containing input data
-        """
-        self.file_source = file_path
-
-        if file_path:
-            logger.info(f"Using file source: {file_path}")
-        elif file_obj and hasattr(file_obj, "name"):
-            logger.info(f"Using file object: {file_obj.name}")
-        else:
-            logger.info("Using file object (no name available)")
-
-    def serialize_checkpoint(self) -> Dict[str, Any]:
-        """
-        Serialize the context state to a dictionary for checkpointing.
-
-        Returns:
-            Dict containing serialized context state
-        """
-        # Create base serialized data
-        serialized = {
-            "checkpoint_version": "1.0",
-            "serialized_at": datetime.datetime.now().isoformat(),
-            "context": {},
-        }
-
-        # Ensure db_config is included and not empty
-        if not hasattr(self, "db_config") or not self.db_config:
-            logger.warning("Database configuration is missing or empty in context")
-
-        # Serialize basic attributes
-        for attr in self.SERIALIZABLE_ATTRIBUTES:
-            if hasattr(self, attr):
-                value = getattr(self, attr)
-
-                # Handle datetime objects
-                if isinstance(value, datetime.datetime):
-                    serialized["context"][attr] = value.isoformat()
-                else:
-                    serialized["context"][attr] = value
-
-        # Handle data attributes separately
-        data_files = {}
-        for attr in self.DATA_ATTRIBUTES:
-            if hasattr(self, attr) and getattr(self, attr) is not None:
-                # If we have an output directory, save data to files
-                if self.output_dir:
-                    data_file = os.path.join(
-                        self.output_dir, f"{self.task_id}_{attr}.json"
-                    )
-                    with open(data_file, "w") as f:
-                        json.dump(getattr(self, attr), f)
-                    data_files[attr] = data_file
-                    serialized["context"][f"{attr}_file"] = data_file
-                else:
-                    # Otherwise, include data directly in the serialized output
-                    # This could be large, so we might want to consider alternatives
-                    serialized["context"][attr] = getattr(self, attr)
-
-        # Include file source
-        if self.file_source:
-            serialized["context"]["file_source"] = self.file_source
-
-        # Include checkpoint metadata
-        serialized["available_checkpoints"] = list(self.checkpoints.keys())
-        serialized["data_files"] = data_files
-
-        return serialized
-
-    @classmethod
-    def restore_from_checkpoint(cls, checkpoint_data: Dict[str, Any]) -> "ETLContext":
-        """
-        Restore a context from serialized checkpoint data.
-
-        Args:
-            checkpoint_data: Serialized checkpoint data
-
-        Returns:
-            ETLContext: Restored context instance
-        """
-        # Extract context data - handle both old and new format
-        context_data = checkpoint_data.get("context", checkpoint_data)
-
-        # Handle required initialization parameters
-        db_config = context_data.get("db_config", {})
-
-        # Log warning if db_config is empty
-        if not db_config:
-            logger.warning("Database configuration is missing or empty in checkpoint")
-
-        output_dir = context_data.get("output_dir")
-        memory_limit_mb = context_data.get("memory_limit_mb", 1024)
-        parallel_processing = context_data.get("parallel_processing", True)
-        chunk_size = context_data.get("chunk_size", 1000)
-        batch_size = context_data.get("batch_size", 100)
-        max_workers = context_data.get("max_workers")
-        task_id = context_data.get("task_id")
-        user_id = context_data.get("user_id")
-        user_display_name = context_data.get("user_display_name")
-        export_date = context_data.get("export_date")
-
-        # Create new context instance
-        context = cls(
-            db_config=db_config,
-            output_dir=output_dir,
-            memory_limit_mb=memory_limit_mb,
-            parallel_processing=parallel_processing,
-            chunk_size=chunk_size,
-            batch_size=batch_size,
-            max_workers=max_workers,
-            task_id=task_id,
-            user_id=user_id,
-            user_display_name=user_display_name,
-            export_date=export_date,
+        # Log summary
+        logger.info(
+            f"ETL process summary for task {self.task_id}",
+            extra={
+                "task_id": self.task_id,
+                "duration": duration,
+                "phases": self.phase_statuses,
+                "errors": len(self.errors),
+                "export_id": self.export_id,
+            }
         )
 
-        # Restore other serializable attributes
-        for attr in cls.SERIALIZABLE_ATTRIBUTES:
-            if attr in context_data and attr not in [
-                "db_config",
-                "output_dir",
-                "memory_limit_mb",
-                "parallel_processing",
-                "chunk_size",
-                "batch_size",
-                "max_workers",
-                "task_id",
-                "user_id",
-                "user_display_name",
-                "export_date",
-            ]:
-                value = context_data[attr]
+        return summary
 
-                # Handle datetime objects
-                if attr == "start_time" or (
-                    isinstance(value, str) and "T" in value and value.endswith("Z")
-                ):
-                    try:
-                        value = datetime.datetime.fromisoformat(
-                            value.replace("Z", "+00:00")
-                        )
-                    except ValueError:
-                        # If parsing fails, keep the string value
-                        pass
-
-                setattr(context, attr, value)
-
-        # Restore current phase
-        if "current_phase" in context_data:
-            context.current_phase = context_data["current_phase"]
-
-        # Restore phase results
-        if "phase_results" in context_data:
-            context.phase_results = context_data["phase_results"]
-
-        # Restore errors
-        if "errors" in context_data:
-            context.errors = context_data["errors"]
-
-        # Restore custom metadata
-        if "custom_metadata" in context_data:
-            context.custom_metadata = context_data["custom_metadata"]
-
-        logger.info(f"Restored ETL context with task ID: {context.task_id}")
-        return context
-
-    def save_checkpoint_to_file(self, checkpoint_dir: Optional[str] = None) -> str:
+    @with_context(operation="save_summary")
+    @log_execution_time(level=logging.INFO)
+    def save_summary(self, output_path: Optional[str] = None) -> str:
         """
-        Save the current context state to a checkpoint file.
+        Save a summary of the ETL process to a file.
 
         Args:
-            checkpoint_dir: Directory to save the checkpoint file (defaults to self.output_dir)
+            output_path: Path to save the summary (generated if not provided)
 
         Returns:
-            str: Path to the saved checkpoint file
+            Path to the saved summary file
         """
-        # Use provided directory or context output directory
-        save_dir = checkpoint_dir or self.output_dir
-        if not save_dir:
-            raise ValueError("No output directory specified for saving checkpoint")
+        # Get summary
+        summary = self.get_summary()
+
+        # Generate output path if not provided
+        if output_path is None:
+            if not self.output_dir:
+                raise ValueError("Output directory is required when output_path is not provided")
+
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = os.path.join(self.output_dir, f"etl_summary_{timestamp}.json")
 
         # Create directory if it doesn't exist
-        os.makedirs(save_dir, exist_ok=True)
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-        # Generate checkpoint filename
-        checkpoint_file = os.path.join(save_dir, f"etl_checkpoint_{self.task_id}.json")
+        # Save summary to file
+        with open(output_path, "w") as f:
+            json.dump(summary, f, cls=DateTimeEncoder, indent=2)
 
-        # Serialize context to JSON
-        checkpoint_data = self.serialize_checkpoint()
+        # Log summary save
+        logger.info(
+            f"Saved ETL summary to file: {output_path}",
+            extra={
+                "task_id": self.task_id,
+                "output_path": output_path,
+            }
+        )
 
-        # Save to file using custom encoder for datetime objects
-        with open(checkpoint_file, "w") as f:
-            json.dump(checkpoint_data, f, indent=2, cls=DateTimeEncoder)
-
-        logger.info(f"Saved checkpoint to {checkpoint_file}")
-        return checkpoint_file
-
-    @classmethod
-    def load_from_checkpoint_file(cls, checkpoint_file: str) -> "ETLContext":
-        """
-        Load a context from a checkpoint file.
-
-        Args:
-            checkpoint_file: Path to the checkpoint file
-
-        Returns:
-            ETLContext: Restored context instance
-        """
-        # Load checkpoint data
-        with open(checkpoint_file, "r") as f:
-            checkpoint_data = json.load(f)
-
-        # Restore context from checkpoint
-        context = cls.restore_from_checkpoint(checkpoint_data)
-
-        logger.info(f"Loaded context from checkpoint file: {checkpoint_file}")
-        return context
-
-    def get_phase_status(self, phase: str) -> str:
-        """Get the status of a specific phase.
-
-        Args:
-            phase: The phase to get the status for
-
-        Returns:
-            str: The status of the phase, defaults to 'pending' if not found
-        """
-        return self.phase_results.get(phase, {}).get("status", "pending")
-
-    def has_checkpoint(self) -> bool:
-        """Check if the context has checkpoint data.
-
-        Returns:
-            bool: True if the context has checkpoint data, False otherwise
-        """
-        return bool(self.checkpoints) or hasattr(self, "current_phase")
-
-    def set_phase_status(self, phase: str, status: str) -> None:
-        """
-        Set the status of a phase.
-
-        Args:
-            phase: The phase name
-            status: The status to set ('pending', 'running', 'completed', 'failed')
-        """
-        if phase not in self.phase_results:
-            self.phase_results[phase] = {}
-
-        self.phase_results[phase]["status"] = status
-        logger.debug(f"Set phase {phase} status to {status}")
-
-    def set_export_id(self, export_id: int) -> None:
-        """
-        Set the export ID after data has been loaded into the database.
-
-        Args:
-            export_id: The export ID from the database
-        """
-        self.export_id = export_id
-        logger.debug(f"Set export ID to {export_id}")
+        return output_path
