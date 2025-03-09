@@ -21,11 +21,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 # Conditionally import FastAPI TestClient
 try:
-    from fastapi.testclient import TestClient
-
-    HAS_FASTAPI = True
+    from flask.testing import FlaskClient
+    HAS_FLASK = True
 except ImportError:
-    HAS_FASTAPI = False
+    HAS_FLASK = False
 
 from src.api.skype_api import create_app
 from src.utils.config import get_db_config
@@ -38,7 +37,7 @@ from tests.fixtures import (
 )
 
 
-@pytest.mark.skipif(not HAS_FASTAPI, reason="FastAPI not installed")
+@pytest.mark.skipif(not HAS_FLASK, reason="Flask not installed")
 @pytest.mark.integration
 @pytest.mark.api
 class TestWebAPIEnhanced(unittest.TestCase):
@@ -99,8 +98,8 @@ class TestWebAPIEnhanced(unittest.TestCase):
         )
 
         # Create test clients
-        self.client = TestClient(self.app)
-        self.client_no_auth = TestClient(self.app_no_auth)
+        self.client = self.app.test_client()
+        self.client_no_auth = self.app_no_auth.test_client()
 
     def tearDown(self):
         """Clean up test fixtures."""

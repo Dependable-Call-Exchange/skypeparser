@@ -9,7 +9,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Callable, Optional, TypeVar, Union, Type
 
 import pytest
 
@@ -43,12 +43,15 @@ from tests.fixtures import (
     SkypeMessageFactory,
     is_db_available,
 )
+from tests.fixtures.expected_data import get_expected_handler_data
 from tests.fixtures import test_db_connection as _test_db_connection
-from tests.fixtures.etl_mocks import (
+# Import consolidated mocks from the mocks directory
+from tests.fixtures.mocks import (
     MockContentExtractor,
     MockDatabase,
     MockExtractor,
     MockFileHandler,
+    MockLoader,
     MockMessageHandler,
     MockMessageHandlerFactory,
     MockMessageProcessor,
@@ -57,7 +60,38 @@ from tests.fixtures.etl_mocks import (
     MockTransformer,
     MockValidationService,
 )
+from tests.fixtures.expected_data import (
+    BASIC_TRANSFORMED_MESSAGE,
+    BASIC_TRANSFORMED_CONVERSATION,
+    BASIC_TRANSFORMED_DATA,
+    MESSAGE_TYPE_DESCRIPTIONS,
+    EXPECTED_DB_QUERIES,
+    get_expected_transformed_message,
+    get_expected_transformed_conversation,
+    TransformedMessage,
+    TransformedConversation,
+    ApiResponseSuccess,
+    ApiResponseError,
+)
 
+# Define expected data constants for fixtures
+EXPECTED_MEDIA_MESSAGE_DATA = {
+    "media_filename": "test_file.jpg",
+    "media_filesize": "1024",
+    "media_type": "image/jpeg",
+    "media_url": "https://example.com/test_file.jpg"
+}
+
+EXPECTED_SCHEDULED_CALL_DATA = {
+    "call_title": "Team Meeting",
+    "start_time": "2023-01-01T12:00:00Z",
+    "end_time": "2023-01-01T13:00:00Z"
+}
+
+EXPECTED_POLL_DATA = {
+    "poll_question": "What's your favorite color?",
+    "poll_options": ["Red", "Blue", "Green"]
+}
 
 # Register dependencies
 @pytest.fixture(scope="session", autouse=True)
@@ -87,7 +121,8 @@ def register_dependencies():
         TransformerProtocol,
         ValidationServiceProtocol,
     )
-    from tests.fixtures.etl_mocks import (
+    # Import consolidated mocks from the mocks directory
+    from tests.fixtures.mocks import (
         MockContentExtractor,
         MockDatabase,
         MockStructuredDataExtractor,
@@ -99,6 +134,7 @@ def register_dependencies():
     content_extractor = MockContentExtractor()
     structured_data_extractor = MockStructuredDataExtractor()
     db_connection = MockDatabase()
+    progress_tracker = MockProgressTracker()
 
     # Register ETL components with explicit dependencies
     provider.register_singleton(
@@ -113,7 +149,13 @@ def register_dependencies():
             structured_data_extractor=structured_data_extractor,
         ),
     )
-    provider.register_singleton(LoaderProtocol, Loader(db_connection=db_connection))
+    provider.register_singleton(
+        LoaderProtocol,
+        Loader(
+            db_connection=db_connection,
+            create_schema=False
+        )
+    )
     provider.register_singleton(DatabaseConnectionProtocol, db_connection)
     provider.register_singleton(ValidationServiceProtocol, validation_service)
     provider.register_singleton(ContentExtractorProtocol, content_extractor)
@@ -128,6 +170,7 @@ def register_dependencies():
     provider.register_singleton("structured_data_extractor", structured_data_extractor)
     provider.register_singleton("message_handler_factory", message_handler_factory)
     provider.register_singleton("db_connection", db_connection)
+    provider.register_singleton("progress_tracker", progress_tracker)
 
     return provider
 
@@ -191,6 +234,12 @@ def mock_progress_tracker():
 def mock_message_processor():
     """Fixture for a MockMessageProcessor instance."""
     return MockMessageProcessor()
+
+
+@pytest.fixture
+def mock_loader():
+    """Fixture for a MockLoader instance."""
+    return MockLoader()
 
 
 # Basic fixtures for common test data
@@ -442,3 +491,81 @@ def test_db_connection():
         return _test_db_connection(config)
 
     return _get_connection
+
+
+# Add these fixtures near the end of the file, before the data fixtures
+
+@pytest.fixture
+def expected_transformed_message() -> TransformedMessage:
+    """Fixture for a basic expected transformed message."""
+    return BASIC_TRANSFORMED_MESSAGE
+
+
+@pytest.fixture
+def expected_transformed_conversation() -> TransformedConversation:
+    """Fixture for a basic expected transformed conversation."""
+    return BASIC_TRANSFORMED_CONVERSATION
+
+
+@pytest.fixture
+def expected_transformed_data() -> Dict[str, Any]:
+    """Fixture for a basic expected transformed data structure."""
+    return BASIC_TRANSFORMED_DATA
+
+
+@pytest.fixture
+def expected_db_queries() -> Dict[str, str]:
+    """Fixture for expected database queries."""
+    return EXPECTED_DB_QUERIES
+
+
+@pytest.fixture
+def message_type_descriptions() -> Dict[str, str]:
+    """Fixture for expected message type descriptions."""
+    return MESSAGE_TYPE_DESCRIPTIONS
+
+
+@pytest.fixture
+def custom_expected_message() -> Callable[..., TransformedMessage]:
+    """Fixture that allows customizing an expected message."""
+    def _custom_expected_message(**kwargs: Any) -> TransformedMessage:
+        return get_expected_transformed_message(**kwargs)
+    return _custom_expected_message
+
+
+@pytest.fixture
+def custom_expected_conversation() -> Callable[..., TransformedConversation]:
+    """Fixture that allows customizing an expected conversation."""
+    def _custom_expected_conversation(**kwargs: Any) -> TransformedConversation:
+        return get_expected_transformed_conversation(**kwargs)
+    return _custom_expected_conversation
+
+
+@pytest.fixture
+def expected_media_data() -> Dict[str, str]:
+    """Return expected data for media message handler."""
+    return EXPECTED_MEDIA_MESSAGE_DATA
+
+
+@pytest.fixture
+def expected_scheduled_call_data() -> Dict[str, str]:
+    """Return expected data for scheduled call handler."""
+    return EXPECTED_SCHEDULED_CALL_DATA
+
+
+@pytest.fixture
+def expected_poll_data() -> Dict[str, Union[str, List[str]]]:
+    """Return expected data for poll handler."""
+    return EXPECTED_POLL_DATA
+
+
+@pytest.fixture
+def custom_handler_data() -> Callable[[str, ...], Dict[str, Any]]:
+    """Return a function to get customized handler data."""
+    return get_expected_handler_data
+
+
+@pytest.fixture
+def expected_api_response() -> Callable[[str, ...], Dict[str, Any]]:
+    """Return a function to get expected API responses."""
+    return get_expected_api_response

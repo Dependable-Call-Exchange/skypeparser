@@ -8,8 +8,15 @@ from the config.json file.
 
 import sys
 import json
+import os
+from unittest.mock import patch, mock_open, MagicMock
+
+import pytest
 import psycopg2
 from psycopg2 import sql
+
+from tests.fixtures.mocks import MockDatabase
+
 
 def load_config(config_path='config/config.json'):
     """Load configuration from a JSON file."""
@@ -27,6 +34,7 @@ def load_config(config_path='config/config.json'):
         print(f"Error loading configuration: {e}")
         return None
 
+
 def get_db_config(config):
     """Extract database configuration from the config dictionary."""
     if not config or 'database' not in config:
@@ -40,6 +48,130 @@ def get_db_config(config):
         'host': db_config.get('host', 'localhost'),
         'port': db_config.get('port', 5432)
     }
+
+
+@pytest.fixture
+def sample_config():
+    """Return a sample configuration for testing."""
+    return {
+        'database': {
+            'dbname': 'test_db',
+            'user': 'test_user',
+            'password': 'test_password',
+            'host': 'localhost',
+            'port': 5432
+        }
+    }
+
+
+@pytest.fixture
+def mock_config_file(sample_config):
+    """Mock the config file with sample configuration."""
+    config_json = json.dumps(sample_config)
+    with patch('builtins.open', mock_open(read_data=config_json)):
+        yield
+
+
+@pytest.fixture
+def mock_psycopg2_connect():
+    """Mock the psycopg2.connect function."""
+    with patch('psycopg2.connect') as mock_connect:
+        # Create a mock connection and cursor
+        mock_db = MockDatabase()
+        mock_connect.return_value = mock_db
+
+        # Set up the cursor to return a version string
+        mock_db.mock_cursor.fetchone.return_value = ('PostgreSQL 14.0',)
+
+        yield mock_connect
+
+
+def test_load_config(mock_config_file):
+    """Test loading configuration from a file."""
+    config = load_config()
+    assert config is not None
+    assert 'database' in config
+    assert config['database']['dbname'] == 'test_db'
+    assert config['database']['user'] == 'test_user'
+
+
+def test_load_config_file_not_found():
+    """Test handling of missing configuration file."""
+    with patch('builtins.open', side_effect=FileNotFoundError()):
+        config = load_config()
+        assert config is None
+
+
+def test_load_config_invalid_json():
+    """Test handling of invalid JSON in configuration file."""
+    with patch('builtins.open', mock_open(read_data='invalid json')):
+        config = load_config()
+        assert config is None
+
+
+def test_get_db_config(sample_config):
+    """Test extracting database configuration."""
+    db_config = get_db_config(sample_config)
+    assert db_config is not None
+    assert db_config['dbname'] == 'test_db'
+    assert db_config['user'] == 'test_user'
+    assert db_config['password'] == 'test_password'
+    assert db_config['host'] == 'localhost'
+    assert db_config['port'] == 5432
+
+
+def test_get_db_config_missing():
+    """Test handling of missing database configuration."""
+    db_config = get_db_config({})
+    assert db_config is None
+
+
+def test_connection(mock_config_file, mock_psycopg2_connect):
+    """Test the database connection."""
+    success = test_connection()
+    assert success is True
+    mock_psycopg2_connect.assert_called_once()
+
+
+def test_connection_failure(mock_config_file):
+    """Test handling of connection failure."""
+    with patch('psycopg2.connect', side_effect=psycopg2.OperationalError('Connection refused')):
+        success = test_connection()
+        assert success is False
+
+
+def test_create_database_if_needed(mock_config_file, mock_psycopg2_connect):
+    """Test creating the database if it doesn't exist."""
+    # Set up the cursor to indicate the database doesn't exist
+    mock_psycopg2_connect.return_value.mock_cursor.fetchone.return_value = None
+
+    success = create_database_if_needed()
+    assert success is True
+
+    # Verify that CREATE DATABASE was executed
+    executed_queries = [q.lower() for q in mock_psycopg2_connect.return_value.queries]
+    assert any('create database' in q for q in executed_queries)
+
+
+def test_create_database_already_exists(mock_config_file, mock_psycopg2_connect):
+    """Test handling when the database already exists."""
+    # Set up the cursor to indicate the database exists
+    mock_psycopg2_connect.return_value.mock_cursor.fetchone.return_value = (1,)
+
+    success = create_database_if_needed()
+    assert success is True
+
+    # Verify that CREATE DATABASE was not executed
+    executed_queries = [q.lower() for q in mock_psycopg2_connect.return_value.queries]
+    assert not any('create database' in q for q in executed_queries)
+
+
+def test_create_database_failure(mock_config_file):
+    """Test handling of database creation failure."""
+    with patch('psycopg2.connect', side_effect=Exception('Connection failed')):
+        success = create_database_if_needed()
+        assert success is False
+
 
 def test_connection():
     """Test the connection to the PostgreSQL database."""
@@ -86,6 +218,7 @@ def test_connection():
         print(f"Unexpected error: {e}")
         return False
 
+
 def create_database_if_needed():
     """Create the database if it doesn't exist."""
     config = load_config()
@@ -122,6 +255,7 @@ def create_database_if_needed():
     except Exception as e:
         print(f"Error creating database: {e}")
         return False
+
 
 if __name__ == '__main__':
     print("Testing PostgreSQL database connection...")

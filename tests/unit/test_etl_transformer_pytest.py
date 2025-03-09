@@ -15,7 +15,8 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 from src.db.etl.transformer import Transformer
-from tests.mocks import (
+# Import consolidated mocks from the mocks directory
+from tests.fixtures.mocks import (
     MockContentExtractor,
     mock_message_handler_factory,
     mock_structured_data_extractor
@@ -52,8 +53,16 @@ def parallel_transformer(mock_content_extractor):
     )
 
 
-def test_transform_basic(transformer, basic_skype_data):
+def test_transform_basic(transformer, basic_skype_data, expected_transformed_data, custom_expected_message):
     """Test basic transformation functionality."""
+    # Configure expected data for this specific test
+    expected_message = custom_expected_message(
+        msg_id="message1",
+        content="Hello world",
+        sender_id="user1",
+        message_type="RichText"
+    )
+
     # Transform the raw data
     transformed_data = transformer.transform(basic_skype_data, 'Test User')
 
@@ -76,12 +85,12 @@ def test_transform_basic(transformer, basic_skype_data):
     assert conv1['display_name'] == 'Test Conversation'
     assert len(conv1['messages']) == 1
 
-    # Verify message details
+    # Verify message details using expected data
     msg1 = conv1['messages'][0]
-    assert msg1['id'] == 'message1'
-    assert msg1['content'] == 'Hello world'
-    assert msg1['from_id'] == 'user1'
-    assert msg1['message_type'] == 'RichText'
+    assert msg1['id'] == expected_message['id']
+    assert msg1['content'] == expected_message['content']
+    assert msg1['from_id'] == expected_message['sender_id']
+    assert msg1['message_type'] == expected_message['message_type']
     assert not msg1['is_edited']
     assert msg1['cleaned_content'] == 'Cleaned content'  # From mock
 

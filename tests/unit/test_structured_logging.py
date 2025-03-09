@@ -1,5 +1,8 @@
 """
 Unit tests for the structured logging system.
+
+DEPRECATED: Please use test_structured_logging_pytest.py instead.
+This file is maintained for reference only and will be removed in a future update.
 """
 
 import json

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """
+DEPRECATED: This file has been migrated to test_skype_parser_pytest.py
+Please use the newer version which follows current testing standards.
+This file will be removed once migration verification is complete.
+
 Tests for the skype_parser module.
 
 This module contains tests for the functionality in src.parser.skype_parser.

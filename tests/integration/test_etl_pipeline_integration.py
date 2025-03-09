@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 """
+DEPRECATED: This file is being migrated to pytest style in test_etl_pipeline_integration_pytest.py.
+Please use the pytest version instead. This file will be removed after migration verification is complete.
+
 Integration tests for the ETL pipeline module.
 
 This test suite provides integration testing for the ETL pipeline,

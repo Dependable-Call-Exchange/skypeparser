@@ -10,8 +10,11 @@ This package contains fixtures for unit and integration tests, including:
 """
 
 # Import factory classes
-from tests.factories import (
+from tests.fixtures.factories.data_factories import (
     DatabaseRecordFactory,
+    ExpectedApiResponseFactory,
+    ExpectedTransformedConversationFactory,
+    ExpectedTransformedMessageFactory,
     MockBuilderFactory,
     MockServiceFactory,
     SkypeConversationFactory,
@@ -41,10 +44,27 @@ from .etl_fixtures import (
     temp_json_file,
     transformation_error_scenario,
 )
-from .mock_fixtures import (
+
+# Import all mocks from the mocks package
+from .mocks import (
+    MockContentExtractor,
     MockDatabase,
-    MockFileReader,
+    MockExtractor,
+    MockFileHandler,
+    MockLoader,
+    MockMessageHandler,
+    MockMessageHandlerFactory,
+    MockMessageProcessor,
+    MockProgressTracker,
+    MockStructuredDataExtractor,
+    MockTransformer,
     MockValidationService,
+    mock_message_handler_factory,
+    mock_structured_data_extractor,
+)
+
+from .mock_fixtures import (
+    MockFileReader,
     create_mock_file_environment,
     create_mock_functions,
 )
@@ -64,6 +84,20 @@ from .test_helpers import (
     patch_validation,
 )
 
+# Import expected data
+from tests.fixtures.expected_data import (
+    BASIC_TRANSFORMED_CONVERSATION,
+    BASIC_TRANSFORMED_DATA,
+    BASIC_TRANSFORMED_MESSAGE,
+    ERROR_MESSAGES,
+    EXPECTED_DB_QUERIES,
+    MESSAGE_TYPE_DESCRIPTIONS,
+    API_RESPONSES,
+    get_expected_error_message,
+    get_expected_transformed_conversation,
+    get_expected_transformed_message,
+)
+
 __all__ = [
     # Skype data fixtures
     "BASIC_SKYPE_DATA",
@@ -71,16 +105,17 @@ __all__ = [
     "INVALID_SKYPE_DATA",
     "MINIMAL_SKYPE_DATA",
     "CONVERSATION_SKIP_TEST_DATA",
+
     # Database fixtures
     "get_test_db_config",
     "test_db_connection",
     "is_db_available",
+
     # Mock fixtures
     "MockFileReader",
-    "MockDatabase",
     "create_mock_file_environment",
     "create_mock_functions",
-    "MockValidationService",
+
     # Test helpers
     "TestBase",
     "create_test_file",
@@ -88,6 +123,7 @@ __all__ = [
     "create_test_tar_file",
     "patch_validation",
     "mock_sys_exit",
+
     # ETL component fixtures
     "etl_context",
     "etl_context_with_phases",
@@ -106,6 +142,7 @@ __all__ = [
     "transformation_error_scenario",
     "loading_error_scenario",
     "pipeline_test_environment",
+
     # Factory classes
     "SkypeMessageFactory",
     "SkypeConversationFactory",
@@ -113,4 +150,39 @@ __all__ = [
     "DatabaseRecordFactory",
     "MockServiceFactory",
     "MockBuilderFactory",
+
+    # Consolidated mocks
+    "MockContentExtractor",
+    "MockDatabase",
+    "MockExtractor",
+    "MockFileHandler",
+    "MockLoader",
+    "MockMessageHandler",
+    "MockMessageHandlerFactory",
+    "MockMessageProcessor",
+    "MockProgressTracker",
+    "MockStructuredDataExtractor",
+    "MockTransformer",
+    "MockValidationService",
+    "mock_message_handler_factory",
+    "mock_structured_data_extractor",
+
+    # Factory classes for expected outputs
+    "ExpectedTransformedMessageFactory",
+    "ExpectedTransformedConversationFactory",
+    "ExpectedApiResponseFactory",
+
+    # Expected data constants
+    "BASIC_TRANSFORMED_MESSAGE",
+    "BASIC_TRANSFORMED_CONVERSATION",
+    "BASIC_TRANSFORMED_DATA",
+    "ERROR_MESSAGES",
+    "EXPECTED_DB_QUERIES",
+    "MESSAGE_TYPE_DESCRIPTIONS",
+    "API_RESPONSES",
+
+    # Expected data helpers
+    "get_expected_transformed_message",
+    "get_expected_transformed_conversation",
+    "get_expected_error_message",
 ]

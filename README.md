@@ -189,17 +189,33 @@ For large Skype exports (which can contain millions of messages), the project of
 
 ## Testing
 
-Run the tests with pytest:
+### Running Tests
 
-```
-pytest
+The project includes comprehensive test suites using both unittest and pytest:
+
+```bash
+# Run all tests using unittest
+python -m unittest discover tests
+
+# Run pytest-based tests with enhanced logging
+python run_pytest_tests.py --verbose --report
 ```
 
-Or run a specific test file:
+### Test Architecture
 
-```
-pytest tests/unit/test_etl_pipeline.py
-```
+The test suite has been refactored to follow best practices:
+
+1. **Pytest Integration**: Migrated from unittest to pytest for improved fixtures, parameterization, and reporting.
+
+2. **Dependency Injection**: Tests use DI to inject mocks and test doubles instead of patching.
+
+3. **Factory Pattern**: Test data is generated using factories, providing flexibility and reusability.
+
+4. **Centralized Test Expectations**: Expected test output is managed centrally for improved maintenance.
+
+5. **Test Isolation**: Each test is isolated and does not depend on global state or other tests.
+
+For more details on the test improvements, see the [TEST_IMPROVEMENTS_REPORT.md](TEST_IMPROVEMENTS_REPORT.md) file.
 
 ## Development
 

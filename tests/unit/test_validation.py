@@ -11,6 +11,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch, mock_open
+import pytest
+import tarfile
+from typing import Dict, Any
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -25,7 +28,10 @@ from src.utils.validation import (
     validate_user_display_name,
     validate_db_config,
     validate_config,
-    validate_path_safety
+    validate_path_safety,
+    ValidationService,
+    validate_tar_file,
+    validate_tar_integrity,
 )
 
 class TestValidation(unittest.TestCase):
@@ -397,6 +403,184 @@ class TestValidation(unittest.TestCase):
 
         with self.assertRaises(ValidationError):
             validate_path_safety(outside_file, base_dir=base_dir, allow_absolute=True)
+
+# Create test directory
+@pytest.fixture
+def test_dir():
+    with tempfile.TemporaryDirectory() as temp_dir:
+        yield temp_dir
+
+
+# Create a valid JSON file for testing
+@pytest.fixture
+def valid_json_file(test_dir):
+    file_path = os.path.join(test_dir, "valid.json")
+    data = {"test": "data", "nested": {"key": "value"}}
+    with open(file_path, "w") as f:
+        json.dump(data, f)
+    return file_path
+
+
+# Create an invalid JSON file for testing
+@pytest.fixture
+def invalid_json_file(test_dir):
+    file_path = os.path.join(test_dir, "invalid.json")
+    with open(file_path, "w") as f:
+        f.write('{"test": "data", "broken":')
+    return file_path
+
+
+# Create a valid Skype data dictionary for testing
+@pytest.fixture
+def valid_skype_data() -> Dict[str, Any]:
+    return {
+        "userId": "test_user",
+        "exportDate": "2023-01-01T00:00:00Z",
+        "conversations": [
+            {
+                "id": "conversation1",
+                "displayName": "Test Conversation",
+                "messages": [
+                    {
+                        "id": "message1",
+                        "content": "Test message",
+                    }
+                ],
+            }
+        ],
+    }
+
+
+# Create a valid TAR file with Skype export data
+@pytest.fixture
+def valid_tar_file(test_dir):
+    # Create messages.json
+    messages_data = [
+        {"id": "msg1", "content": "Hello"},
+        {"id": "msg2", "content": "World"},
+    ]
+    messages_path = os.path.join(test_dir, "messages.json")
+    with open(messages_path, "w") as f:
+        json.dump(messages_data, f)
+
+    # Create endpoints.json
+    endpoints_data = {"userId": "user1", "endpoints": []}
+    endpoints_path = os.path.join(test_dir, "endpoints.json")
+    with open(endpoints_path, "w") as f:
+        json.dump(endpoints_data, f)
+
+    # Create TAR file
+    tar_path = os.path.join(test_dir, "valid.tar")
+    with tarfile.open(tar_path, "w") as tar:
+        tar.add(messages_path, arcname="messages.json")
+        tar.add(endpoints_path, arcname="endpoints.json")
+
+    return tar_path
+
+
+# Create an invalid TAR file (missing messages.json)
+@pytest.fixture
+def invalid_tar_file(test_dir):
+    # Create only endpoints.json
+    endpoints_data = {"userId": "user1", "endpoints": []}
+    endpoints_path = os.path.join(test_dir, "endpoints.json")
+    with open(endpoints_path, "w") as f:
+        json.dump(endpoints_data, f)
+
+    # Create TAR file
+    tar_path = os.path.join(test_dir, "invalid.tar")
+    with tarfile.open(tar_path, "w") as tar:
+        tar.add(endpoints_path, arcname="endpoints.json")
+
+    return tar_path
+
+
+# Create a ValidationService instance
+@pytest.fixture
+def validation_service():
+    return ValidationService()
+
+
+def test_validate_file_exists(test_dir):
+    # Create a test file
+    file_path = os.path.join(test_dir, "test.txt")
+    with open(file_path, "w") as f:
+        f.write("test")
+
+    # Test valid file
+    assert validate_file_exists(file_path) is True
+
+    # Test nonexistent file
+    nonexistent_path = os.path.join(test_dir, "nonexistent.txt")
+    with pytest.raises(ValidationError):
+        validate_file_exists(nonexistent_path)
+
+
+def test_validate_json_file(valid_json_file, invalid_json_file):
+    # Test valid JSON file
+    data = validate_json_file(valid_json_file)
+    assert data == {"test": "data", "nested": {"key": "value"}}
+
+    # Test invalid JSON file
+    with pytest.raises(ValidationError):
+        validate_json_file(invalid_json_file)
+
+
+def test_validate_skype_data(valid_skype_data):
+    # Test valid Skype data
+    assert validate_skype_data(valid_skype_data) is True
+
+    # Test invalid Skype data (missing userId)
+    invalid_data = valid_skype_data.copy()
+    del invalid_data["userId"]
+    with pytest.raises(ValidationError):
+        validate_skype_data(invalid_data)
+
+
+def test_validate_tar_file(valid_tar_file):
+    # Test valid TAR file
+    assert validate_tar_file(valid_tar_file) is True
+
+    # Test nonexistent TAR file
+    with pytest.raises(ValidationError):
+        validate_tar_file("nonexistent.tar")
+
+
+def test_validate_tar_integrity(valid_tar_file, invalid_tar_file):
+    # Test valid TAR file
+    result = validate_tar_integrity(valid_tar_file)
+    assert result["is_valid"] is True
+    assert "messages.json" in result["json_files"]
+    assert "endpoints.json" in result["json_files"]
+    assert len(result["found_required_files"]) > 0
+    assert len(result["missing_required_files"]) == 0
+
+    # Test invalid TAR file (missing messages.json)
+    with pytest.raises(ValidationError) as excinfo:
+        validate_tar_integrity(invalid_tar_file)
+    assert "Missing required files" in str(excinfo.value)
+
+
+def test_validation_service_methods(validation_service, valid_tar_file, invalid_tar_file, valid_json_file):
+    # Test file exists
+    assert validation_service.validate_file_exists(valid_tar_file) is True
+
+    # Test JSON file
+    json_data = validation_service.validate_json_file(valid_json_file)
+    assert json_data == {"test": "data", "nested": {"key": "value"}}
+
+    # Test TAR file
+    assert validation_service.validate_tar_file(valid_tar_file) is True
+
+    # Test TAR integrity - valid
+    result = validation_service.validate_tar_integrity(valid_tar_file)
+    assert result["is_valid"] is True
+    assert "messages.json" in result["json_files"]
+
+    # Test TAR integrity - invalid
+    with pytest.raises(ValidationError) as excinfo:
+        validation_service.validate_tar_integrity(invalid_tar_file)
+    assert "Missing required files" in str(excinfo.value)
 
 if __name__ == '__main__':
     unittest.main()

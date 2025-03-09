@@ -456,33 +456,35 @@ class MockMessageHandlerFactory(MessageHandlerFactoryProtocol):
 
 
 class MockProgressTracker:
-    """Mock progress tracker for testing."""
+    """Mock implementation of ProgressTracker for testing."""
 
     def __init__(self):
         """Initialize the mock progress tracker."""
-        self.phases = {}
-        self.current_phase = None
-        self.total_items = 0
-        self.processed_items = 0
-        self.item_type = None
-        self.update_count = 0
+        self.progress = {}
+        self.current = 0
+        self.total = 100
+        self.phase = None
 
-    def update(self, phase, current, total, item_type=None):
-        """Update the progress tracker.
+    def update(self, phase, current, total):
+        """
+        Update the progress tracker.
 
         Args:
-            phase (str): The current phase of the ETL process
-            current (int): The current number of items processed
-            total (int): The total number of items to process
-            item_type (str, optional): The type of items being processed
+            phase: Current phase
+            current: Current progress
+            total: Total items to process
         """
-        self.current_phase = phase
-        self.processed_items = current
-        self.total_items = total
-        self.item_type = item_type
-        self.phases[phase] = {
+        self.phase = phase
+        self.current = current
+        self.total = total
+        self.progress[phase] = {
             "current": current,
             "total": total,
-            "item_type": item_type,
+            "percentage": int((current / total) * 100) if total > 0 else 0
         }
-        self.update_count += 1
+
+    def get_progress(self, phase=None):
+        """Get the current progress for a phase."""
+        if phase is None:
+            return self.progress
+        return self.progress.get(phase, {"current": 0, "total": 0, "percentage": 0})

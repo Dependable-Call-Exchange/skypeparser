@@ -37,10 +37,8 @@ from src.utils.message_type_handlers import (
     ScheduledCallHandler,
     TextMessageHandler,
 )
-from tests.fixtures.etl_mocks import MockStructuredDataExtractor
-
-# Import mocks and fixtures
-from tests.mocks import MockContentExtractor, MockFileHandler, MockMessageHandler
+# Import consolidated mocks from the mocks directory
+from tests.fixtures.mocks import MockStructuredDataExtractor, MockContentExtractor, MockFileHandler, MockMessageHandler
 
 # Test data
 SAMPLE_POLL_MESSAGE = {

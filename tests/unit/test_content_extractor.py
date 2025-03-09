@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """
+DEPRECATED: This file has been migrated to test_content_extractor_pytest.py
+Please use the newer version which follows current testing standards.
+This file will be removed once migration verification is complete.
+
 Tests for the content_extractor module.
 
 This module contains test cases for the content extraction functions in src.parser.content_extractor.

@@ -30,7 +30,8 @@ from src.db.testable_etl_pipeline import (
 from src.utils.interfaces import ExtractorProtocol, TransformerProtocol
 from src.utils.validation import ValidationError
 from tests.fixtures import BASIC_SKYPE_DATA, COMPLEX_SKYPE_DATA, INVALID_SKYPE_DATA
-from tests.fixtures.etl_mocks import (
+# Import consolidated mocks from the mocks directory
+from tests.fixtures.mocks import (
     MockContentExtractor,
     MockExtractor,
     MockFileHandler,
@@ -68,7 +69,7 @@ def db_config():
 @pytest.fixture
 def mock_db():
     """Create a mock database for tests."""
-    from tests.fixtures.etl_mocks import MockDatabase
+    from tests.fixtures.mocks import MockDatabase
 
     # Create a mock database with proper configuration for execute_values
     mock_db = MockDatabase()
@@ -344,6 +345,7 @@ class TestLoading:
         # Create a mock database connection that raises an exception when used
         mock_db_connection = MagicMock()
         mock_db_connection.execute.side_effect = Exception("Database connection error")
+        mock_db_connection.bulk_insert.side_effect = Exception("Database connection error")
 
         # Create a pipeline with the mock database connection
         pipeline_no_db = ImprovedTestableETLPipeline(
@@ -365,9 +367,7 @@ class TestLoading:
 
         # Test that load raises an exception when the database connection is used
         with pytest.raises(Exception):
-            pipeline_no_db.load(
-                raw_data=BASIC_SKYPE_DATA, transformed_data=transformed_data
-            )
+            pipeline_no_db.load(raw_data=BASIC_SKYPE_DATA, transformed_data=transformed_data)
 
 
 @pytest.mark.etl_pipeline
@@ -413,6 +413,7 @@ class TestPipelineExecution:
         # Create a mock database connection that raises an exception when used
         mock_db_connection = MagicMock()
         mock_db_connection.execute.side_effect = Exception("Database connection error")
+        mock_db_connection.bulk_insert.side_effect = Exception("Database connection error")
 
         # Create a pipeline with the mock database connection
         pipeline_no_db = ImprovedTestableETLPipeline(
