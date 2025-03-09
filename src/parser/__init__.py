@@ -17,43 +17,16 @@ Note: The parser_module.py file is deprecated and will be removed in a future ve
 """
 
 # Import content extraction functions
-from .content_extractor import (
-    ContentExtractor,
-    extract_content_data,
-    format_content_with_markup,
-    format_content_with_regex,
-)
+from src.content_extractor import ContentExtractor, extract_content_data, format_content_with_markup, format_content_with_regex
 
 # Import core parsing functions
-from .core_parser import (
-    banner_constructor,
-    content_parser,
-    id_selector,
-    parse_skype_data,
-    pretty_quotes,
-    timestamp_parser,
-    type_parser,
-)
+from src.core_parser import banner_constructor, content_parser, id_selector, parse_skype_data, pretty_quotes, timestamp_parser, type_parser
 
 # Import custom exceptions
-from .exceptions import (
-    ContentParsingError,
-    DatabaseOperationError,
-    DataExtractionError,
-    ExportError,
-    FileOperationError,
-    InvalidInputError,
-    SkypeParserError,
-    TimestampParsingError,
-)
+from src.exceptions import ContentParsingError, DatabaseOperationError, DataExtractionError, ExportError, FileOperationError, InvalidInputError, SkypeParserError, TimestampParsingError
 
 # Import file output functions
-from .file_output import (
-    export_conversations,
-    export_conversations_to_text,
-    output_structured_data,
-    write_to_file,
-)
+from src.file_output import export_conversations, export_conversations_to_text, output_structured_data, write_to_file
 
 # Define public API
 __all__ = [

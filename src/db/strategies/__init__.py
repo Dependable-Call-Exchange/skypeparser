@@ -6,9 +6,9 @@ Each strategy implements the InsertionStrategy interface and provides
 different approaches to data insertion.
 """
 
-from src.db.strategies.insertion_strategy import InsertionStrategy
-from src.db.strategies.bulk_insertion import BulkInsertionStrategy
-from src.db.strategies.individual_insertion import IndividualInsertionStrategy
+from src.core_utils.insertion_strategy import InsertionStrategy
+from src.core_utils.bulk_insertion import BulkInsertionStrategy
+from src.core_utils.individual_insertion import IndividualInsertionStrategy
 
 __all__ = [
     'InsertionStrategy',

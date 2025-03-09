@@ -13,25 +13,20 @@ For a SOLID implementation that follows best practices, use the SOLIDSkypeETLPip
 """
 
 # For backward compatibility, expose any constants or functions that might be imported directly
-from ..parser.core_parser import timestamp_parser
+from src.core_utils.core_parser import timestamp_parser
 
 # Import the modular ETL pipeline components
-from .etl import ETLContext, ETLPipeline, Extractor, Loader, Transformer
+from src.etl import ETLContext, ETLPipeline, Extractor, Loader, Transformer
 
 # Import the database schema definitions from the schema manager
-from .schema_manager import SchemaManager
+from src.schema_manager import SchemaManager
 
 # Import the SOLID ETL pipeline
-from .etl_pipeline import SOLIDSkypeETLPipeline, create_solid_skype_etl_pipeline
+from src.etl_pipeline import SOLIDSkypeETLPipeline, create_solid_skype_etl_pipeline
 
 # Import the ETL pipeline (now using the compatibility layer)
-from .etl_pipeline_compat import SkypeETLPipeline
-from .raw_storage import (
-    CREATE_RAW_TABLES_SQL,
-    INSERT_CLEANED_DATA_SQL,
-    INSERT_RAW_DATA_SQL,
-    SkypeDataStorage,
-)
+from src.etl_pipeline_compat import SkypeETLPipeline
+from src.raw_storage import CREATE_RAW_TABLES_SQL, INSERT_CLEANED_DATA_SQL, INSERT_RAW_DATA_SQL, SkypeDataStorage
 
 # Note: Legacy modules are deprecated and will be removed in version 2.0.0
 # Use the ETLPipeline class from the modular ETL pipeline instead
