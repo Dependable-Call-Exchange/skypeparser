@@ -1,122 +1,151 @@
-# Skype Parser Documentation
+# SkypeParser Documentation
 
-This directory contains documentation for the Skype Parser project.
+Welcome to the SkypeParser documentation. This documentation provides comprehensive information about the SkypeParser project, a Python tool for parsing, analyzing, and storing Skype export data.
 
 ## Documentation Structure
 
-### User Guide
-- [Skype Data Analysis](user_guide/skype_data_analysis.md) - Information about Skype data structure and analysis
-- [Configuration](user_guide/CONFIGURATION.md) - Configuration options and settings
-- [PostgreSQL Setup](user_guide/README_POSTGRES.md) - PostgreSQL database setup instructions
-- [Supabase Integration](user_guide/SUPABASE_INTEGRATION.md) - Supabase integration guide
-- [Checkpoint Resumption](user_guide/CHECKPOINT_RESUMPTION.md) - How to resume processing from checkpoints
-- [Non-Interactive Mode](user_guide/NON_INTERACTIVE.md) - Running in non-interactive mode
-- [Content Extraction](user_guide/content_extraction.md) - Details on content extraction features
-- [Message Types](user_guide/message_types.md) - Information about supported message types
+The documentation is organized into the following sections:
 
-### Implementation
-- [Path to MVP](implementation/path_to_mvp.md) - Implementation plan for the Minimum Viable Product
-- [Refactoring Summary](implementation/REFACTORING_SUMMARY.md) - Summary of refactoring efforts
-- [Improvements](implementation/IMPROVEMENTS.md) - Planned improvements for the project
-- [Improvement Plan](implementation/skype_parser_improvement_plan.md) - Detailed improvement plan
-- [ETL Migration Decisions](implementation/ETL_MIGRATION_DECISIONS.md) - Decisions made during ETL migration
-- [ETL Migration Plan](implementation/ETL_MIGRATION_PLAN.md) - Plan for ETL migration
-- [ETL Validation](implementation/ETL_VALIDATION.md) - Validation approach for ETL processes
-- [Migration](implementation/MIGRATION.md) - General migration guidelines
-- [Refactoring](implementation/refactoring.md) - Refactoring guidelines and approaches
+### [Project Summary](PROJECT_SUMMARY.md)
 
-### Development
-- [Dependency Handling](development/DEPENDENCY_HANDLING.md) - Information about dependency injection and handling
-- [Error Handling](development/ERROR_HANDLING.md) - Guidelines for error handling in the project
-- [Consolidation Summary](development/CONSOLIDATION_SUMMARY.md) - Summary of code consolidation efforts
-- [API Documentation](development/API.md) - API documentation and specifications
-- [API Usage](development/API_USAGE.md) - Examples of API usage
-- [ETLContext API](development/ETL_CONTEXT_API.md) - Documentation for the ETLContext phase management API
-- [Factory Implementation](development/FACTORY_IMPLEMENTATION.md) - Details on factory pattern implementation
-- [Modularization Strategy](development/Modularization_Strategy.md) - Strategy for code modularization
-- [Test Factories](development/TEST_FACTORIES.md) - Information about test factory implementations
-- [Input Validation](development/INPUT_VALIDATION.md) - Guidelines for input validation
-- [Performance](development/performance.md) - Performance considerations and optimizations
-- [Test Fixes](development/test_fixes.md) - Information about test fixes and improvements
-- [Test Infrastructure](development/test_infrastructure.md) - Details on test infrastructure
-- [Contributing](development/CONTRIBUTING.md) - Guidelines for contributing to the project
+A comprehensive overview of the SkypeParser project, including its key features, architecture, and components.
 
-## Project Summary
-- [Summary](SUMMARY.md) - Overall project summary
+### [Getting Started](getting-started/)
 
-## Main README
-The main [README.md](../README.md) in the root directory provides an overview of the project, setup instructions, and basic usage information.
+Quick start guides for installation and basic usage:
 
-# Skype History Parser
+- [Installation Guide](getting-started/installation.md) - Installation instructions
+- [Basic Usage Guide](getting-started/basic-usage.md) - Basic usage examples
+- [Configuration Guide](getting-started/configuration.md) - Configuration options
 
-`skype-parser` is a simple script to create pretty text files from your Skype chat history. This tool can either take in the `.tar` file or the `.json` file given to you by Skype and give you back your entire chat history in `.txt` format (beautifully formatted, too!).
+### [User Guide](user-guide/)
 
-## How do I just get this thing to work?
+Comprehensive documentation for end users:
 
-Download `parser.py` and invoke it like so:
+- [CLI Reference](user-guide/cli-reference.md) - Command-line interface reference
+- [Data Analysis](user-guide/data-analysis.md) - Analyzing Skype data
+- [Visualization](user-guide/visualization.md) - Visualizing Skype data
+- [Large Datasets](user-guide/large-datasets.md) - Processing large datasets
+- [Message Types](user-guide/message-types.md) - Information about supported message types
+- [Content Extraction](user-guide/content-extraction.md) - Details on content extraction features
+- [Checkpoint Resumption](user-guide/checkpoint-resumption.md) - Resuming processing from checkpoints
+- [Non-Interactive Mode](user-guide/non-interactive.md) - Running in non-interactive mode
+- [Database Integration](user-guide/database/) - Database setup and integration
+- [Web App Development](user-guide/web-app.md) - Building web applications with SkypeParser
 
-- If you have a `.tar` file:
+### [Developer Guide](developer-guide/)
 
-```bash
-python3 parser.py -t your_skype_username_export.tar
-```
+Documentation for developers contributing to the project:
 
-where `your_skype_username_export.tar` is the `.tar` file your recieved from Skype upon requesting a conversation export.
+- [Architecture](developer-guide/architecture.md) - System architecture overview
+- [Modularization](developer-guide/modularization.md) - Modularization strategy
+- [SOLID Principles](developer-guide/solid-principles.md) - SOLID principles implementation
+- [Dependency Injection](developer-guide/dependency-injection.md) - Dependency injection framework
+- [ETL Context API](developer-guide/etl-context-api.md) - ETL context API documentation
+- [Factory Pattern](developer-guide/factory-pattern.md) - Factory pattern implementation
+- [Error Handling](developer-guide/error-handling.md) - Error handling guidelines
+- [Contributing](developer-guide/contributing.md) - Contribution guidelines
+- [Testing](developer-guide/testing.md) - Testing guidelines and framework
+- [Performance](developer-guide/performance.md) - Performance optimization guidelines
+- [Input Validation](developer-guide/input-validation.md) - Input validation guidelines
+- [API Reference](developer-guide/api-reference.md) - API documentation
 
-- If you have a `.json` file:
+### [Implementation Details](implementation/)
 
-```bash
-python3 parser.py messages.json
-```
+Details on specific implementation aspects:
 
-where `messages.json` is the extracted `.json` file you that contains your conversation history.
+- [ETL Pipeline](implementation/etl-pipeline.md) - ETL pipeline implementation details
+- [Validation](implementation/validation.md) - Validation implementation details
+- [Loader Optimization](implementation/loader-optimization.md) - Loader optimization details
+- [Logging](implementation/logging.md) - Logging implementation details
+- [Refactoring](implementation/refactoring.md) - Refactoring summary and details
+- [Roadmap](implementation/roadmap.md) - Project roadmap and planned improvements
+- [Completed Features](implementation/completed-features.md) - List of completed features
+- [Monkey Patching](implementation/MONKEYPATCH_GUIDE.md) - Guide to monkey patching in the project
+- [File Path Constraints](implementation/file_path_constraint_fix.md) - Information about file path constraint fixes
+- [ETL Implementation Summary](implementation/SUMMARY.md) - Summary of ETL implementation
 
-If you are not sure how you can get your export from Skype, read the [this section](#how-do-i-export-my-skype-chat-history).
+## Common Workflows
 
-## Detailed Description
+### Basic Parsing
 
-skype-parser is a simple python script that makes preserving chat history from Skype easier.
-
-Skype tends be a niche choice for text chatting, but for those of you who you use it and would like to keep a chat log in pliin-text form, this is *the* tool to get the job done.
-
-Skype's own parser is quite frankly, terrible. It produces an ugly HTML that is difficult to navigate and is riddled with unparsed XML.
-
-This tool will take the tar/JSON file given to you by Skype, and creates .txt files containing every chat with every user.
-
-Basic usage:
+The simplest workflow is to parse a Skype export file and output the conversations to text files:
 
 ```bash
-skype-parser [-h] [-c] [-t] filename
-
-positional arguments:
-  filename      The path/name to the Skype json/tar file you want to parse
-
-optional arguments:
-  -h, --help    show this help message and exit
-  -t, --tar     Use this flag to feed in a .tar file (at your own risk)
-  -c, --choose  Use this flag to choose which convos you'd like to parse
+python -m src.parser.skype_parser path/to/skype_export.tar -t -o output_dir -u "Your Name"
 ```
 
-If you invoke the script **without** the `t` or `--tar` argument, `filename` must be the skype `.json` file.
+See the [Basic Usage Guide](getting-started/basic-usage.md) for more details.
 
-If you invoke the script **with** the `-t` or `--tar` argument, `filename` must be the `.tar` file that you get from skype.
+### Database Storage
 
-If you invoke the script with `-c` or `--choose`, it will let you choose between the conversations you'd like to export.
+To store the parsed data in a PostgreSQL database:
 
-## Requirements
+```bash
+python -m src.parser.skype_parser path/to/skype_export.tar -t --store-db --db-name skype_archive --db-user postgres -u "Your Name"
+```
 
-- python version 3.5 and above
+See [PostgreSQL Setup](user-guide/database/postgres.md) for more details.
 
-- beautifulsoup4 (optional, but recommended)
+### ETL Pipeline
 
-## How do I even export my skype chat history?
+For more advanced usage, you can use the ETL (Extract, Transform, Load) pipeline:
 
-Follow the instructions [here](https://support.skype.com/en/faq/FA34894/how-do-i-export-my-skype-files-and-chat-history).
+```bash
+python scripts/run_etl_pipeline.py --file path/to/skype_export.tar --user "Your Name"
+```
 
-Keep in mind that this tool parses your conversations, not your files; so be careful what you export.
+See [ETL Pipeline](implementation/etl-pipeline.md) for more details.
 
-Once you have downloaded your exported conversations (which is usually in `.tar` format), you can either to untar the downloaded file and use this tool to parse the resulting `.json` file, or you can take the `.tar` file itself and feed it into the script. Either way *should* work.
+### Data Analysis and Visualization
 
-## TO DO
+After processing your Skype data, you can analyze and visualize it using the provided tools:
 
-- Figure out whether we're being a fed a `.json` file or a tarball.
+```python
+from src.analysis.queries import SkypeQueryExamples
+from src.utils.db_connection import DatabaseConnection
+
+# Create database connection
+db_conn = DatabaseConnection(
+    host='localhost',
+    port=5432,
+    dbname='skype_data',
+    user='postgres',
+    password='password'
+)
+
+# Create query object
+queries = SkypeQueryExamples(db_conn)
+
+# Get message count by conversation
+message_counts = queries.get_message_count_by_conversation()
+for conv_name, count in message_counts:
+    print(f"{conv_name}: {count} messages")
+```
+
+See [Data Analysis](user-guide/data-analysis.md) and [Visualization](user-guide/visualization.md) for more details.
+
+### Building a Web App
+
+You can build a web application to browse and search your Skype data:
+
+```bash
+# Start the backend API
+cd backend
+python app.py
+
+# Start the frontend
+cd frontend
+npm start
+```
+
+See [Web App Development](user-guide/web-app.md) for more details.
+
+## Getting Help
+
+If you encounter issues or have questions, please:
+
+1. Check the documentation in the `docs` directory
+2. Review the examples in the `examples` directory
+3. Examine the logs for error messages
+4. Open an issue on the GitHub repository
